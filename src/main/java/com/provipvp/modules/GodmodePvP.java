@@ -1768,20 +1768,31 @@ public class GodmodePvP extends Module {
     // ---------- Zielauswahl ----------
 
     private Player findPlayerTarget(Player self) {
-        Player best = null;
-        double bestDist = followRange.get() * followRange.get();
+        // Echte Spieler haben immer Vorrang vor einem Trainings-Dummy (FakePlayerEntity) - der zaehlt nur
+        // als Ziel, wenn wirklich kein echter Gegner in Reichweite ist. Sonst wuerde ein liegen gelassener
+        // Dummy (z.B. nach einem Server-/Welt-Wechsel) die Zielwahl von einem echten Angreifer kapern.
+        Player bestReal = null;
+        double bestRealDist = followRange.get() * followRange.get();
+        Player bestFake = null;
+        double bestFakeDist = followRange.get() * followRange.get();
 
         for (Player p : mc.level.players()) {
-            // FakePlayers (Test-Dummies) zaehlen auch im Creative-Modus als Ziel
             if (p == self || !p.isAlive() || p.isSpectator()) continue;
-            if (p.isCreative() && !(p instanceof FakePlayerEntity)) continue;
+            boolean isFake = p instanceof FakePlayerEntity;
+            if (p.isCreative() && !isFake) continue;
+
             double d = self.distanceToSqr(p);
-            if (d < bestDist) {
-                bestDist = d;
-                best = p;
+            if (isFake) {
+                if (d < bestFakeDist) {
+                    bestFakeDist = d;
+                    bestFake = p;
+                }
+            } else if (d < bestRealDist) {
+                bestRealDist = d;
+                bestReal = p;
             }
         }
-        return best;
+        return bestReal != null ? bestReal : bestFake;
     }
 
     private LivingEntity findMobTarget(Player self) {

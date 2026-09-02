@@ -61,6 +61,7 @@ public class TrainingDummy extends Module {
     );
 
     private FakePlayerEntity dummy;
+    private Object spawnLevel; // Welt/Verbindung, in der der Dummy zuletzt (re-)gespawnt wurde
     private int appliedHealth = -1;
     private Vec3 velocity = Vec3.ZERO;
 
@@ -86,6 +87,7 @@ public class TrainingDummy extends Module {
     private void spawnDummy() {
         dummy = new FakePlayerEntity(mc.player, "Dummy", dummyHealth.get(), true);
         dummy.spawn();
+        spawnLevel = mc.level;
         appliedHealth = dummyHealth.get();
         info("Dummy gespawnt (HP %d) - Bot und Manuell-Schlaege machen Schaden + Knockback.", dummyHealth.get());
     }
@@ -132,6 +134,18 @@ public class TrainingDummy extends Module {
     @EventHandler
     public void onTick(TickEvent.Pre event) {
         if (!Utils.canUpdate() || dummy == null) return;
+
+        // Welt/Server seit dem letzten Spawn gewechselt (Disconnect, Server-Wechsel im selben Netzwerk,
+        // Warp in ein Match o.ae.) - NICHT blind an der neuen Position respawnen. Ein liegen gelassener
+        // Trainings-Dummy, der in eine echte Begegnung/ein echtes Match hineinspawnt, wuerde von GodmodePvP/
+        // HumanPvP als gueltiges (aber voellig harmloses) Ziel erkannt und die Zielwahl kapern.
+        if (mc.level != spawnLevel) {
+            dummy.despawn();
+            dummy = null;
+            toggle();
+            error("Welt/Server gewechselt - Training Dummy deaktiviert statt in der neuen Umgebung neu zu spawnen.");
+            return;
+        }
 
         if (dummy.isRemoved() || (!dummy.isAlive() && dummy.getHealth() <= 0)) {
             if (autoRespawn.get()) {
