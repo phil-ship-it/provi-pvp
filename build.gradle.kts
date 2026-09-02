@@ -30,8 +30,8 @@ dependencies {
     // Meteor
     implementation(libs.meteor.client)
 
-    // Baritone API (lokales Jar aus dem Mods-Ordner)
-    compileOnly(files("C:/Users/philf/AppData/Roaming/.minecraft/mods/baritone-unoptimized-fabric-1.10.2-29-ga63a7aea.jar"))
+    // Baritone API (vendored jar - kein oeffentliches Maven-Artefakt fuer diesen 26.2-Fork verfuegbar)
+    compileOnly(files("libs/baritone-api.jar"))
 }
 
 
