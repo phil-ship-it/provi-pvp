@@ -78,12 +78,13 @@ account or a live server.
 | `.hpvp on` / `.hpvp off`| Explicitly enable/disable       |
 
 Every behavior described above is a separate Meteor setting under the module's ClickGUI entry — nothing is
-hardcoded that couldn't reasonably need tuning per server.
+hardcoded that couldn't reasonably need tuning per server. See **[FEATURES.md](FEATURES.md)** for the full
+settings reference (every setting, its default, and what it does) plus the third-party tools this project builds on.
 
 ## Building from source
 
 ```bash
-git clone https://github.com/<your-username>/provi-pvp.git
+git clone https://github.com/phil-ship-it/provi-pvp.git
 cd provi-pvp
 ./gradlew build
 ```
