@@ -3,7 +3,7 @@
   "id": "provi-pvp",
   "version": "${version}",
   "name": "ProviPvP",
-  "description": "Kampf-Bot: folgt Gegnern, Crystal/Anchor nach Schadensrechnung, Schildbrecher, Pre-Hit, Totem-Tracking.",
+  "description": "Combat bot: tracks targets, damage-optimized Crystal/Anchor placement, shield-breaking, pre-hits, totem tracking.",
   "authors": [
     "philf"
   ],
