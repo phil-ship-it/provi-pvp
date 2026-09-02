@@ -1,0 +1,21 @@
+{
+  "schemaVersion": 1,
+  "id": "provi-pvp",
+  "version": "${version}",
+  "name": "ProviPvP",
+  "description": "Kampf-Bot: folgt Gegnern, Crystal/Anchor nach Schadensrechnung, Schildbrecher, Pre-Hit, Totem-Tracking.",
+  "authors": [
+    "philf"
+  ],
+  "environment": "client",
+  "entrypoints": {
+    "meteor": [
+      "com.provipvp.ProviPvPAddon"
+    ]
+  },
+  "depends": {
+    "java": ">=${jdk_version}",
+    "minecraft": "${minecraft_version}",
+    "meteor-client": "*"
+  }
+}
