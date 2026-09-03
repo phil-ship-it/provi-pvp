@@ -113,6 +113,13 @@ public class GodmodePvP extends Module {
         .build()
     );
 
+    public final Setting<Boolean> freeLook = sgGeneral.add(new BoolSetting.Builder()
+        .name("free-look")
+        .description("Silent-Rotations: der Bot zielt/dreht sich fuer Angriffe, Platzierungen und Ziel-Verfolgung weiterhin korrekt (das Server-Paket bekommt die richtige Blickrichtung), aber deine eigene Kamera bleibt frei drehbar - du kannst dich umsehen, waehrend der Bot kaempft. Aus = die alte harte Kamera-Zwangsdrehung.")
+        .defaultValue(true)
+        .build()
+    );
+
     // Combat
     public final Setting<Boolean> smartAuras = sgCombat.add(new BoolSetting.Builder()
         .name("smart-auras")
@@ -757,8 +764,12 @@ public class GodmodePvP extends Module {
         // Nahkampf-Strafe-Distanz (die ihre eigene Rotation setzt) und nicht waehrend Elytra-Flug.
         if (trackTarget.get() && !flying && dist > 3.6) {
             Vec3 lookAt = predict(target);
-            mc.player.setYRot((float) Rotations.getYaw(lookAt));
-            mc.player.setXRot((float) Rotations.getPitch(lookAt));
+            if (freeLook.get()) {
+                Rotations.rotate(Rotations.getYaw(lookAt), Rotations.getPitch(lookAt));
+            } else {
+                mc.player.setYRot((float) Rotations.getYaw(lookAt));
+                mc.player.setXRot((float) Rotations.getPitch(lookAt));
+            }
         }
 
         // Stuck-Erkennung: eigene Position + Ziel-HP beobachten
@@ -1510,9 +1521,12 @@ public class GodmodePvP extends Module {
         return !mc.player.onGround() && mc.player.getDeltaMovement().y < 0;
     }
 
-    /** Dreht sich im Nahkampf direkt zum Ziel und kreis-strafet - schwerer zu treffen, variiert den
-     *  Explosionswinkel automatisch. Ausserhalb der Nahkampfreichweite werden die Strafe-Tasten geloest,
-     *  damit Baritones eigene Bewegung nicht gestoert wird. */
+    /** Dreht sich im Nahkampf direkt zum Ziel (silent, falls free-look aktiv) und kreis-strafet -
+     *  schwerer zu treffen, variiert den Explosionswinkel automatisch. Die Strafe-Richtung wird relativ
+     *  zur TATSAECHLICHEN aktuellen Blickrichtung berechnet (nicht der evtl. nur serverseitigen Ziel-
+     *  Rotation), damit das Kreisen auch bei freier Kamera (free-look) geometrisch korrekt bleibt.
+     *  Ausserhalb der Nahkampfreichweite werden die Strafe-Tasten geloest, damit Baritones eigene
+     *  Bewegung nicht gestoert wird. */
     private void updateCombatMovement(LivingEntity target, double dist) {
         if (dist > 3.6) {
             Input.setKeyState(mc.options.keyLeft, false);
@@ -1522,8 +1536,12 @@ public class GodmodePvP extends Module {
         }
 
         Vec3 center = target.getBoundingBox().getCenter();
-        mc.player.setYRot((float) Rotations.getYaw(center));
-        mc.player.setXRot((float) Rotations.getPitch(center));
+        if (freeLook.get()) {
+            Rotations.rotate(Rotations.getYaw(center), Rotations.getPitch(center));
+        } else {
+            mc.player.setYRot((float) Rotations.getYaw(center));
+            mc.player.setXRot((float) Rotations.getPitch(center));
+        }
 
         // Zufaellig getaktete Richtungswechsel (10-24 Ticks, 0.5-1.2s) statt eines starren 20-Tick-Rhythmus -
         // ein exakt periodisches Strafing ist leicht zu lesen (fuer Gegner UND Anti-Cheat-Heuristiken),
@@ -1532,8 +1550,26 @@ public class GodmodePvP extends Module {
             strafeLeft = !strafeLeft;
             nextStrafeSwitchTick = tickCounter + 10 + rng.nextInt(15);
         }
-        Input.setKeyState(mc.options.keyLeft, strafeLeft);
-        Input.setKeyState(mc.options.keyRight, !strafeLeft);
+
+        // Gewuenschte Weltraum-Tangentialrichtung um das Ziel auf die ECHTE aktuelle Blickrichtung
+        // projizieren, statt blind keyLeft/keyRight zu druecken - bei free-look kann die Kamera woanders
+        // hinschauen als das Server-Ziel, WASD-Bewegung richtet sich aber immer nach der echten Rotation.
+        double dx = center.x - mc.player.getX();
+        double dz = center.z - mc.player.getZ();
+        double horiz = Math.sqrt(dx * dx + dz * dz);
+        if (horiz < 1e-4) return;
+        dx /= horiz;
+        dz /= horiz;
+
+        double tangX = strafeLeft ? -dz : dz;
+        double tangZ = strafeLeft ? dx : -dx;
+
+        double yawRad = Math.toRadians(mc.player.getYRot());
+        double rightX = -Math.cos(yawRad), rightZ = -Math.sin(yawRad);
+        double rightDot = tangX * rightX + tangZ * rightZ;
+
+        Input.setKeyState(mc.options.keyRight, rightDot >= 0);
+        Input.setKeyState(mc.options.keyLeft, rightDot < 0);
     }
 
     /** Warnt und macht kurz vorsichtiger, wenn waehrend des Kampfes ein zweiter Spieler in der Naehe auftaucht. */

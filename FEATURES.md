@@ -15,6 +15,7 @@ nothing described in the [README](README.md) is hardcoded. Defaults are the valu
 | `pop-threshold` | `8.0` | HP drop counted as a totem pop. |
 | `prediction-ticks` | `5` | How far ahead enemy movement is predicted for attacks. |
 | `ignore-fire` | `true` | Walks straight through ground fire in melee range instead of pathing around it (Baritone otherwise treats fire as hard-impassable). |
+| `free-look` | `true` | Silent rotations: the bot still aims/turns correctly for attacks, placements, and target tracking (the outgoing packet carries the correct look direction), but your own camera stays free to look around. Off = the old hard camera lock. |
 
 ### Combat
 
@@ -34,6 +35,7 @@ nothing described in the [README](README.md) is hardcoded. Defaults are the valu
 | `use-mace` | `true` | Uses the Mace over axe/sword for finishing hits while falling (Smash Attack bonus). |
 | `elytra-combat` | `true` | Firework boost when gliding speed drops too low during elytra combat. |
 | `zero-delay` | `true` | Sets CrystalAura's placement delay to 0 (instant reaction). |
+| `min-support-delay` | `4` | Minimum tick gap between placing an obsidian support block and the following crystal placement (CrystalAura's `support-delay`). Both actions use Minecraft's own sequence-numbered block-prediction system (since 1.19) — sending them too close together, before the first sequence is server-acknowledged, can desync the prediction ("crystal hitbox appears, but no crystal actually spawns"). Needs more headroom on high-latency or cross-version-translated (e.g. ViaVersion) connections than Meteor's own default. Only ever raised, never lowered. |
 | `kill-aura` | `false` | Also runs Meteor's KillAura for melee. Mob filter is shared with the `Mobs` group. Off by default since the built-in axe-melee logic already covers it. |
 | `escape-pearl` | `true` | Pearls away at low HP with an enemy nearby. |
 | `knockback-pearl` | `true` | If the bot itself gets launched into the air by knockback (hit or explosion), immediately pearls straight down — controlled descent instead of falling helplessly or hanging in the air as an easy target. |
@@ -95,6 +97,7 @@ core as `GodmodePvP`, with these differences:
 |---|---|---|
 | `follow-range` | `20` | Smaller detection range than `GodmodePvP` by default. |
 | `engage-distance` | `14` | Same sticky-engagement behavior as `GodmodePvP`, tuned to a shorter range. |
+| `free-look` | `true` | Same silent-rotation behavior as `GodmodePvP` — camera stays free while the bot aims correctly server-side. |
 | `reaction-min` / `reaction-max` | `3` / `9` ticks | Randomized reaction delay before engaging a newly acquired target — no instant snap-to-target. |
 | `attack-chance` | `0.9` | Probability that a "ready" hit is actually thrown, simulating human misclicks. |
 | `aim-tolerance` | `4.0°` | Aim tolerance before a hit or placement is executed. |

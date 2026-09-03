@@ -110,6 +110,13 @@ public class HumanPvP extends Module {
         .build()
     );
 
+    public final Setting<Boolean> freeLook = sgGeneral.add(new BoolSetting.Builder()
+        .name("free-look")
+        .description("Silent-Rotations: der Bot zielt weiterhin korrekt (das Server-Paket bekommt die richtige Blickrichtung), aber deine eigene Kamera bleibt frei drehbar. Aus = die alte harte Kamera-Zwangsdrehung.")
+        .defaultValue(true)
+        .build()
+    );
+
     // Combat
     public final Setting<Boolean> useAnchors = sgCombat.add(new BoolSetting.Builder()
         .name("use-anchors")
@@ -355,6 +362,8 @@ public class HumanPvP extends Module {
     private int engageAtTick;
     private int nextClickTick = -1;
     private boolean pursuing; // sticky: einmal in Engage-Distanz gekommen, bleibt es auch nach Explosions-Knockback ueber diese Distanz hinaus (bis follow-range/Zielverlust) - sonst reisst eine Crystal-Explosion die Verfolgung mitten im Kampf ab.
+    private float aimYaw, aimPitch; // virtuelle Ziel-Blickrichtung fuer Silent-Rotations (free-look) - unabhaengig von der echten Kamera
+    private boolean aimInitialized;
 
     private int auraMode = -1;
     private int lastAuraSwitch = -999;
@@ -611,6 +620,7 @@ public class HumanPvP extends Module {
         nextClickTick = -1;
         anchorStage = 0;
         pursuing = false;
+        aimInitialized = false;
     }
 
     private boolean readyToClick() {
@@ -645,8 +655,11 @@ public class HumanPvP extends Module {
         float targetYaw = (float) Rotations.getYaw(point);
         float targetPitch = (float) Rotations.getPitch(point);
 
-        float yawDelta = wrapDelta(targetYaw - mc.player.getYRot());
-        float pitchDelta = targetPitch - mc.player.getXRot();
+        float curYaw = effectiveAimYaw();
+        float curPitch = effectiveAimPitch();
+
+        float yawDelta = wrapDelta(targetYaw - curYaw);
+        float pitchDelta = targetPitch - curPitch;
 
         float maxTurn = (float) (double) maxTurnPerTick.get();
         float smoothing = (float) (0.28 + rng.nextDouble() * 0.14); // 0.28-0.42 Anteil des Restwinkels pro Tick
@@ -654,8 +667,31 @@ public class HumanPvP extends Module {
         float appliedYaw = clampAbs(yawDelta * smoothing, maxTurn);
         float appliedPitch = clampAbs(pitchDelta * smoothing, maxTurn);
 
-        mc.player.setYRot(mc.player.getYRot() + appliedYaw);
-        mc.player.setXRot(Math.max(-90f, Math.min(90f, mc.player.getXRot() + appliedPitch)));
+        float newYaw = curYaw + appliedYaw;
+        float newPitch = Math.max(-90f, Math.min(90f, curPitch + appliedPitch));
+
+        if (freeLook.get()) {
+            // Silent: nur das Server-Paket bekommt die Blickrichtung, die eigene Kamera bleibt frei.
+            aimYaw = newYaw;
+            aimPitch = newPitch;
+            aimInitialized = true;
+            Rotations.rotate(aimYaw, aimPitch);
+        } else {
+            aimInitialized = false;
+            mc.player.setYRot(newYaw);
+            mc.player.setXRot(newPitch);
+        }
+    }
+
+    /** Aktuell wirksame Ziel-Blickrichtung: die virtuelle Silent-Aim-Richtung bei free-look, sonst die
+     *  echte Kamera-Rotation. Muss synchron mit smoothLookAt() sein, sonst denkt currentAimError()
+     *  bei free-look permanent, es sei nicht ausgerichtet (Kamera zeigt ja absichtlich woanders hin). */
+    private float effectiveAimYaw() {
+        return freeLook.get() && aimInitialized ? aimYaw : mc.player.getYRot();
+    }
+
+    private float effectiveAimPitch() {
+        return freeLook.get() && aimInitialized ? aimPitch : mc.player.getXRot();
     }
 
     private static float clampAbs(float v, float max) {
@@ -665,8 +701,8 @@ public class HumanPvP extends Module {
     private double currentAimError(Vec3 point) {
         float targetYaw = (float) Rotations.getYaw(point);
         float targetPitch = (float) Rotations.getPitch(point);
-        double yawErr = Math.abs(wrapDelta(targetYaw - mc.player.getYRot()));
-        double pitchErr = Math.abs(targetPitch - mc.player.getXRot());
+        double yawErr = Math.abs(wrapDelta(targetYaw - effectiveAimYaw()));
+        double pitchErr = Math.abs(targetPitch - effectiveAimPitch());
         return Math.max(yawErr, pitchErr);
     }
 
