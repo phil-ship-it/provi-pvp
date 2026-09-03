@@ -224,6 +224,13 @@ public class HumanPvP extends Module {
         .build()
     );
 
+    public final Setting<Boolean> antiRubberband = sgDefense.add(new BoolSetting.Builder()
+        .name("anti-rubberband")
+        .description("Erkennt Server-Positionskorrekturen (Rubberband) und verwirft den alten Pfad, statt dagegen anzukaempfen. Ein wirklich extremer Sprung greift auch waehrend des Kampfes, ein moderater nur ausserhalb (sonst wuerde normaler Explosions-Knockback faelschlich als Rubberband gewertet).")
+        .defaultValue(true)
+        .build()
+    );
+
     public final Setting<Boolean> autoMendOn = sgDefense.add(new BoolSetting.Builder()
         .name("auto-mend")
         .description("Ruestung mit XP heilen.")
@@ -346,6 +353,8 @@ public class HumanPvP extends Module {
     private int lastPearlTick = -999;
     private int sprintResetCooldown;
     private float lastSelfHpForKnockback = -1;
+    private Vec3 lastSelfPos;
+    private int rubberbandCooldown;
     private final Map<net.minecraft.world.item.Item, Boolean> warnedOutOfMisc = new HashMap<>();
     private String currentAction = "-";
     private boolean blocking;
@@ -390,6 +399,8 @@ public class HumanPvP extends Module {
         lastErrorWarnTick = -999;
         sprintResetCooldown = 0;
         lastSelfHpForKnockback = -1;
+        lastSelfPos = null;
+        rubberbandCooldown = 0;
         blocking = false;
         blockingSwapBack = false;
         shieldUntil = 0;
@@ -536,6 +547,21 @@ public class HumanPvP extends Module {
 
         boolean tookHit = lastSelfHpForKnockback >= 0 && self.getHealth() < lastSelfHpForKnockback - 1.0f;
         lastSelfHpForKnockback = self.getHealth();
+
+        // Anti-Rubberband: ploetzlicher, nicht selbst verursachter Sprung -> Server hat uns korrigiert.
+        // Ein moderater Sprung zaehlt nur ausserhalb des Kampfes (sonst wird normaler Explosions-Knockback
+        // faelschlich als Rubberband gewertet); ein wirklich extremer Sprung greift immer, auch waehrend
+        // des Kampfes - genau dort tritt Rubberbanding laut Beobachtung am haeufigsten auf.
+        double selfMoved = lastSelfPos == null ? 999 : self.position().distanceTo(lastSelfPos);
+        lastSelfPos = self.position();
+        if (rubberbandCooldown > 0) {
+            rubberbandCooldown--;
+        } else if (antiRubberband.get() && tickCounter - lastPearlTick > 10
+            && (selfMoved > 6.0 || (selfMoved > 2.5 && !tookHit))) {
+            cancelFollow();
+            rubberbandCooldown = 10;
+            currentAction = "rubberband";
+        }
         if (knockbackPearl.get() && tookHit && self.getDeltaMovement().y > 0.35
             && tickCounter - lastPearlTick > 15
             && (InvUtils.findInHotbar(Items.ENDER_PEARL).found() || InvUtils.find(Items.ENDER_PEARL).found())) {

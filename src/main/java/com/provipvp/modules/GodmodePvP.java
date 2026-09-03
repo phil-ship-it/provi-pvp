@@ -779,12 +779,16 @@ public class GodmodePvP extends Module {
         // Anti-Rubberband: ploetzlicher, nicht selbst verursachter Sprung -> Server hat uns korrigiert.
         // Baritones Pfad verwerfen und kurz bremsen statt gegen die Korrektur anzukaempfen.
         // Explosions-Knockback (spuerbarer HP-Verlust im selben Tick) zaehlt NICHT als Rubberband -
-        // sonst wird genau der Moment ignoriert, in dem der Bot eigentlich fliehen muesste.
+        // sonst wird genau der Moment ignoriert, in dem der Bot eigentlich fliehen muesste. ABER: ein
+        // WIRKLICH extremer Sprung (deutlich mehr als selbst starker Explosions-Knockback in einem Tick
+        // ueberbruecken kann) greift auch waehrend des Kampfes - sonst wird das Rubberbanding ausgerechnet
+        // in den Crystal/Anchor-lastigen Momenten ignoriert, in denen es laut Beobachtung am haeufigsten ist.
         boolean tookRealDamage = lastSelfHpForRubberband >= 0 && self.getHealth() < lastSelfHpForRubberband - 1.0f;
         lastSelfHpForRubberband = self.getHealth();
         if (rubberbandCooldown > 0) {
             rubberbandCooldown--;
-        } else if (antiRubberband.get() && selfMoved > 2.5 && !tookRealDamage && tickCounter - lastPearlTick > 10) {
+        } else if (antiRubberband.get() && tickCounter - lastPearlTick > 10
+            && (selfMoved > 6.0 || (selfMoved > 2.5 && !tookRealDamage))) {
             BaritoneAPI.getProvider().getPrimaryBaritone().getPathingBehavior().cancelEverything();
             followActive = false;
             rubberbandCooldown = 10;

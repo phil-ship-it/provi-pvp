@@ -49,7 +49,7 @@ nothing described in the [README](README.md) is hardcoded. Defaults are the valu
 | `auto-eat` | `true` | Eats automatically (Meteor's AutoEat) when hunger is low — without enough saturation Minecraft itself disables sprinting, which breaks sprint-reset knockback and Baritone's movement speed. |
 | `no-fall` | `true` | Prevents fall damage (Meteor's NoFall) — needed because Baritone here is deliberately tuned for aggressive jump/cliff pursuit (up to 20 blocks of fall height without water). |
 | `auto-shield` | `true` | Briefly raises the shield when an enemy Crystal is freshly placed nearby, reducing explosion damage. |
-| `anti-rubberband` | `true` | Detects server position corrections (rubberbanding) and discards the stale path instead of fighting against the correction. |
+| `anti-rubberband` | `true` | Detects a server position correction and drops the stale path instead of fighting it. A moderate jump only counts outside of combat (normal explosion knockback shouldn't trigger it); a genuinely extreme jump triggers regardless, since real knockback rarely covers that much distance in one tick and rubberbanding is most common during actual Crystal/Anchor fights. |
 | `respect-friends` | `true` | Avoids explosions that would also hit a player on the Meteor friends list. |
 | `hole-awareness` | `true` | Looks for a nearby one-block-deep, open-topped hole in close combat and uses it as a fighting position instead of standing in the open. |
 | `height-advantage` | `true` | Prefers a position lower than the target — your own explosions deal more damage from there, the enemy's deal less. |
@@ -103,6 +103,7 @@ core as `GodmodePvP`, with these differences:
 | `aim-tolerance` | `4.0°` | Aim tolerance before a hit or placement is executed. |
 | `max-turn-speed` | `18.0°/tick` | Maximum camera rotation per tick — human-paced turning instead of an instant snap. |
 | `max-self-damage` | `6.0` | More conservative self-damage cap than `GodmodePvP`'s `12.0`. |
+| `anti-rubberband` | `true` | Detects a server position correction and drops the stale path instead of fighting it. A moderate jump only counts outside of combat (normal explosion knockback shouldn't trigger it); a genuinely extreme jump triggers regardless, since real knockback rarely covers that much distance in one tick and rubberbanding is most common during actual Crystal/Anchor fights. |
 
 All other Combat/Defense/Inventory/Pearl settings mirror `GodmodePvP` (same names, same purpose) unless listed
 above.
