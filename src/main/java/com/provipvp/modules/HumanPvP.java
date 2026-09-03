@@ -129,10 +129,10 @@ public class HumanPvP extends Module {
 
     public final Setting<Integer> minSupportDelay = sgCombat.add(new IntSetting.Builder()
         .name("min-support-delay")
-        .description("Mindest-Tickabstand zwischen Obsidian-Unterbau und dem folgenden Crystal-Platzieren (CrystalAuras 'support-delay'). Bei 0 schickt CrystalAura beide Pakete im selben Tick - auf Servern mit spuerbarer Latenz kommt das Crystal-Paket dann manchmal an, bevor der Server das Obsidian ueberhaupt registriert hat, und wird lautlos abgelehnt.")
-        .defaultValue(2)
-        .range(0, 5)
-        .sliderRange(0, 5)
+        .description("Mindest-Tickabstand zwischen Obsidian-Unterbau und dem folgenden Crystal-Platzieren (CrystalAuras 'support-delay'). Beide Aktionen nutzen Minecrafts eigenes sequenznummer-basiertes Block-Vorhersage-System (seit 1.19) - schickt man beide zu dicht hintereinander raus, bevor die erste Sequenz vom Server bestaetigt ist, kann die Vorhersage durcheinanderkommen. Auf Servern mit spuerbarer Latenz oder Versions-Uebersetzung (z.B. ViaVersion) braucht es mehr Puffer als den Meteor-Standard.")
+        .defaultValue(4)
+        .range(0, 10)
+        .sliderRange(0, 10)
         .build()
     );
 
