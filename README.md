@@ -8,6 +8,24 @@ slower, more human-like variant for situations where blatant automation would st
 > Built as a personal anarchy-server project. Read the [Disclaimer](#disclaimer) before using this on any server
 > that isn't rule-free.
 
+## Quick Install (no modding experience needed)
+
+If the only two things you know how to do are "put a mod jar in the mods folder" and "extract a zip file", this
+is for you:
+
+1. Install Fabric Loader for Minecraft 26.2 — download the installer from
+   **[fabricmc.net/use/installer](https://fabricmc.net/use/installer/)**, open it, pick **26.2** as the Minecraft
+   version, click **Install**. This creates a new profile in your Minecraft Launcher — nothing else to configure.
+2. Download **[provipvp-modpack-26.2.zip](../../releases/download/modpack/provipvp-modpack-26.2.zip)** — it has
+   everything else already inside (Fabric API, Meteor Client, Baritone, and ProviPvP itself).
+3. Extract every `.jar` from that zip straight into `%appdata%\.minecraft\mods` (press Win+R, type
+   `%appdata%\.minecraft\mods`, create the `mods` folder if it doesn't exist yet, drop the files in).
+4. Open the Minecraft Launcher, select the new Fabric 26.2 profile, play. In-game, **Right Shift** opens Meteor's
+   menu — `GodmodePvP` and `HumanPvP` are under **Combat**.
+
+Everything past this point is for anyone who wants to understand the settings, add more addons, or build from
+source.
+
 ## Requirements
 
 | Dependency     | Version           |
