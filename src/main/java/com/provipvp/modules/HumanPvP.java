@@ -127,6 +127,15 @@ public class HumanPvP extends Module {
         .build()
     );
 
+    public final Setting<Integer> minSupportDelay = sgCombat.add(new IntSetting.Builder()
+        .name("min-support-delay")
+        .description("Mindest-Tickabstand zwischen Obsidian-Unterbau und dem folgenden Crystal-Platzieren (CrystalAuras 'support-delay'). Bei 0 schickt CrystalAura beide Pakete im selben Tick - auf Servern mit spuerbarer Latenz kommt das Crystal-Paket dann manchmal an, bevor der Server das Obsidian ueberhaupt registriert hat, und wird lautlos abgelehnt.")
+        .defaultValue(2)
+        .range(0, 5)
+        .sliderRange(0, 5)
+        .build()
+    );
+
     public final Setting<Boolean> preferAxeMelee = sgCombat.add(new BoolSetting.Builder()
         .name("prefer-axe-melee")
         .description("Schlaegt automatisch mit der Axt statt Schwert.")
@@ -338,6 +347,7 @@ public class HumanPvP extends Module {
     private int lastCrystalCount = -1;
     private int savedPlaceDelay = -1;
     private CrystalAura.SupportMode savedSupport;
+    private int savedSupportDelay = -1;
     private boolean followActive;
     private UUID followedId;
 
@@ -1197,20 +1207,52 @@ public class HumanPvP extends Module {
             }
         } catch (Throwable t) {
             savedSupport = null;
+            error("CrystalAura-Support-Mode konnte nicht gesetzt werden (Meteor-Version geaendert?) - Obsidian-Unterbau bei freier Luft laeuft evtl. nicht automatisch.");
+        }
+
+        // support-delay: Tickabstand zwischen Obsidian-Platzierung und dem folgenden Crystal-Versuch. Bei 0
+        // schickt CrystalAura beide Pakete im selben Tick - auf Servern mit spuerbarer Latenz kann der
+        // Crystal-Versuch dann ankommen, bevor der Server das Obsidian registriert hat, und wird lautlos
+        // abgelehnt. Nur anheben, nie senken.
+        try {
+            java.lang.reflect.Field f = CrystalAura.class.getDeclaredField("supportDelay");
+            f.setAccessible(true);
+            @SuppressWarnings("unchecked")
+            Setting<Integer> s = (Setting<Integer>) f.get(ca);
+            if (s != null) {
+                savedSupportDelay = s.get();
+                if (s.get() < minSupportDelay.get()) s.set(minSupportDelay.get());
+            }
+        } catch (Throwable t) {
+            savedSupportDelay = -1;
+            error("CrystalAura-Support-Delay konnte nicht gesetzt werden (Meteor-Version geaendert?) - Crystal-Platzierung nach Obsidian-Unterbau kann dadurch auf langsameren Servern manchmal fehlschlagen.");
         }
     }
 
     private void restoreSupport(CrystalAura ca) {
-        if (savedSupport == null) return;
-        try {
-            java.lang.reflect.Field f = CrystalAura.class.getDeclaredField("support");
-            f.setAccessible(true);
-            @SuppressWarnings("unchecked")
-            Setting<CrystalAura.SupportMode> s = (Setting<CrystalAura.SupportMode>) f.get(ca);
-            if (s != null) s.set(savedSupport);
-        } catch (Throwable ignored) {
+        if (savedSupport != null) {
+            try {
+                java.lang.reflect.Field f = CrystalAura.class.getDeclaredField("support");
+                f.setAccessible(true);
+                @SuppressWarnings("unchecked")
+                Setting<CrystalAura.SupportMode> s = (Setting<CrystalAura.SupportMode>) f.get(ca);
+                if (s != null) s.set(savedSupport);
+            } catch (Throwable ignored) {
+            }
+            savedSupport = null;
         }
-        savedSupport = null;
+
+        if (savedSupportDelay >= 0) {
+            try {
+                java.lang.reflect.Field f = CrystalAura.class.getDeclaredField("supportDelay");
+                f.setAccessible(true);
+                @SuppressWarnings("unchecked")
+                Setting<Integer> s = (Setting<Integer>) f.get(ca);
+                if (s != null) s.set(savedSupportDelay);
+            } catch (Throwable ignored) {
+            }
+            savedSupportDelay = -1;
+        }
     }
 
     private void safeEnable(Modules m, Class<? extends Module> clazz) {

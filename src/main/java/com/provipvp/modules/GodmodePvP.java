@@ -214,6 +214,15 @@ public class GodmodePvP extends Module {
         .build()
     );
 
+    public final Setting<Integer> minSupportDelay = sgCombat.add(new IntSetting.Builder()
+        .name("min-support-delay")
+        .description("Mindest-Tickabstand zwischen Obsidian-Unterbau und dem folgenden Crystal-Platzieren (CrystalAuras 'support-delay'). Bei 0 schickt CrystalAura beide Pakete im selben Tick - auf Servern mit spuerbarer Latenz kommt das Crystal-Paket dann manchmal an, bevor der Server das Obsidian ueberhaupt registriert hat, und wird lautlos abgelehnt ('Crystal-Hitbox erscheint, aber kein Crystal kommt'). Wird nur angehoben, nie gesenkt.")
+        .defaultValue(2)
+        .range(0, 5)
+        .sliderRange(0, 5)
+        .build()
+    );
+
     public final Setting<Boolean> killAuraOn = sgCombat.add(new BoolSetting.Builder()
         .name("kill-aura")
         .description("Zusaetzlich KillAura fuer Nahkampf. Mob-Filter wird automatisch aus 'Mobs' uebernommen. Standard aus - eigener Axt-Nahkampf aktiv.")
@@ -480,6 +489,7 @@ public class GodmodePvP extends Module {
     private boolean blockingSwapBack;
     private int shieldUntil;
     private CrystalAura.SupportMode savedSupport;
+    private int savedSupportDelay = -1;
     private int lastCrystalCount = -1;
     private boolean followActive;
     private boolean engaged; // sticky: einmal in Engage-Distanz gekommen, bleibt es auch nach Explosions-Knockback ueber diese Distanz hinaus (bis follow-range/Zielverlust) - sonst reisst eine Crystal-Explosion die Verfolgung mitten im Kampf ab.
@@ -2114,20 +2124,52 @@ public class GodmodePvP extends Module {
             }
         } catch (Throwable t) {
             savedSupport = null;
+            error("CrystalAura-Support-Mode konnte nicht gesetzt werden (Meteor-Version geaendert?) - Obsidian-Unterbau bei freier Luft laeuft evtl. nicht automatisch.");
+        }
+
+        // support-delay: der Tickabstand zwischen Obsidian-Platzierung und dem folgenden Crystal-Versuch.
+        // Bei 0 schickt CrystalAura beide Pakete im selben Tick - auf Servern mit spuerbarer Latenz kann
+        // der Crystal-Versuch dann ankommen, bevor der Server das Obsidian ueberhaupt registriert hat, und
+        // wird lautlos abgelehnt (Hitbox/Vorschau erscheint, aber kein Crystal). Nur anheben, nie senken.
+        try {
+            java.lang.reflect.Field f = CrystalAura.class.getDeclaredField("supportDelay");
+            f.setAccessible(true);
+            @SuppressWarnings("unchecked")
+            Setting<Integer> s = (Setting<Integer>) f.get(ca);
+            if (s != null) {
+                savedSupportDelay = s.get();
+                if (s.get() < minSupportDelay.get()) s.set(minSupportDelay.get());
+            }
+        } catch (Throwable t) {
+            savedSupportDelay = -1;
+            error("CrystalAura-Support-Delay konnte nicht gesetzt werden (Meteor-Version geaendert?) - Crystal-Platzierung nach Obsidian-Unterbau kann dadurch auf langsameren Servern manchmal fehlschlagen.");
         }
     }
 
     private void restoreSupport(CrystalAura ca) {
-        if (savedSupport == null) return;
-        try {
-            java.lang.reflect.Field f = CrystalAura.class.getDeclaredField("support");
-            f.setAccessible(true);
-            @SuppressWarnings("unchecked")
-            Setting<CrystalAura.SupportMode> s = (Setting<CrystalAura.SupportMode>) f.get(ca);
-            if (s != null) s.set(savedSupport);
-        } catch (Throwable ignored) {
+        if (savedSupport != null) {
+            try {
+                java.lang.reflect.Field f = CrystalAura.class.getDeclaredField("support");
+                f.setAccessible(true);
+                @SuppressWarnings("unchecked")
+                Setting<CrystalAura.SupportMode> s = (Setting<CrystalAura.SupportMode>) f.get(ca);
+                if (s != null) s.set(savedSupport);
+            } catch (Throwable ignored) {
+            }
+            savedSupport = null;
         }
-        savedSupport = null;
+
+        if (savedSupportDelay >= 0) {
+            try {
+                java.lang.reflect.Field f = CrystalAura.class.getDeclaredField("supportDelay");
+                f.setAccessible(true);
+                @SuppressWarnings("unchecked")
+                Setting<Integer> s = (Setting<Integer>) f.get(ca);
+                if (s != null) s.set(savedSupportDelay);
+            } catch (Throwable ignored) {
+            }
+            savedSupportDelay = -1;
+        }
     }
 
     private void tuneAutoMend() {
