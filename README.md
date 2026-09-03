@@ -29,6 +29,28 @@ slower, more human-like variant for situations where blatant automation would st
    `mods` folder.
 4. Launch the game. Two new modules appear in Meteor's **Combat** category: `GodmodePvP` and `HumanPvP`.
 
+## Full Addon Stack
+
+`provi-pvp` only adds the combat bot itself — everything below is the rest of the Meteor addon stack this setup is
+actually run with. None of these are required for `provi-pvp` to function, but this is what the author's own
+`mods` folder looks like. Grab whichever you want from their respective releases pages and drop them in `mods`
+alongside everything above.
+
+| Addon | Repo | Purpose |
+|---|---|---|
+| Numby Hack | [cqb13/Numby-hack](https://github.com/cqb13/Numby-hack) | General-purpose utility modules addon. |
+| Nora Tweaks | [noramibu/nora-tweaks](https://github.com/noramibu/nora-tweaks) | Quality-of-life modules for Meteor. |
+| Meteor+ | [MeteorClientPlus/MeteorPlus](https://github.com/MeteorClientPlus/MeteorPlus) | Large "blatant features" addon (combat, movement, render, exploits). |
+| Wurstmeteor Addon | [njlent/Wurstmeteor-Meteor-client-addon](https://github.com/njlent/Wurstmeteor-Meteor-client-addon) | Ports selected Wurst Client features (criticals, mace-dmg, infinite-reach, and more) to Meteor. |
+| Damage Numbers Addon | [njlent/Damagenumbers-Meteor-client-addon](https://github.com/njlent/Damagenumbers-Meteor-client-addon) | Floating damage numbers and hit particles/chat feedback. |
+| Minehop | [njlent/Minehop-Meteor-client-addon](https://github.com/njlent/Minehop-Meteor-client-addon) | Source-engine-style bunnyhop/air-strafe movement. |
+| FumoUtils | [qnxt/fumo-utils](https://github.com/qnxt/fumo-utils) | Anarchy-focused utility modules, commands, and highway tools. Bundles a couple of dupe-glitch modules alongside the legitimate ones — all Meteor modules are off by default, so installing it doesn't enable anything on its own; leave those specific ones off if that matters to you. |
+| Meteor Addons | [MCDxAI/meteor-addons-addon](https://github.com/MCDxAI/meteor-addons-addon) | In-game addon browser/installer/updater — manage the rest of this list from Meteor's own GUI. |
+| Meteor Villager Roller | [maxsupermanhd/meteor-villager-roller](https://github.com/maxsupermanhd/meteor-villager-roller) | Automates villager profession-rerolling until a desired enchantment trade is found. |
+| MeteorAdditions | [JFronny/MeteorAdditions](https://github.com/JFronny/MeteorAdditions) | Server-list discovery/cleanup tools, ModMenu integration. |
+| Seija-Printer | [Nippaku-Zanmu/Seija-Printer](https://github.com/Nippaku-Zanmu/Seija-Printer) | Fast Litematica schematic printer. |
+| IKEA Addon | [Nooniboi/Public-Ikea](https://github.com/Nooniboi/Public-Ikea) | Item-duplication-glitch toolkit (`DubCounter`, `AutoShulkerDrop`, `AutoItemMove`, and related anti-loss modules). Listed for completeness since it's part of the author's actual setup — duplication exploits are the single most heavily punished category of rule-breaking on almost every server, anarchy servers included. Use at your own risk. |
+
 ## Modules
 
 ### GodmodePvP (`.pvp`)
