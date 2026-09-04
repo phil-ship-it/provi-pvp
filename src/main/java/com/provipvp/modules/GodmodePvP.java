@@ -1136,13 +1136,27 @@ public class GodmodePvP extends Module {
     // ---------- Aura-Steuerung ----------
 
     private void selectAura(LivingEntity target) {
+        // Ohne ein einziges Crystal UND ohne vollstaendige Anchor-Ausruestung (Anchor + Glowstone) gibt es
+        // schlicht nichts zu platzieren - die teure Damage-/Positions-Simulation unten (Anchor-Kandidaten-
+        // Scan, Crystal-Schadens-Suche) UND das wiederholte An-/Ausschalten von Meteors CrystalAura liefen
+        // bisher trotzdem jeden Tick weiter, obwohl nie etwas dabei rauskam - genau das erzeugte spuerbares
+        // Ruckeln/Stottern im Movement, waehrend "Platzierung" nach aussen einfach nichts tat.
+        boolean hasCrystals = totalItem(Items.END_CRYSTAL) > 0;
+        boolean hasAnchorItem = totalItem(Items.RESPAWN_ANCHOR) > 0 && totalItem(Items.GLOWSTONE) > 0;
+        Module ca = Modules.get().get(CrystalAura.class);
+        if (!hasCrystals && !hasAnchorItem) {
+            if (ca != null && ca.isActive()) ca.toggle();
+            auraMode = -1;
+            return;
+        }
+
         Vec3 predicted = predict(target);
-        double crystalDmg = bestDamageAround(target, predicted, true);
+        double crystalDmg = hasCrystals ? bestDamageAround(target, predicted, true) : -1;
 
         // Anchor-Kandidaten anhand der AKTUELLEN Position berechnen (nicht der Vorhersage - der Bot muss erst
         // noch hinlaufen, eine extrapolierte Position waere bei schnellen/fliegenden Zielen komplett daneben).
         // Neu berechnen, wenn die alte Liste durch ist ODER sich das Ziel > 2 Bloecke bewegt hat.
-        if (useAnchors.get() && anchorMode.get() != 2) {
+        if (hasAnchorItem && useAnchors.get() && anchorMode.get() != 2) {
             BlockPos targetBlock = target.blockPosition();
             boolean stale = anchorCandidateIndex >= anchorCandidates.size()
                 || anchorCalcOrigin == null
@@ -1154,12 +1168,11 @@ public class GodmodePvP extends Module {
         }
 
         bestAnchorDmgCache = 0;
-        if (anchorCandidateIndex < anchorCandidates.size()) {
+        if (hasAnchorItem && anchorCandidateIndex < anchorCandidates.size()) {
             BlockPos best = anchorCandidates.get(anchorCandidateIndex);
             bestAnchorDmgCache = DamageUtils.anchorDamage(target, Vec3.atCenterOf(best));
         }
 
-        Module ca = Modules.get().get(CrystalAura.class);
         if (ca == null) return;
 
         // Anchor nur im Nahbereich - sonst Crystal, damit es nie totlaeuft
@@ -1176,7 +1189,9 @@ public class GodmodePvP extends Module {
         double enterMargin = auraMode == 1 ? -0.3 : margin;
 
         boolean wantAnchor;
-        if (anchorMode.get() == 1) {
+        if (!hasAnchorItem) {
+            wantAnchor = false;
+        } else if (anchorMode.get() == 1) {
             // Anchor schon bei Gleichstand (bricht Schilde)
             wantAnchor = !outOfGlowstone && !anchorForced && inRange
                 && anchorCandidateIndex < anchorCandidates.size()

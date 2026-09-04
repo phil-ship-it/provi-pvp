@@ -21,7 +21,7 @@ nothing described in the [README](README.md) is hardcoded. Defaults are the valu
 
 | Setting | Default | Description |
 |---|---|---|
-| `smart-auras` | `true` | Chooses Crystal or Anchor based on a real damage calculation. |
+| `smart-auras` | `true` | Chooses Crystal or Anchor based on a real damage calculation. With zero End Crystals AND zero (Respawn Anchor + Glowstone) in the inventory, skips the whole damage/position simulation and forces melee-only instead of endlessly re-simulating and toggling Meteor's CrystalAura for items that don't exist (that dead-weight simulation was itself a source of visible movement stutter). |
 | `anchor-mode` | `1` | `0` = automatic (always max damage), `1` = use Anchor even on a damage tie, `2` = off. |
 | `use-anchors` | `true` | Allow Anchors at all (costs 1 Glowstone per detonation). |
 | `pre-hit` | `true` | Melees the target right before the explosion for extra damage. |
