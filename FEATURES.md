@@ -44,7 +44,7 @@ nothing described in the [README](README.md) is hardcoded. Defaults are the valu
 
 | Setting | Default | Description |
 |---|---|---|
-| `fast-totem` | `true` | Checks the offhand every tick and refills a totem the instant it's used. |
+| `fast-totem` | `true` | Checks the offhand every tick and refills a totem the instant it's used. Keeps working while the Meteor ClickGUI or your own inventory (E) is open — only pauses while a genuine foreign container (chest, ender chest, anvil, shulker box, ...) is open, since that GUI remaps inventory slot IDs and blind swaps there could move the wrong item. If no totem is left anywhere, this is detected the same tick (not on the next periodic inventory scan) and reported once in chat. |
 | `auto-mend` | `true` | Repairs armor with XP (Meteor's AutoMend). |
 | `auto-eat` | `true` | Eats automatically (Meteor's AutoEat) when hunger is low — without enough saturation Minecraft itself disables sprinting, which breaks sprint-reset knockback and Baritone's movement speed. |
 | `no-fall` | `true` | Prevents fall damage (Meteor's NoFall) — needed because Baritone here is deliberately tuned for aggressive jump/cliff pursuit (up to 20 blocks of fall height without water). |

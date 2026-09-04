@@ -510,9 +510,12 @@ public class HumanPvP extends Module {
         Player self = mc.player;
         currentAction = "-";
         boolean guiOpen = mc.gui.screen() != null;
+        // Nur eine echte Fremd-Container-GUI hat ein anderes containerMenu als das normale Inventar -
+        // Meteor-ClickGUI/eigenes Inventar teilen sich inventoryMenu, Totem-Nachlegen darf da weiterlaufen.
+        boolean foreignContainerOpen = mc.player.containerMenu != mc.player.inventoryMenu;
+        if (fastTotem.get() && tickCounter >= nextTotemCheckTick && !foreignContainerOpen) ensureOffhandTotem();
 
         if (!guiOpen) {
-            if (fastTotem.get() && tickCounter >= nextTotemCheckTick) ensureOffhandTotem();
             if (invManager.get() && tickCounter % 20 == 0) inventoryTick();
         }
 
@@ -1240,6 +1243,7 @@ public class HumanPvP extends Module {
         warnIfEmpty(Items.END_CRYSTAL, "End Crystals");
         warnIfEmpty(Items.ENDER_PEARL, "Enderperlen");
         warnIfEmpty(Items.OBSIDIAN, "Obsidian");
+        warnIfEmpty(Items.TOTEM_OF_UNDYING, "Totems");
     }
 
     /** Generische Einmal-Warnung (pro Item), wenn eine wichtige Ressource komplett aufgebraucht ist -

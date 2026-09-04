@@ -717,8 +717,13 @@ public class GodmodePvP extends Module {
         currentAction = "-";
 
         boolean guiOpen = mc.gui.screen() != null;
+        // Nur eine ECHTE Fremd-Container-GUI (Kiste, Ambos, Shulker, ...) hat ein anderes containerMenu
+        // als das Standard-Spieler-Inventar - Slot-Indizes waeren dann falsch gemappt und koennten
+        // Items in der falschen GUI verschieben. Das Meteor-ClickGUI und das eigene Inventar (E) teilen
+        // sich weiterhin das normale inventoryMenu, also darf Totem-Nachlegen dabei NICHT pausieren.
+        boolean foreignContainerOpen = mc.player.containerMenu != mc.player.inventoryMenu;
+        if (fastTotem.get() && !foreignContainerOpen) ensureOffhandTotem();
         if (!guiOpen) {
-            if (fastTotem.get()) ensureOffhandTotem();
             if (invManager.get() && tickCounter % 20 == 0) inventoryTick(self);
         }
 
@@ -1972,7 +1977,14 @@ public class GodmodePvP extends Module {
         if (off.is(Items.TOTEM_OF_UNDYING)) return;
 
         FindItemResult totem = InvUtils.find(Items.TOTEM_OF_UNDYING);
-        if (totem.found()) InvUtils.move().from(totem.slot()).toOffhand();
+        if (totem.found()) {
+            InvUtils.move().from(totem.slot()).toOffhand();
+        } else if (!lowOnTotems) {
+            // Sofort erkennen statt bis zu 20 Ticks (1s) auf den naechsten periodischen Inventar-Scan zu
+            // warten - im Kampf ist "komplett ohne Totem" die kritischste Ressourcenluecke ueberhaupt.
+            lowOnTotems = true;
+            ChatUtils.info("§cKein Totem mehr verfuegbar - Offhand bleibt leer!");
+        }
     }
 
     // ---------- Schutz / Falle ----------
