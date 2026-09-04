@@ -112,8 +112,8 @@ public class HumanPvP extends Module {
 
     public final Setting<Boolean> freeLook = sgGeneral.add(new BoolSetting.Builder()
         .name("free-look")
-        .description("Silent-Rotations: der Bot zielt weiterhin korrekt (das Server-Paket bekommt die richtige Blickrichtung), aber deine eigene Kamera bleibt frei drehbar. Aus = die alte harte Kamera-Zwangsdrehung.")
-        .defaultValue(true)
+        .description("Silent-Rotations: der Bot zielt weiterhin korrekt (das Server-Paket bekommt die richtige Blickrichtung), aber deine eigene Kamera bleibt frei drehbar. ACHTUNG: separate Rotations-Pakete ohne dazu passende Kamerabewegung sind eines der klassischsten Anti-Cheat-Erkennungsmuster ueberhaupt - auf Servern mit aktivem Anti-Cheat kann das zu Bewegungs-Korrekturen/Rubberbanding fuehren. Deshalb standardmaessig aus.")
+        .defaultValue(false)
         .build()
     );
 

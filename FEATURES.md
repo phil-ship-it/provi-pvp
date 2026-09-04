@@ -15,7 +15,7 @@ nothing described in the [README](README.md) is hardcoded. Defaults are the valu
 | `pop-threshold` | `8.0` | HP drop counted as a totem pop. |
 | `prediction-ticks` | `5` | How far ahead enemy movement is predicted for attacks. |
 | `ignore-fire` | `true` | Walks straight through ground fire in melee range instead of pathing around it (Baritone otherwise treats fire as hard-impassable). |
-| `free-look` | `true` | Silent rotations: the bot still aims/turns correctly for attacks, placements, and target tracking (the outgoing packet carries the correct look direction), but your own camera stays free to look around. Off = the old hard camera lock. |
+| `free-look` | `false` | Silent rotations: the bot still aims/turns correctly for attacks, placements, and target tracking (the outgoing packet carries the correct look direction), but your own camera stays free to look around. **Off by default** — separate rotation packets with no matching camera movement are one of the most classic anti-cheat detection signatures (Vulcan/Grim/Matrix/NCP all have explicit rotation checks for exactly this), and can cause movement corrections/rubberbanding on servers with active anti-cheat. |
 
 ### Combat
 
@@ -97,7 +97,7 @@ core as `GodmodePvP`, with these differences:
 |---|---|---|
 | `follow-range` | `20` | Smaller detection range than `GodmodePvP` by default. |
 | `engage-distance` | `14` | Same sticky-engagement behavior as `GodmodePvP`, tuned to a shorter range. |
-| `free-look` | `true` | Same silent-rotation behavior as `GodmodePvP` — camera stays free while the bot aims correctly server-side. |
+| `free-look` | `false` | Same silent-rotation behavior as `GodmodePvP` — off by default for the same anti-cheat-detection reason. |
 | `reaction-min` / `reaction-max` | `3` / `9` ticks | Randomized reaction delay before engaging a newly acquired target — no instant snap-to-target. |
 | `attack-chance` | `0.9` | Probability that a "ready" hit is actually thrown, simulating human misclicks. |
 | `aim-tolerance` | `4.0°` | Aim tolerance before a hit or placement is executed. |
