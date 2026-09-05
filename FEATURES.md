@@ -118,6 +118,23 @@ above.
 | `auto-respawn` | `true` | Respawns the dummy when it dies or disappears. |
 | `invincible` | `false` | HP never reaches 0 — no despawn/respawn needed, uninterrupted practice. |
 
+## Auto5b5tDupe
+
+Ported from [mmvanheusden/meteor-5b5t-addon](https://github.com/mmvanheusden/meteor-5b5t-addon) (GPL-3.0), which
+targeted MC 1.21.5/Yarn mappings - rewritten against 26.2/Mojang mappings here since the recipe-book API was
+completely redesigned between those versions. Source was read in full before porting: no network calls, no
+third-party auth, no telemetry - a pure crafting exploit (drop the held item, then send a craft-request packet
+that references the ingredient in the gap before the server processes the drop).
+
+**Original last verified working 19/05/2025 - over a year old. Whether 5b5t has since patched this race condition
+is unverified. Test with `single` on a worthless item before relying on it.**
+
+| Setting | Default | Description |
+|---|---|---|
+| `recipe` | `Stick` | Which recipe to exploit (`Stick` or `CraftingTable`). Needs ingredients for at least 2 in inventory. |
+| `single` | `false` | Just the raw exploit attempt (no rotation/drop automation) - for testing whether the gap is even still open. |
+| `rotation-mode` | `Silent` | `Silent` sends a rotation packet without moving your camera; `Client` actually snaps your pitch down and back. |
+
 ## Commands
 
 | Command | Effect |

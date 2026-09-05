@@ -108,6 +108,15 @@ A standalone module that spawns a fake player with configurable HP (including li
 active, or an invincible mode) to test attack, knockback, and combat-timing changes without needing a second
 account or a live server.
 
+### Auto5b5tDupe
+
+A crafting-exploit dupe module for the 5b5t anarchy server, ported from
+[mmvanheusden/meteor-5b5t-addon](https://github.com/mmvanheusden/meteor-5b5t-addon) (GPL-3.0) onto 26.2/Mojang
+mappings - the original targeted 1.21.5/Yarn and its recipe-book API no longer exists in this form. Source was
+read in full before porting: pure crafting-packet exploit, no network calls or third-party services involved.
+Whether the underlying server-side race condition is still unpatched is unverified - the original was last
+confirmed working in May 2025. Test with the `single` setting on a worthless item first.
+
 ## Commands
 
 | Command                | Effect                          |

@@ -1,5 +1,6 @@
 package com.provipvp;
 
+import com.provipvp.modules.Auto5b5tDupe;
 import com.provipvp.modules.GodmodePvP;
 import com.provipvp.modules.HumanPvP;
 import com.provipvp.modules.TrainingDummy;
@@ -22,6 +23,7 @@ public class ProviPvPAddon extends MeteorAddon {
         Modules.get().add(new GodmodePvP());
         Modules.get().add(new HumanPvP());
         Modules.get().add(new TrainingDummy());
+        Modules.get().add(new Auto5b5tDupe());
         Commands.add(new PvpCommand());
         Commands.add(new HumanPvpCommand());
     }
