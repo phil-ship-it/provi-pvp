@@ -53,6 +53,8 @@ nothing described in the [README](README.md) is hardcoded. Defaults are the valu
 | `respect-friends` | `true` | Avoids explosions that would also hit a player on the Meteor friends list. |
 | `hole-awareness` | `true` | Looks for a nearby one-block-deep, open-topped hole in close combat and uses it as a fighting position instead of standing in the open. |
 | `height-advantage` | `true` | Prefers a position lower than the target — your own explosions deal more damage from there, the enemy's deal less. |
+| `avoid-lava` | `true` | Skips crystal/anchor placement spots directly next to lava (Nether lakes, bedrock pools) — prevents self-ignition and unleashing a flood of lava after the explosion. |
+| `auto-fire-res` | `true` | Drinks a Fire Resistance potion automatically whenever you're in the Nether and don't already have one active — makes lava contact, fire, and burning explosion damage irrelevant. Runs independently of whether a fight is happening. |
 | `build-cover` | `true` | Places obsidian to close open sides when no natural hole is nearby. |
 | `peek-tactic` | `true` | Crouches in cover while nothing is actively happening, only standing up briefly to attack. |
 | `retreat-threshold` | `true` | Breaks off the fight (retreats) once totems drop below 2 **and** there are no Crystal/Anchor resources left. |

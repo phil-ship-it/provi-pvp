@@ -30,6 +30,8 @@ import meteordevelopment.meteorclient.utils.world.BlockUtils;
 import meteordevelopment.meteorclient.utils.misc.input.Input;
 import meteordevelopment.orbit.EventHandler;
 import net.minecraft.core.BlockPos;
+import net.minecraft.core.Direction;
+import net.minecraft.core.component.DataComponents;
 import net.minecraft.world.InteractionHand;
 import net.minecraft.world.entity.LivingEntity;
 import net.minecraft.world.entity.EntityType;
@@ -40,8 +42,11 @@ import net.minecraft.world.item.AxeItem;
 import net.minecraft.world.item.MaceItem;
 import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.item.Items;
+import net.minecraft.world.item.alchemy.PotionContents;
+import net.minecraft.world.item.alchemy.Potions;
 import net.minecraft.world.level.block.Blocks;
 import net.minecraft.world.level.block.state.BlockState;
+import net.minecraft.world.level.Level;
 import net.minecraft.world.phys.AABB;
 import net.minecraft.world.phys.BlockHitResult;
 import net.minecraft.world.phys.Vec3;
@@ -315,6 +320,20 @@ public class GodmodePvP extends Module {
         .build()
     );
 
+    public final Setting<Boolean> avoidLava = sgDefense.add(new BoolSetting.Builder()
+        .name("avoid-lava")
+        .description("Platziert keine Crystals/Anchors direkt neben Lava (Nether-Seen, Bedrock-Pools) - verhindert Selbstentzuendung und riesige Lava-Fluten nach der Explosion.")
+        .defaultValue(true)
+        .build()
+    );
+
+    public final Setting<Boolean> autoFireRes = sgDefense.add(new BoolSetting.Builder()
+        .name("auto-fire-res")
+        .description("Trinkt automatisch einen Fire-Resistance-Trank, sobald man sich im Nether befindet und keiner aktiv ist - macht Lava/Feuer/brennenden Explosionsschaden irrelevant.")
+        .defaultValue(true)
+        .build()
+    );
+
     public final Setting<Boolean> buildCover = sgDefense.add(new BoolSetting.Builder()
         .name("build-cover")
         .description("Baut eigene Obsidian-Deckung (offene Seiten schliessen), wenn kein natuerliches Loch in der Naehe ist.")
@@ -528,6 +547,8 @@ public class GodmodePvP extends Module {
     private int anchorPlaceFails;
     private int crystalForcedUntil;
     private int anchorUnreachableTicks;
+    private boolean drinkingFireRes;
+    private int fireResStartTick = -999;
     private BlockPos anchorCalcOrigin;
     private int lastAuraSwitch;
 
@@ -553,6 +574,8 @@ public class GodmodePvP extends Module {
         crystalForcedUntil = 0;
         anchorUnreachableTicks = 0;
         anchorCalcOrigin = null;
+        drinkingFireRes = false;
+        fireResStartTick = -999;
         dtapStage = 0;
         dtapCooldown = 0;
         dtapSpot = null;
@@ -723,6 +746,7 @@ public class GodmodePvP extends Module {
         // sich weiterhin das normale inventoryMenu, also darf Totem-Nachlegen dabei NICHT pausieren.
         boolean foreignContainerOpen = mc.player.containerMenu != mc.player.inventoryMenu;
         if (fastTotem.get() && !foreignContainerOpen) ensureOffhandTotem();
+        maintainFireResistance();
         if (!guiOpen) {
             if (invManager.get() && tickCounter % 20 == 0) inventoryTick(self);
         }
@@ -1313,10 +1337,59 @@ public class GodmodePvP extends Module {
     private boolean validExplosionSpot(BlockPos cell, boolean crystal) {
         if (mc.level == null) return false;
         if (!mc.level.getBlockState(cell).isAir()) return false;
+        if (avoidLava.get() && isNearLava(cell)) return false;
 
         BlockState below = mc.level.getBlockState(cell.below());
         if (crystal) return below.is(Blocks.OBSIDIAN) || below.is(Blocks.BEDROCK) || below.isAir();
         return below.blocksMotion() && mc.level.getBlockState(cell.above()).isAir();
+    }
+
+    /** Zelle selbst oder einer der 6 Nachbarn ist Lava - typisch fuer Nether-Seen/Bedrock-Pools. Verhindert,
+     *  dass eine Explosion dort eine Feuerflut auslaesst oder der Bot direkt neben kochender Lava landet. */
+    private boolean isNearLava(BlockPos cell) {
+        if (mc.level.getBlockState(cell).is(Blocks.LAVA)) return true;
+        for (Direction dir : Direction.values()) {
+            if (mc.level.getBlockState(cell.relative(dir)).is(Blocks.LAVA)) return true;
+        }
+        return false;
+    }
+
+    /** Haelt Fire Resistance permanent aktiv, solange man sich im Nether befindet - macht Lava-Kontakt,
+     *  Explosions-Feuer und brennende Nachbarblöcke irrelevant. Laeuft unabhaengig vom Kampf-Zustand. */
+    private void maintainFireResistance() {
+        if (drinkingFireRes) {
+            if (mc.player.hasEffect(MobEffects.FIRE_RESISTANCE) || tickCounter - fireResStartTick > 40) {
+                InvUtils.swapBack();
+                drinkingFireRes = false;
+            } else {
+                mc.gameMode.useItem(mc.player, InteractionHand.MAIN_HAND);
+            }
+            return;
+        }
+
+        if (!autoFireRes.get()) return;
+        if (mc.level == null || mc.level.dimension() != Level.NETHER) return;
+        if (mc.player.hasEffect(MobEffects.FIRE_RESISTANCE)) return;
+
+        FindItemResult potion = findFireResistancePotion();
+        if (!potion.found()) return;
+
+        if (InvUtils.swap(potion.slot(), true)) {
+            mc.gameMode.useItem(mc.player, InteractionHand.MAIN_HAND);
+            drinkingFireRes = true;
+            fireResStartTick = tickCounter;
+        }
+    }
+
+    private FindItemResult findFireResistancePotion() {
+        java.util.function.Predicate<ItemStack> isFireRes = stack -> {
+            if (!stack.is(Items.POTION)) return false;
+            PotionContents contents = stack.get(DataComponents.POTION_CONTENTS);
+            return contents != null && (contents.is(Potions.FIRE_RESISTANCE) || contents.is(Potions.LONG_FIRE_RESISTANCE));
+        };
+        FindItemResult found = InvUtils.findInHotbar(isFireRes);
+        if (!found.found()) found = InvUtils.find(isFireRes);
+        return found;
     }
 
     // ---------- D-Tap-Executor (Obsidian in Flugbahn, 2 Crystals im Immunitaets-Abstand) ----------
