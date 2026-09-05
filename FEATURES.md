@@ -128,13 +128,18 @@ completely redesigned between those versions. Source was read in full before por
 third-party auth, no telemetry - a pure crafting exploit (drop the held item, then send a craft-request packet
 that references the ingredient in the gap before the server processes the drop).
 
+**Requires an actual Crafting Table (`CraftingMenu`) open, not the player's own 2x2 inventory grid** - the race
+condition lives in the table's 3x3 slot-shifting logic, which differs from the simpler 2x2 path and doesn't
+trigger it there. The module opens a nearby table automatically, or places one from your inventory if none is
+nearby, before attempting the exploit.
+
 **Original last verified working 19/05/2025 - over a year old. Whether 5b5t has since patched this race condition
 is unverified. Test with `single` on a worthless item before relying on it.**
 
 | Setting | Default | Description |
 |---|---|---|
 | `recipe` | `Stick` | Which recipe to exploit (`Stick` or `CraftingTable`). Needs ingredients for at least 2 in inventory. |
-| `single` | `false` | Just the raw exploit attempt (no rotation/drop automation) - for testing whether the gap is even still open. |
+| `single` | `false` | Just the raw exploit attempt (no rotation/drop automation, no auto-opening a table) - for testing whether the gap is even still open. Requires a Crafting Table to already be open. |
 | `rotation-mode` | `Silent` | `Silent` sends a rotation packet without moving your camera; `Client` actually snaps your pitch down and back. |
 
 ## Commands

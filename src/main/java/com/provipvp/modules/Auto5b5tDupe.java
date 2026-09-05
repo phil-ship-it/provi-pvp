@@ -8,17 +8,27 @@ import meteordevelopment.meteorclient.settings.Setting;
 import meteordevelopment.meteorclient.settings.SettingGroup;
 import meteordevelopment.meteorclient.systems.modules.Module;
 import meteordevelopment.meteorclient.utils.player.ChatUtils;
+import meteordevelopment.meteorclient.utils.player.FindItemResult;
+import meteordevelopment.meteorclient.utils.player.InvUtils;
 import meteordevelopment.meteorclient.utils.player.Rotations;
+import meteordevelopment.meteorclient.utils.world.BlockUtils;
 import meteordevelopment.orbit.EventHandler;
+import net.minecraft.core.BlockPos;
+import net.minecraft.core.Direction;
 import net.minecraft.client.ClientRecipeBook;
 import net.minecraft.client.gui.screens.recipebook.RecipeCollection;
 import net.minecraft.network.protocol.game.ServerboundPlaceRecipePacket;
+import net.minecraft.world.InteractionHand;
 import net.minecraft.world.entity.player.StackedItemContents;
+import net.minecraft.world.inventory.CraftingMenu;
 import net.minecraft.world.item.Item;
 import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.item.Items;
 import net.minecraft.world.item.crafting.display.RecipeDisplayEntry;
 import net.minecraft.world.item.crafting.display.SlotDisplayContext;
+import net.minecraft.world.level.block.Blocks;
+import net.minecraft.world.phys.BlockHitResult;
+import net.minecraft.world.phys.Vec3;
 
 import java.util.List;
 
@@ -73,6 +83,11 @@ public class Auto5b5tDupe extends Module {
         }
 
         if (single.get()) {
+            if (!(mc.player.containerMenu instanceof CraftingMenu)) {
+                ChatUtils.error("Fuer 'single' muss vorher schon ein Crafting Table offen sein (die Luecke steckt in dessen 3x3-Slot-Logik, nicht im 2x2-Inventar-Crafting).");
+                toggle();
+                return;
+            }
             if (!findTarget()) {
                 toggle();
                 return;
@@ -88,7 +103,7 @@ public class Auto5b5tDupe extends Module {
             return;
         }
 
-        phase = Phase.PREPARE;
+        phase = (mc.player.containerMenu instanceof CraftingMenu) ? Phase.PREPARE : Phase.OPEN_TABLE;
     }
 
     @EventHandler
@@ -99,6 +114,7 @@ public class Auto5b5tDupe extends Module {
         }
 
         switch (phase) {
+            case OPEN_TABLE -> openCraftingTable();
             case PREPARE -> {
                 if (!findTarget()) {
                     toggle();
@@ -120,6 +136,66 @@ public class Auto5b5tDupe extends Module {
                 toggle();
             }
         }
+    }
+
+    /** Die eigentliche Race Condition steckt in CraftingMenu (3x3-Tisch), nicht im simpleren 2x2-Inventar-Crafting -
+     *  ohne offenen Crafting Table referenziert das Paket die falsche, robustere Server-Logik und tut schlicht
+     *  nichts. Oeffnet einen nahen Tisch, oder stellt einen aus dem Inventar auf, falls keiner in der Naehe steht. */
+    private void openCraftingTable() {
+        if (mc.player.containerMenu instanceof CraftingMenu) {
+            phase = Phase.PREPARE;
+            return;
+        }
+
+        BlockPos table = findNearbyCraftingTable();
+        if (table != null) {
+            Vec3 center = Vec3.atCenterOf(table);
+            Rotations.rotate(Rotations.getYaw(center), Rotations.getPitch(center), () ->
+                BlockUtils.interact(new BlockHitResult(center, BlockUtils.getDirection(table), table, true), InteractionHand.MAIN_HAND, true)
+            );
+            return;
+        }
+
+        FindItemResult tableItem = InvUtils.findInHotbar(Items.CRAFTING_TABLE);
+        if (!tableItem.found()) tableItem = InvUtils.find(Items.CRAFTING_TABLE);
+        if (!tableItem.found()) {
+            ChatUtils.error("Kein Crafting Table in der Naehe oder im Inventar - fuer den Exploit zwingend noetig.");
+            toggle();
+            return;
+        }
+
+        BlockPos spot = findTablePlacementSpot();
+        if (spot == null) {
+            ChatUtils.error("Kein freier Platz zum Aufstellen eines Crafting Tables gefunden.");
+            toggle();
+            return;
+        }
+
+        BlockUtils.place(spot, tableItem, true, 50);
+    }
+
+    private BlockPos findNearbyCraftingTable() {
+        BlockPos base = mc.player.blockPosition();
+        for (int dx = -2; dx <= 2; dx++) {
+            for (int dy = -1; dy <= 1; dy++) {
+                for (int dz = -2; dz <= 2; dz++) {
+                    BlockPos cell = base.offset(dx, dy, dz);
+                    if (mc.level.getBlockState(cell).is(Blocks.CRAFTING_TABLE)) return cell;
+                }
+            }
+        }
+        return null;
+    }
+
+    private BlockPos findTablePlacementSpot() {
+        BlockPos base = mc.player.blockPosition();
+        for (Direction dir : Direction.Plane.HORIZONTAL) {
+            BlockPos cell = base.relative(dir);
+            if (mc.level.getBlockState(cell).isAir() && mc.level.getBlockState(cell.below()).blocksMotion()) {
+                return cell;
+            }
+        }
+        return null;
     }
 
     private void rotate() {
@@ -161,7 +237,7 @@ public class Auto5b5tDupe extends Module {
     }
 
     private enum Phase {
-        PREPARE, DROP, CRAFT
+        OPEN_TABLE, PREPARE, DROP, CRAFT
     }
 
     private enum RotationMode {
