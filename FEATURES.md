@@ -25,6 +25,7 @@ nothing described in the [README](README.md) is hardcoded. Defaults are the valu
 | `anchor-mode` | `1` | `0` = automatic (always max damage), `1` = use Anchor even on a damage tie, `2` = off. |
 | `use-anchors` | `true` | Allow Anchors at all (costs 1 Glowstone per detonation). |
 | `pre-hit` | `true` | Melees the target right before the explosion for extra damage. |
+| `melee-fallback` | `true` | Melees normally whenever no explosion is actually about to land (e.g. Crystal mode is on but there's no obsidian left for a support block in open air, or no valid spot at all) — without this, the bot previously just stood there once every explosive option stopped being genuinely achievable, even while `pre-hit`'s own condition kept reporting "explosion imminent" just because CrystalAura was switched on. |
 | `prefer-axe-melee` | `true` | Automatically swaps to the axe for melee hits (axe-swap meta). |
 | `shield-breaker` | `true` | Swaps to the axe against a blocking target. |
 | `melee-strafe` | `true` | Faces the target and circle-strafes in melee — harder to hit, varies the explosion angle. Direction switches on a randomized interval, not a fixed period. |

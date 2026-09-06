@@ -156,6 +156,13 @@ public class GodmodePvP extends Module {
         .build()
     );
 
+    public final Setting<Boolean> meleeFallback = sgCombat.add(new BoolSetting.Builder()
+        .name("melee-fallback")
+        .description("Schlaegt normal im Nahkampf, wenn gerade keine Explosion bevorsteht (z.B. kein Obsidian mehr fuer Crystal-Unterbau) - sonst steht der Bot nur da, sobald Crystal/Anchor tatsaechlich nichts mehr zustande bringen.")
+        .defaultValue(true)
+        .build()
+    );
+
     public final Setting<Boolean> preferAxeMelee = sgCombat.add(new BoolSetting.Builder()
         .name("prefer-axe-melee")
         .description("Schlaegt automatisch mit der Axt (Axt-Swap-Meta) statt Schwert.")
@@ -543,6 +550,7 @@ public class GodmodePvP extends Module {
     private final java.util.List<BlockPos> anchorCandidates = new java.util.ArrayList<>();
     private int anchorCandidateIndex;
     private double bestAnchorDmgCache;
+    private double bestCrystalDmgCache;
     private boolean outOfGlowstone;
     private int anchorPlaceFails;
     private int crystalForcedUntil;
@@ -1007,6 +1015,10 @@ public class GodmodePvP extends Module {
             && self.hasLineOfSight(target) && explosionImminent(target) && prepareCritAndCheck(dist)) {
             attackMelee(target);
             currentAction = "pre-hit";
+        } else if (meleeFallback.get() && dist <= 3.6 && self.getAttackStrengthScale(0.5f) >= 0.9f
+            && self.hasLineOfSight(target) && !explosionImminent(target)) {
+            attackMelee(target);
+            currentAction = "nahkampf-fallback";
         }
 
         if (currentAction.equals("-")) {
@@ -1171,11 +1183,13 @@ public class GodmodePvP extends Module {
         if (!hasCrystals && !hasAnchorItem) {
             if (ca != null && ca.isActive()) ca.toggle();
             auraMode = -1;
+            bestCrystalDmgCache = 0;
             return;
         }
 
         Vec3 predicted = predict(target);
         double crystalDmg = hasCrystals ? bestDamageAround(target, predicted, true) : -1;
+        bestCrystalDmgCache = crystalDmg;
 
         // Anchor-Kandidaten anhand der AKTUELLEN Position berechnen (nicht der Vorhersage - der Bot muss erst
         // noch hinlaufen, eine extrapolierte Position waere bei schnellen/fliegenden Zielen komplett daneben).
@@ -1247,8 +1261,11 @@ public class GodmodePvP extends Module {
     private boolean explosionImminent(LivingEntity target) {
         if (auraMode == 1) return true;
         if (auraMode == 0) {
+            // ca.isActive() allein reicht nicht - das Modul kann eingeschaltet sein, aber ohne Obsidian fuer den
+            // Support-Unterbau (oder ohne jeden gueltigen Platzierungs-Kandidaten) faktisch nie explodieren.
+            // bestCrystalDmgCache > 0 heisst: der letzte Scan hat wirklich eine machbare Stelle gefunden.
             Module ca = Modules.get().get(CrystalAura.class);
-            return ca != null && ca.isActive();
+            return ca != null && ca.isActive() && bestCrystalDmgCache > 0;
         }
         return false;
     }

@@ -908,10 +908,21 @@ public class HumanPvP extends Module {
     // ---------- Aura-Steuerung (groessere, verrauschte Hysterese) ----------
 
     private void selectAura(LivingEntity target) {
-        Vec3 center = target.position();
-        double crystalDmg = bestDamageAround(target, center, true);
+        // Wie in GodmodePvP: ohne Crystal UND ohne vollstaendige Anchor-Ausruestung gibt es nichts zu
+        // platzieren - Simulation und CrystalAura-Toggle komplett ueberspringen statt sinnlos weiterzurechnen.
+        boolean hasCrystals = totalItem(Items.END_CRYSTAL) > 0;
+        boolean hasAnchorItem = totalItem(Items.RESPAWN_ANCHOR) > 0 && totalItem(Items.GLOWSTONE) > 0;
+        Module ca = Modules.get().get(CrystalAura.class);
+        if (!hasCrystals && !hasAnchorItem) {
+            if (ca != null && ca.isActive()) ca.toggle();
+            auraMode = -1;
+            return;
+        }
 
-        if (useAnchors.get() && anchorMode.get() != 2) {
+        Vec3 center = target.position();
+        double crystalDmg = hasCrystals ? bestDamageAround(target, center, true) : -1;
+
+        if (hasAnchorItem && useAnchors.get() && anchorMode.get() != 2) {
             BlockPos targetBlock = target.blockPosition();
             boolean stale = anchorCandidateIndex >= anchorCandidates.size()
                 || anchorCalcOrigin == null
@@ -923,12 +934,11 @@ public class HumanPvP extends Module {
         }
 
         bestAnchorDmgCache = 0;
-        if (anchorCandidateIndex < anchorCandidates.size()) {
+        if (hasAnchorItem && anchorCandidateIndex < anchorCandidates.size()) {
             BlockPos best = anchorCandidates.get(anchorCandidateIndex);
             bestAnchorDmgCache = DamageUtils.anchorDamage(target, Vec3.atCenterOf(best));
         }
 
-        Module ca = Modules.get().get(CrystalAura.class);
         if (ca == null) return;
 
         boolean inRange = mc.player.distanceToSqr(target) < 5.5 * 5.5;
