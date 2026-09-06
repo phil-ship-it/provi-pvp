@@ -143,7 +143,7 @@ is unverified. Test with `single` on a worthless item before relying on it.**
 | `single` | `false` | Just the raw exploit attempt (no rotation/drop automation, no auto-opening a table) - for testing whether the gap is even still open. Requires a Crafting Table to already be open. |
 | `rotation-mode` | `Silent` | `Silent` sends a rotation packet without moving your camera; `Client` actually snaps your pitch down and back. |
 
-## PacketLogger, BrandSpoof, ExploitGuard
+## PacketLogger, BrandSpoof, ExploitGuard, PacketFilter, MacroTrigger
 
 Small, standalone debug/OpSec modules - honestly scoped, no silent-fail claims.
 
@@ -156,6 +156,8 @@ Small, standalone debug/OpSec modules - honestly scoped, no silent-fail claims.
 | ExploitGuard | `max-component-depth` | `200` | Cancels incoming chat packets whose text-component tree nests deeper than this — a known client-crash vector via malicious server broadcasts. Can't protect against crashes during packet decoding itself, only validly-decoded but pathological content. |
 | PacketFilter | `blocked-outgoing` | (empty list) | Outgoing packets whose class name contains any of these texts (case-insensitive) are never sent to the server. |
 | PacketFilter | `announce` | `true` | Chats when a packet gets blocked. |
+| MacroTrigger | `triggers` | (empty list) | One entry per line, format `trigger=>command` - e.g. `gg=>.pvp off`. Runs the Meteor command whenever an incoming chat message contains the trigger text. Chat-only; no packet- or inventory-state triggers (would need dedicated infrastructure this project doesn't have yet). |
+| MacroTrigger | `announce` | `true` | Chats when a macro fires. |
 
 
 ## Commands

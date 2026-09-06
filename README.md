@@ -119,9 +119,9 @@ grid) - the module opens or places one automatically before attempting the explo
 server-side race condition is still unpatched is unverified - the original was last confirmed working in May
 2025. Test with the `single` setting on a worthless item first.
 
-### PacketLogger, BrandSpoof, ExploitGuard
+### PacketLogger, BrandSpoof, ExploitGuard, PacketFilter, MacroTrigger
 
-Three small, honestly-scoped debug/OpSec modules:
+Small, honestly-scoped debug/OpSec/automation modules:
 
 - **PacketLogger** — logs incoming/outgoing packet class names to chat with an optional filter. Pure
   observation, changes nothing. Useful for correlating server behavior (rubberbanding, disconnects, anti-cheat
@@ -135,6 +135,9 @@ Three small, honestly-scoped debug/OpSec modules:
   but pathologically-structured content.
 - **PacketFilter** — blocks specific outgoing packets before they ever reach the server, matched by a
   configurable list of class-name substrings. Direct control over what actually gets sent.
+- **MacroTrigger** — runs a Meteor command whenever an incoming chat message contains a configured trigger
+  text (`trigger=>command` per line). Chat-triggered only; no packet- or inventory-state triggers — those would
+  need dedicated tracking infrastructure this project doesn't have.
 
 ## Commands
 

@@ -5,6 +5,7 @@ import com.provipvp.modules.BrandSpoof;
 import com.provipvp.modules.ExploitGuard;
 import com.provipvp.modules.GodmodePvP;
 import com.provipvp.modules.HumanPvP;
+import com.provipvp.modules.MacroTriggerModule;
 import com.provipvp.modules.PacketFilter;
 import com.provipvp.modules.PacketLogger;
 import com.provipvp.modules.TrainingDummy;
@@ -34,6 +35,7 @@ public class ProviPvPAddon extends MeteorAddon {
         Modules.get().add(new BrandSpoof());
         Modules.get().add(new ExploitGuard());
         Modules.get().add(new PacketFilter());
+        Modules.get().add(new MacroTriggerModule());
         Commands.add(new PvpCommand());
         Commands.add(new HumanPvpCommand());
         Commands.add(new NbtCommand());
