@@ -39,11 +39,13 @@ import net.minecraft.world.effect.MobEffects;
 import net.minecraft.world.entity.boss.enderdragon.EndCrystal;
 import net.minecraft.world.entity.player.Player;
 import net.minecraft.world.item.AxeItem;
+import net.minecraft.world.item.BedItem;
 import net.minecraft.world.item.MaceItem;
 import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.item.Items;
 import net.minecraft.world.item.alchemy.PotionContents;
 import net.minecraft.world.item.alchemy.Potions;
+import net.minecraft.world.level.block.BedBlock;
 import net.minecraft.world.level.block.Blocks;
 import net.minecraft.world.level.block.state.BlockState;
 import net.minecraft.world.level.Level;
@@ -66,6 +68,7 @@ public class GodmodePvP extends Module {
     private final SettingGroup sgInv = settings.createGroup("Inventar");
     private final SettingGroup sgMobs = settings.createGroup("Mobs");
     private final SettingGroup sgPearl = settings.createGroup("Enderperlen");
+    private final SettingGroup sgHeal = settings.createGroup("Heilung");
 
     // General
     public final Setting<Boolean> follow = sgGeneral.add(new BoolSetting.Builder()
@@ -172,6 +175,13 @@ public class GodmodePvP extends Module {
         .name("use-anchors")
         .description("Anchor ueberhaupt erlauben (braucht 1 Glowstone pro Anchor).")
         .defaultValue(true)
+        .build()
+    );
+
+    public final Setting<Boolean> useBeds = sgCombat.add(new BoolSetting.Builder()
+        .name("use-beds")
+        .description("Bed Aura: platziert und zuendet Betten als Explosion (Schadenswert 5.0, wie Anchor). Wirkt nur ausserhalb der Overworld (Nether/End, z.B. Portal-Camping auf 5b5t) - der Client kann das nicht vorab pruefen, das entscheidet allein der Server. Standardmaessig aus, damit in der Overworld nicht sinnlos Betten verbraucht werden (dort wird nur geschlafen/der Spawnpunkt gesetzt statt zu explodieren).")
+        .defaultValue(false)
         .build()
     );
 
@@ -523,6 +533,32 @@ public class GodmodePvP extends Module {
         .build()
     );
 
+    // Heilung
+    public final Setting<Boolean> healPotions = sgHeal.add(new BoolSetting.Builder()
+        .name("heal-potions")
+        .description("Wirft bei frischem Schaden sofort eine Splash-Heiltraenke (Instant Health) zu den eigenen Fuessen - explodiert direkt am Boden und heilt augenblicklich. Braucht Splash Potion of Healing/Strong Healing im Inventar (auch als 64er-Stack auf Servern mit erweiterten Stack-Groessen).")
+        .defaultValue(true)
+        .build()
+    );
+
+    public final Setting<Double> healMinDamage = sgHeal.add(new DoubleSetting.Builder()
+        .name("heal-min-damage")
+        .description("Mindestens so viel HP muessen seit dem letzten Tick verloren gegangen sein, damit ueberhaupt ein Trank geworfen wird - verhindert Trankverschwendung bei jedem winzigen Kratzer (z.B. Fallschaden, Dornen).")
+        .defaultValue(3.0)
+        .range(0.5, 10.0)
+        .sliderRange(0.5, 10.0)
+        .build()
+    );
+
+    public final Setting<Integer> healCooldown = sgHeal.add(new IntSetting.Builder()
+        .name("heal-cooldown")
+        .description("Mindestabstand (Ticks) zwischen zwei geworfenen Heiltraenken - verhindert, dass ein einzelner Mehrfach-Treffer-Combo sofort mehrere Traenke auf einmal verbraucht.")
+        .defaultValue(20)
+        .range(0, 100)
+        .sliderRange(0, 100)
+        .build()
+    );
+
     // State
     private final Random rng = new Random();
     private final Map<UUID, Float> lastHealth = new HashMap<>();
@@ -586,6 +622,25 @@ public class GodmodePvP extends Module {
     private BlockPos anchorCalcOrigin;
     private int lastAuraSwitch;
 
+    // Bed-Platzierung: analog zur Anchor-Platzierung, aber ohne Ladeschritt - eine Explosion pro Bett,
+    // ausgeloest durch simples Rechtsklicken. Wirkt nur ausserhalb der Overworld (Nether/End).
+    private int bedPlaceCooldown;
+    private int bedMaintCooldown;
+    private final java.util.List<BedSpot> bedCandidates = new java.util.ArrayList<>();
+    private int bedCandidateIndex;
+    private double bestBedDmgCache;
+    private int bedPlaceFails;
+    private int bedUnreachableTicks;
+    private BlockPos bedCalcOrigin;
+    private int lastBedProgressTick;
+
+    // Heiltraenke: Schaden-Delta pro Tick verfolgen, um frischen Treffern sofort einen Splash-Heiltrank
+    // entgegenzusetzen.
+    private float lastHpForHealPotion = -1;
+    private int healPotionCooldown;
+
+    private record BedSpot(BlockPos pos, Direction dir) {}
+
     // Eigener D-Tap-Executor (Knockback -> Obsidian in Flugbahn -> 2 Crystals im Immunitaets-Abstand)
     private BlockPos dtapSpot;
     private int dtapStage; // 0 idle, 1 1.Crystal platzieren, 2 1.Crystal zuenden, 3 Immunitaet abwarten, 4 2.Crystal platzieren+zuenden
@@ -608,6 +663,16 @@ public class GodmodePvP extends Module {
         crystalForcedUntil = 0;
         anchorUnreachableTicks = 0;
         anchorCalcOrigin = null;
+        bedPlaceCooldown = 0;
+        bedMaintCooldown = 0;
+        bedPlaceFails = 0;
+        bedUnreachableTicks = 0;
+        bedCalcOrigin = null;
+        bedCandidates.clear();
+        bedCandidateIndex = 0;
+        lastBedProgressTick = 0;
+        lastHpForHealPotion = -1;
+        healPotionCooldown = 0;
         drinkingFireRes = false;
         fireResStartTick = -999;
         dtapStage = 0;
@@ -780,6 +845,7 @@ public class GodmodePvP extends Module {
         // sich weiterhin das normale inventoryMenu, also darf Totem-Nachlegen dabei NICHT pausieren.
         boolean foreignContainerOpen = mc.player.containerMenu != mc.player.inventoryMenu;
         if (fastTotem.get() && !foreignContainerOpen) ensureOffhandTotem();
+        if (!foreignContainerOpen) maintainHealPotions(self);
         maintainFireResistance();
         if (!guiOpen) {
             if (invManager.get() && tickCounter % 20 == 0) inventoryTick(self);
@@ -1009,6 +1075,7 @@ public class GodmodePvP extends Module {
         // platzierter Anchor wird auch fertig geladen/gezuendet, wenn zwischenzeitlich auf Crystal
         // umgeschaltet wird. Das war die Hauptursache dafuer, dass nicht alle Anchors gezuendet wurden.
         maintainNearbyAnchors();
+        maintainNearbyBeds();
 
         if (dtapStage != 0) {
             runDtapTick(target);
@@ -1027,6 +1094,17 @@ public class GodmodePvP extends Module {
                 }
                 tryPlaceAnchor();
                 currentAction = "anchor";
+            } else if (auraMode == 2) {
+                // Gleiche Anti-Stuck-Logik wie Anchor: 3s ohne Fortschritt -> Crystal erzwingen statt
+                // ewig auf unerreichbaren/erschoepften Bett-Kandidaten haengen zu bleiben.
+                if (tickCounter - lastBedProgressTick > 60) {
+                    bedCandidates.clear();
+                    bedCandidateIndex = 0;
+                    crystalForcedUntil = tickCounter + 60;
+                    lastBedProgressTick = tickCounter;
+                }
+                tryPlaceBed();
+                currentAction = "bed";
             } else if (auraMode == 0) {
                 // Selbstheilung: falls CrystalAura extern/durch einen Fehler ausgegangen ist, wieder anschalten
                 Module ca = Modules.get().get(CrystalAura.class);
@@ -1198,18 +1276,22 @@ public class GodmodePvP extends Module {
     // ---------- Aura-Steuerung ----------
 
     private void selectAura(LivingEntity target) {
-        // Ohne ein einziges Crystal UND ohne vollstaendige Anchor-Ausruestung (Anchor + Glowstone) gibt es
-        // schlicht nichts zu platzieren - die teure Damage-/Positions-Simulation unten (Anchor-Kandidaten-
-        // Scan, Crystal-Schadens-Suche) UND das wiederholte An-/Ausschalten von Meteors CrystalAura liefen
-        // bisher trotzdem jeden Tick weiter, obwohl nie etwas dabei rauskam - genau das erzeugte spuerbares
-        // Ruckeln/Stottern im Movement, waehrend "Platzierung" nach aussen einfach nichts tat.
+        // Ohne ein einziges Crystal UND ohne vollstaendige Anchor-Ausruestung (Anchor + Glowstone) UND ohne
+        // Bett (falls aktiviert) gibt es schlicht nichts zu platzieren - die teure Damage-/Positions-
+        // Simulation unten (Anchor-/Bett-Kandidaten-Scan, Crystal-Schadens-Suche) UND das wiederholte
+        // An-/Ausschalten von Meteors CrystalAura liefen bisher trotzdem jeden Tick weiter, obwohl nie etwas
+        // dabei rauskam - genau das erzeugte spuerbares Ruckeln/Stottern im Movement, waehrend "Platzierung"
+        // nach aussen einfach nichts tat.
         boolean hasCrystals = totalItem(Items.END_CRYSTAL) > 0;
         boolean hasAnchorItem = totalItem(Items.RESPAWN_ANCHOR) > 0 && totalItem(Items.GLOWSTONE) > 0;
+        boolean hasBedItem = useBeds.get() && totalItem(GodmodePvP::isBed) > 0;
         Module ca = Modules.get().get(CrystalAura.class);
-        if (!hasCrystals && !hasAnchorItem) {
+        if (!hasCrystals && !hasAnchorItem && !hasBedItem) {
             if (ca != null && ca.isActive()) ca.toggle();
             auraMode = -1;
             bestCrystalDmgCache = 0;
+            bestAnchorDmgCache = 0;
+            bestBedDmgCache = 0;
             return;
         }
 
@@ -1217,9 +1299,10 @@ public class GodmodePvP extends Module {
         double crystalDmg = hasCrystals ? bestDamageAround(target, predicted, true) : -1;
         bestCrystalDmgCache = crystalDmg;
 
-        // Anchor-Kandidaten anhand der AKTUELLEN Position berechnen (nicht der Vorhersage - der Bot muss erst
-        // noch hinlaufen, eine extrapolierte Position waere bei schnellen/fliegenden Zielen komplett daneben).
-        // Neu berechnen, wenn die alte Liste durch ist ODER sich das Ziel > 2 Bloecke bewegt hat.
+        // Anchor-/Bett-Kandidaten anhand der AKTUELLEN Position berechnen (nicht der Vorhersage - der Bot
+        // muss erst noch hinlaufen, eine extrapolierte Position waere bei schnellen/fliegenden Zielen
+        // komplett daneben). Neu berechnen, wenn die alte Liste durch ist ODER sich das Ziel > 2 Bloecke
+        // bewegt hat.
         if (hasAnchorItem && useAnchors.get() && anchorMode.get() != 2) {
             BlockPos targetBlock = target.blockPosition();
             boolean stale = anchorCandidateIndex >= anchorCandidates.size()
@@ -1237,15 +1320,32 @@ public class GodmodePvP extends Module {
             bestAnchorDmgCache = DamageUtils.anchorDamage(target, Vec3.atCenterOf(best));
         }
 
+        if (hasBedItem) {
+            BlockPos targetBlock = target.blockPosition();
+            boolean staleBed = bedCandidateIndex >= bedCandidates.size()
+                || bedCalcOrigin == null
+                || bedCalcOrigin.distSqr(targetBlock) > 4;
+            if (staleBed) {
+                calcBestBed(target, target.position());
+                bedCalcOrigin = targetBlock;
+            }
+        }
+
+        bestBedDmgCache = 0;
+        if (hasBedItem && bedCandidateIndex < bedCandidates.size()) {
+            BedSpot best = bedCandidates.get(bedCandidateIndex);
+            bestBedDmgCache = DamageUtils.bedDamage(target, Vec3.atCenterOf(best.pos()));
+        }
+
         if (ca == null) return;
 
-        // Anchor nur im Nahbereich - sonst Crystal, damit es nie totlaeuft
+        // Anchor/Bett nur im Nahbereich - sonst Crystal, damit es nie totlaeuft
         boolean inRange = mc.player.distanceToSqr(target) < 5.5 * 5.5;
 
         // Anchor-Plaetze unerreichbar? -> 2 s Crystal erzwingen (Anti-Stuck)
         boolean anchorForced = tickCounter < crystalForcedUntil;
 
-        // Hysterese statt scharfer Schwelle: zum Wechsel IN den Anchor-Modus braucht es einen klaren
+        // Hysterese statt scharfer Schwelle: zum Wechsel IN den Anchor-/Bett-Modus braucht es einen klaren
         // Vorsprung, zum Bleiben reicht Gleichstand. Ohne das kippt der Modus bei jedem winzigen
         // Schadens-Unterschied (z.B. durch die Ziel-Vorhersage) mehrfach pro Sekunde hin und her -
         // jedes Mal ein voller CrystalAura-Neustart, der wie ein Ruckeln/Haken wirkt.
@@ -1264,6 +1364,18 @@ public class GodmodePvP extends Module {
             wantAnchor = !outOfGlowstone && !anchorForced && inRange && bestAnchorDmgCache > crystalDmg + 0.15 + enterMargin;
         }
 
+        // Bett: gleiche Hysterese-Logik wie Anchor-Automatik (kein eigener Tie-Break-Modus - use-beds ist
+        // ein simpler On/Off-Schalter, siehe Beschreibung).
+        double bedEnterMargin = auraMode == 2 ? -0.3 : 0.15;
+        boolean wantBed = hasBedItem && inRange && bedCandidateIndex < bedCandidates.size()
+            && bestBedDmgCache > crystalDmg + 0.15 + bedEnterMargin;
+
+        // Wenn beide verfuegbar waeren, gewinnt die schadenstaerkere Option - Anchor braucht nur 1
+        // Glowstone und ist meist die effizientere Standardwahl bei echtem Gleichstand.
+        if (wantAnchor && wantBed) {
+            if (bestBedDmgCache > bestAnchorDmgCache) wantAnchor = false; else wantBed = false;
+        }
+
         // Deutlich seltener umschalten (0.5s statt 0.15s) - genug Zeit, damit eine begonnene
         // Platzierung/Ladung auch tatsaechlich fertig wird, statt staendig unterbrochen zu werden.
         if (tickCounter - lastAuraSwitch < 10) return;
@@ -1273,7 +1385,12 @@ public class GodmodePvP extends Module {
             auraMode = 1;
             lastAnchorProgressTick = tickCounter;
             lastAuraSwitch = tickCounter;
-        } else if (!wantAnchor && auraMode != 0) {
+        } else if (wantBed && auraMode != 2) {
+            if (ca.isActive()) ca.toggle();
+            auraMode = 2;
+            lastBedProgressTick = tickCounter;
+            lastAuraSwitch = tickCounter;
+        } else if (!wantAnchor && !wantBed && auraMode != 0) {
             if (!ca.isActive()) ca.toggle();
             auraMode = 0;
             lastAuraSwitch = tickCounter;
@@ -1285,7 +1402,7 @@ public class GodmodePvP extends Module {
      *  Anchor-Platzierung (z.B. Ziel gewebt + gleiche Hoehe + Kandidaten unerreichbar) jeden Nahkampf komplett,
      *  obwohl der Gegner voll treffbar daeme. */
     private boolean explosionImminent(LivingEntity target) {
-        if (auraMode == 1) return true;
+        if (auraMode == 1 || auraMode == 2) return true;
         if (auraMode == 0) {
             // ca.isActive() allein reicht nicht - das Modul kann eingeschaltet sein, aber ohne Obsidian fuer den
             // Support-Unterbau (oder ohne jeden gueltigen Platzierungs-Kandidaten) faktisch nie explodieren.
@@ -1395,6 +1512,233 @@ public class GodmodePvP extends Module {
             if (mc.level.getBlockState(cell.relative(dir)).is(Blocks.LAVA)) return true;
         }
         return false;
+    }
+
+    private static final Direction[] BED_DIRECTIONS = { Direction.NORTH, Direction.SOUTH, Direction.EAST, Direction.WEST };
+
+    /** Alle gueltigen Bett-Plaetze um das Ziel, sortiert nach Schaden (absteigend). Ein Bett braucht anders
+     *  als Crystal/Anchor KEINE feste Unterlage (nur zwei freie, ersetzbare Bloecke: Fuss- + Kopfteil in
+     *  eine der vier Himmelsrichtungen) - wirkt aber nur ausserhalb der Overworld (Nether/End); das kann der
+     *  Client nicht vorab pruefen, das entscheidet allein der Server. */
+    private void calcBestBed(LivingEntity target, Vec3 center) {
+        bedCandidates.clear();
+        bedCandidateIndex = 0;
+
+        int bx = (int) Math.floor(center.x);
+        int by = (int) Math.floor(center.y);
+        int bz = (int) Math.floor(center.z);
+
+        java.util.List<BedSpot> found = new java.util.ArrayList<>();
+        java.util.List<Double> dmgs = new java.util.ArrayList<>();
+
+        for (int dx = -1; dx <= 1; dx++) {
+            for (int dz = -1; dz <= 1; dz++) {
+                for (int dy = 0; dy <= 1; dy++) {
+                    BlockPos foot = new BlockPos(bx + dx, by + dy, bz + dz);
+                    if (!validBedCell(foot)) continue;
+
+                    Direction dir = findFreeBedDirection(foot);
+                    if (dir == null) continue;
+
+                    Vec3 pos = Vec3.atCenterOf(foot);
+                    if (hitsFriendBed(pos)) continue;
+
+                    AABB cellBox = new AABB(foot);
+                    if (target.getBoundingBox().intersects(cellBox)) continue;
+                    if (mc.player.getBoundingBox().intersects(cellBox)) continue;
+
+                    double selfDmg = DamageUtils.bedDamage(mc.player, pos);
+                    if (selfDmg > maxSelfDamage.get()) continue;
+
+                    double dmg = DamageUtils.bedDamage(target, pos);
+                    if (dmg <= 0) continue;
+
+                    found.add(new BedSpot(foot, dir));
+                    dmgs.add(dmg);
+                }
+            }
+        }
+
+        for (int i = 0; i < found.size(); i++) {
+            for (int j = i + 1; j < found.size(); j++) {
+                if (dmgs.get(j) > dmgs.get(i)) {
+                    BedSpot tp = found.get(i); found.set(i, found.get(j)); found.set(j, tp);
+                    Double td = dmgs.get(i); dmgs.set(i, dmgs.get(j)); dmgs.set(j, td);
+                }
+            }
+        }
+        bedCandidates.addAll(found);
+    }
+
+    /** Bett braucht keine feste Unterlage - nur eine ersetzbare (Luft-)Zelle, optional abseits von Lava. */
+    private boolean validBedCell(BlockPos cell) {
+        if (mc.level == null) return false;
+        if (!mc.level.getBlockState(cell).isAir()) return false;
+        return !(avoidLava.get() && isNearLava(cell));
+    }
+
+    /** Erste Himmelsrichtung, in der neben dem Fussteil noch eine zweite freie Zelle fuer das Kopfteil
+     *  liegt - das Bett wird spaeter exakt in diese Richtung ausgerichtet platziert. */
+    private Direction findFreeBedDirection(BlockPos foot) {
+        for (Direction dir : BED_DIRECTIONS) {
+            if (validBedCell(foot.relative(dir))) return dir;
+        }
+        return null;
+    }
+
+    /** Vermeidet Bett-Explosionen, die einen befreundeten Spieler (Meteor-Friends-Liste) mittreffen wuerden. */
+    private boolean hitsFriendBed(Vec3 pos) {
+        if (!respectFriends.get() || Friends.get().isEmpty()) return false;
+        for (Player p : mc.level.players()) {
+            if (p == mc.player) continue;
+            if (!Friends.get().isFriend(p)) continue;
+            if (DamageUtils.bedDamage(p, pos) > 2.0) return true;
+        }
+        return false;
+    }
+
+    /** Platziert ein NEUES Bett am aktuell besten berechneten Kandidaten (Schadensoptimiert). Reine
+     *  Platzierungs-Entscheidung - zuenden uebernimmt maintainNearbyBeds() separat, damit ein platziertes
+     *  Bett nie unfertig liegen bleibt. Anders als beim Anchor gibt es keinen Ladeschritt: ein Bett
+     *  explodiert (falls die Position/Dimension es zulaesst) sofort beim ersten Interagieren. */
+    private void tryPlaceBed() {
+        if (bedPlaceCooldown > 0) {
+            bedPlaceCooldown--;
+            return;
+        }
+
+        Player self = mc.player;
+        BedSpot spot = nextBedCandidate();
+        if (spot == null) {
+            bedPlaceFails++;
+            if (bedPlaceFails >= 2) crystalForcedUntil = tickCounter + 40;
+            bedUnreachableTicks = 0;
+            return;
+        }
+
+        double d = Math.sqrt(self.distanceToSqr(Vec3.atCenterOf(spot.pos())));
+        if (d > 4.2) {
+            // Kandidat gerade unerreichbar (z.B. Baritone stoppt im Nahkampf) - nicht endlos auf denselben Platz warten
+            bedUnreachableTicks++;
+            if (bedUnreachableTicks > 8) {
+                bedCandidateIndex++;
+                bedUnreachableTicks = 0;
+                if (bedCandidateIndex >= bedCandidates.size()) crystalForcedUntil = tickCounter + 40;
+            }
+            return; // naechster Tick neuer Versuch
+        }
+        bedUnreachableTicks = 0;
+
+        FindItemResult foundBed = InvUtils.findInHotbar(GodmodePvP::isBed);
+        if (!foundBed.found()) foundBed = InvUtils.find(GodmodePvP::isBed);
+        if (!foundBed.found()) return;
+        FindItemResult bed = foundBed;
+
+        // Eigene Rotation VOR der Platzierung setzen (statt BlockUtils' rotate=true) - die Ausrichtung des
+        // Kopfteils richtet sich nach der horizontalen Blickrichtung zum Platzierungszeitpunkt, nicht nach
+        // der angeklickten Blockseite. dir.toYRot() ist exakt die Umkehrung von Direction.fromYRot().
+        double yaw = spot.dir().toYRot();
+        Rotations.rotate(yaw, 55, () -> {
+            if (BlockUtils.place(spot.pos(), bed, false, 50)) {
+                bedPlaceFails = 0;
+                bedPlaceCooldown = 4; // kurze Pause, damit maintainNearbyBeds Zeit zum Zuenden hat
+                lastBedProgressTick = tickCounter;
+            } else {
+                bedCandidateIndex++;
+            }
+        });
+    }
+
+    private BedSpot nextBedCandidate() {
+        while (bedCandidateIndex < bedCandidates.size()) {
+            BedSpot s = bedCandidates.get(bedCandidateIndex);
+            if (mc.level.getBlockState(s.pos()).isAir()) return s;
+            bedCandidateIndex++;
+        }
+        return null;
+    }
+
+    /** Scannt kontinuierlich (unabhaengig vom Aura-Modus) den Nahbereich nach JEDEM platzierten Bett -
+     *  egal von wem/wann platziert - und zuendet es sofort per Rechtsklick. Anders als beim Anchor gibt es
+     *  keinen Ladezustand zu pruefen: die Explosion (falls Position/Dimension sie ueberhaupt zulassen)
+     *  loest beim allerersten Interagieren aus. */
+    private void maintainNearbyBeds() {
+        if (!useBeds.get()) return;
+        if (bedMaintCooldown > 0) {
+            bedMaintCooldown--;
+            return;
+        }
+
+        Player self = mc.player;
+        BlockPos center = self.blockPosition();
+        for (int dx = -3; dx <= 3; dx++) {
+            for (int dy = -2; dy <= 2; dy++) {
+                for (int dz = -3; dz <= 3; dz++) {
+                    BlockPos pos = center.offset(dx, dy, dz);
+                    if (!(mc.level.getBlockState(pos).getBlock() instanceof BedBlock)) continue;
+
+                    Vec3 posCenter = Vec3.atCenterOf(pos);
+                    if (Math.sqrt(self.distanceToSqr(posCenter)) > 4.2) continue;
+
+                    double selfDmg = DamageUtils.bedDamage(mc.player, posCenter);
+                    if (selfDmg > maxSelfDamage.get()) continue;
+
+                    interactBedAt(pos);
+                    bedMaintCooldown = 3;
+                    return;
+                }
+            }
+        }
+        bedMaintCooldown = 1; // nichts gefunden - naechster voller Scan erst naechsten Tick statt jeden Tick doppelt
+    }
+
+    private void interactBedAt(BlockPos pos) {
+        Vec3 center = Vec3.atCenterOf(pos);
+        Rotations.rotate(Rotations.getYaw(center), Rotations.getPitch(center), () ->
+            BlockUtils.interact(new BlockHitResult(center, BlockUtils.getDirection(pos), pos, true), InteractionHand.MAIN_HAND, true)
+        );
+    }
+
+    private static boolean isBed(ItemStack stack) {
+        return stack.getItem() instanceof BedItem;
+    }
+
+    private static boolean isHealingSplash(ItemStack stack) {
+        if (!stack.is(Items.SPLASH_POTION)) return false;
+        PotionContents pc = stack.get(DataComponents.POTION_CONTENTS);
+        return pc != null && (pc.is(Potions.HEALING) || pc.is(Potions.STRONG_HEALING));
+    }
+
+    /** Wirft sofort eine Splash-Heiltraenke (Instant Health) zu den eigenen Fuessen, sobald frischer
+     *  Schaden erkannt wird (HP-Delta zum letzten Tick ueber heal-min-damage) - der Trank zerschellt
+     *  direkt am Boden und heilt augenblicklich. Laeuft unabhaengig vom Kampf-/Engage-Zustand, damit auch
+     *  Fall-/Feuer-/Umweltschaden abgefedert wird, nicht nur Treffer im aktiven Gefecht. */
+    private void maintainHealPotions(Player self) {
+        if (healPotionCooldown > 0) healPotionCooldown--;
+
+        float hp = self.getHealth();
+        float lastHp = lastHpForHealPotion;
+        lastHpForHealPotion = hp;
+        if (!healPotions.get() || lastHp < 0 || healPotionCooldown > 0) return;
+
+        float dmg = lastHp - hp;
+        if (dmg < healMinDamage.get()) return;
+
+        FindItemResult potion = InvUtils.findInHotbar(GodmodePvP::isHealingSplash);
+        if (!potion.found()) potion = InvUtils.find(GodmodePvP::isHealingSplash);
+        if (!potion.found()) return;
+
+        healPotionCooldown = healCooldown.get();
+
+        if (potion.isOffhand()) {
+            Rotations.rotate(self.getYRot(), 80, () -> mc.gameMode.useItem(mc.player, InteractionHand.OFF_HAND));
+        } else {
+            boolean swapped = InvUtils.swap(potion.slot(), true);
+            Rotations.rotate(self.getYRot(), 80, () -> {
+                mc.gameMode.useItem(mc.player, InteractionHand.MAIN_HAND);
+                if (swapped) InvUtils.swapBack();
+            });
+        }
     }
 
     /** Haelt Fire Resistance permanent aktiv, solange man sich im Nether befindet - macht Lava-Kontakt,
@@ -1762,7 +2106,7 @@ public class GodmodePvP extends Module {
 
         boolean inCover = countBoxedSides(mc.player) >= 3;
         boolean attacking = currentAction.equals("burst") || currentAction.equals("pre-hit")
-            || currentAction.equals("anchor") || currentAction.equals("schild-brechen");
+            || currentAction.equals("anchor") || currentAction.equals("bed") || currentAction.equals("schild-brechen");
         mc.player.setShiftKeyDown(inCover && !attacking);
     }
 
@@ -2253,6 +2597,11 @@ public class GodmodePvP extends Module {
 
     private int totalItem(net.minecraft.world.item.Item item) {
         FindItemResult r = InvUtils.find(item);
+        return r.found() ? r.count() : 0;
+    }
+
+    private int totalItem(java.util.function.Predicate<ItemStack> pred) {
+        FindItemResult r = InvUtils.find(pred);
         return r.found() ? r.count() : 0;
     }
 

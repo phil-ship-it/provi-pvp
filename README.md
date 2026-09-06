@@ -82,9 +82,11 @@ The fully aggressive profile. Optimized for winning trades as fast as possible, 
   knockback that briefly throws the distance back out won't cause the bot to give up the chase, and once
   actually engaged it keeps fighting that same player by identity until they die, leave, or go out of range —
   a third player briefly wandering past no longer steals the fight.
-- **Damage-optimized Crystal/Anchor placement** — evaluates every reachable placement spot each tick, picks
-  whichever deals more damage to the target than to itself, respects a self-damage cap, and avoids friendly fire
-  against anyone on the Meteor friends list.
+- **Damage-optimized Crystal/Anchor/Bed placement** — evaluates every reachable placement spot each tick, picks
+  whichever explosive deals more damage to the target than to itself, respects a self-damage cap, and avoids
+  friendly fire against anyone on the Meteor friends list. Bed Aura (`use-beds`, off by default) works exactly
+  like Anchor but only detonates outside the Overworld (Nether/End) — the server decides, the client can't check
+  ahead of time.
 - **D-Tap** — after a knockback hit, places obsidian in the target's predicted flight path and detonates two
   Crystals spaced at the hit-invulnerability window, for a fast double-totem-pop.
 - **Combat mechanics** — automatic axe/sword/mace swapping, shield-breaking, pre-hits before explosions,
@@ -98,6 +100,8 @@ The fully aggressive profile. Optimized for winning trades as fast as possible, 
   fire crossing) with `NoFall` and `AutoEat` wired in to make that survivable.
 - **Inventory management** — restocks Crystals, Anchors, Glowstone, Pearls, Obsidian, and Cobweb from the main
   inventory into the hotbar as they run low, with configurable thresholds.
+- **Self-healing** — throws a Splash Potion of Healing at your own feet the instant fresh damage is detected,
+  regardless of combat state (covers fall/fire damage too, not just hits taken mid-fight).
 
 ### HumanPvP (`.hpvp`)
 

@@ -34,10 +34,12 @@ import net.minecraft.world.effect.MobEffects;
 import net.minecraft.world.entity.LivingEntity;
 import net.minecraft.world.entity.player.Player;
 import net.minecraft.world.item.AxeItem;
+import net.minecraft.world.item.BedItem;
 import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.item.Items;
 import net.minecraft.world.item.alchemy.PotionContents;
 import net.minecraft.world.item.alchemy.Potions;
+import net.minecraft.world.level.block.BedBlock;
 import net.minecraft.world.level.block.Blocks;
 import net.minecraft.world.level.block.state.BlockState;
 import net.minecraft.world.level.Level;
@@ -71,6 +73,7 @@ public class HumanPvP extends Module {
     private final SettingGroup sgDefense = settings.createGroup("Schutz");
     private final SettingGroup sgInv = settings.createGroup("Inventar");
     private final SettingGroup sgPearl = settings.createGroup("Enderperlen");
+    private final SettingGroup sgHeal = settings.createGroup("Heilung");
 
     // General
     public final Setting<Boolean> follow = sgGeneral.add(new BoolSetting.Builder()
@@ -163,6 +166,13 @@ public class HumanPvP extends Module {
         .defaultValue(1)
         .range(0, 2)
         .sliderRange(0, 2)
+        .build()
+    );
+
+    public final Setting<Boolean> useBeds = sgCombat.add(new BoolSetting.Builder()
+        .name("use-beds")
+        .description("Bed Aura: platziert und zuendet Betten als Explosion (Schadenswert 5.0, wie Anchor). Wirkt nur ausserhalb der Overworld (Nether/End, z.B. Portal-Camping auf 5b5t) - der Client kann das nicht vorab pruefen, das entscheidet allein der Server. Standardmaessig aus, damit in der Overworld nicht sinnlos Betten verbraucht werden.")
+        .defaultValue(false)
         .build()
     );
 
@@ -391,6 +401,32 @@ public class HumanPvP extends Module {
         .build()
     );
 
+    // Heilung
+    public final Setting<Boolean> healPotions = sgHeal.add(new BoolSetting.Builder()
+        .name("heal-potions")
+        .description("Wirft bei frischem Schaden sofort eine Splash-Heiltraenke (Instant Health) zu den eigenen Fuessen - explodiert direkt am Boden und heilt augenblicklich. Braucht Splash Potion of Healing/Strong Healing im Inventar (auch als 64er-Stack auf Servern mit erweiterten Stack-Groessen).")
+        .defaultValue(true)
+        .build()
+    );
+
+    public final Setting<Double> healMinDamage = sgHeal.add(new DoubleSetting.Builder()
+        .name("heal-min-damage")
+        .description("Mindestens so viel HP muessen seit dem letzten Tick verloren gegangen sein, damit ueberhaupt ein Trank geworfen wird - verhindert Trankverschwendung bei jedem winzigen Kratzer.")
+        .defaultValue(3.0)
+        .range(0.5, 10.0)
+        .sliderRange(0.5, 10.0)
+        .build()
+    );
+
+    public final Setting<Integer> healCooldown = sgHeal.add(new IntSetting.Builder()
+        .name("heal-cooldown")
+        .description("Mindestabstand (Ticks) zwischen zwei geworfenen Heiltraenken.")
+        .defaultValue(20)
+        .range(0, 100)
+        .sliderRange(0, 100)
+        .build()
+    );
+
     // ---------- State ----------
     private final Random rng = new Random();
     private final Map<UUID, Vec3> lastPositions = new HashMap<>();
@@ -432,6 +468,22 @@ public class HumanPvP extends Module {
     private BlockPos anchorCalcOrigin;
     private double bestAnchorDmgCache;
 
+    private static final Direction[] BED_DIRECTIONS = { Direction.NORTH, Direction.SOUTH, Direction.EAST, Direction.WEST };
+
+    private BlockPos bedPos;
+    private int bedStage; // 0 auswaehlen/hinlaufen/ausrichten/platzieren, 1 platziert-wartet, dann zuenden
+    private int bedStageDeadline;
+    private int bedCooldown;
+    private final List<BedSpot> bedCandidates = new ArrayList<>();
+    private int bedCandidateIndex;
+    private BlockPos bedCalcOrigin;
+    private double bestBedDmgCache;
+
+    private float lastHpForHealPotion = -1;
+    private int healPotionCooldown;
+
+    private record BedSpot(BlockPos pos, Direction dir) {}
+
     private int lastTrapTick = -999;
     private int nextTotemCheckTick = -999;
     private boolean drinkingFireRes;
@@ -467,6 +519,16 @@ public class HumanPvP extends Module {
         anchorCandidates.clear();
         anchorCandidateIndex = 0;
         anchorCalcOrigin = null;
+        bedPos = null;
+        bedStage = 0;
+        bedStageDeadline = 0;
+        bedCooldown = 0;
+        bedCandidates.clear();
+        bedCandidateIndex = 0;
+        bedCalcOrigin = null;
+        bestBedDmgCache = 0;
+        lastHpForHealPotion = -1;
+        healPotionCooldown = 0;
         lastTrapTick = -999;
         nextTotemCheckTick = -999;
         lastPositions.clear();
@@ -564,6 +626,7 @@ public class HumanPvP extends Module {
         // Meteor-ClickGUI/eigenes Inventar teilen sich inventoryMenu, Totem-Nachlegen darf da weiterlaufen.
         boolean foreignContainerOpen = mc.player.containerMenu != mc.player.inventoryMenu;
         if (fastTotem.get() && tickCounter >= nextTotemCheckTick && !foreignContainerOpen) ensureOffhandTotem();
+        if (!foreignContainerOpen) maintainHealPotions(self);
         maintainFireResistance();
 
         if (!guiOpen) {
@@ -671,6 +734,9 @@ public class HumanPvP extends Module {
         if (auraMode == 1) {
             runAnchorTick(target, aimError);
             currentAction = "anchor";
+        } else if (auraMode == 2) {
+            runBedTick(target, aimError);
+            currentAction = "bed";
         }
 
         if (shieldBreaker.get() && target instanceof Player p && p.isBlocking()) {
@@ -931,15 +997,89 @@ public class HumanPvP extends Module {
         return null;
     }
 
+    // ---------- Bett-Executor (humanisiert: sichtbare Rotation + zufaellige Wartezeiten, kein Ladeschritt) ----------
+
+    private void runBedTick(LivingEntity target, double aimError) {
+        if (bedCooldown > 0) {
+            bedCooldown--;
+            return;
+        }
+
+        Player self = mc.player;
+
+        switch (bedStage) {
+            case 0 -> {
+                BedSpot spot = nextBedCandidate();
+                if (spot == null) return;
+
+                double d = Math.sqrt(self.distanceToSqr(Vec3.atCenterOf(spot.pos())));
+                if (d > 4.0) return; // naechster Tick neuer Versuch, Baritone laeuft naeher
+
+                // Grob in Richtung der gewuenschten Kopfteil-Ausrichtung drehen (menschliches Tempo via
+                // smoothLookAt) - der virtuelle Zielpunkt liegt 10 Bloecke in "spot.dir()".
+                Vec3 facePoint = self.getEyePosition().add(spot.dir().getStepX() * 10.0, -2.0, spot.dir().getStepZ() * 10.0);
+                smoothLookAt(facePoint);
+                if (currentAimError(facePoint) > aimTolerance.get()) return; // erst ausrichten
+
+                FindItemResult bed = InvUtils.findInHotbar(HumanPvP::isBed);
+                if (!bed.found()) bed = InvUtils.find(HumanPvP::isBed);
+                if (!bed.found()) return;
+                FindItemResult foundBed = bed;
+
+                // Die Platzierungsrichtung braucht die ECHTE Spieler-Rotation (das Bett-Placement liest
+                // player.getYRot() direkt), nicht die bei free-look rein virtuelle Silent-Aim-Richtung -
+                // deshalb hier ein kurzer, praeziser synchroner Snap statt der sonst ueblichen graduellen
+                // Drehung, exakt fuer diesen einen Platzierungs-Tick.
+                double yaw = spot.dir().toYRot();
+                Rotations.rotate(yaw, 55, () -> {
+                    if (BlockUtils.place(spot.pos(), foundBed, false, 50)) {
+                        bedPos = spot.pos();
+                        bedStage = 1;
+                        bedStageDeadline = tickCounter + 3 + rng.nextInt(5);
+                    } else {
+                        bedCandidateIndex++;
+                    }
+                });
+            }
+            default -> {
+                if (!(mc.level.getBlockState(bedPos).getBlock() instanceof BedBlock)) {
+                    bedStage = 0;
+                    bedCooldown = 8;
+                    return;
+                }
+                if (tickCounter < bedStageDeadline) return;
+
+                Vec3 center = Vec3.atCenterOf(bedPos);
+                smoothLookAt(center);
+                if (currentAimError(center) > aimTolerance.get()) return;
+
+                BlockUtils.interact(new BlockHitResult(center, BlockUtils.getDirection(bedPos), bedPos, true), InteractionHand.MAIN_HAND, true);
+                bedStage = 0;
+                bedCooldown = 15 + rng.nextInt(15); // Verschnaufpause statt Dauerfeuer
+            }
+        }
+    }
+
+    private BedSpot nextBedCandidate() {
+        while (bedCandidateIndex < bedCandidates.size()) {
+            BedSpot s = bedCandidates.get(bedCandidateIndex);
+            if (mc.level.getBlockState(s.pos()).isAir()) return s;
+            bedCandidateIndex++;
+        }
+        return null;
+    }
+
     // ---------- Aura-Steuerung (groessere, verrauschte Hysterese) ----------
 
     private void selectAura(LivingEntity target) {
-        // Wie in GodmodePvP: ohne Crystal UND ohne vollstaendige Anchor-Ausruestung gibt es nichts zu
-        // platzieren - Simulation und CrystalAura-Toggle komplett ueberspringen statt sinnlos weiterzurechnen.
+        // Wie in GodmodePvP: ohne Crystal UND ohne vollstaendige Anchor-Ausruestung UND ohne Bett (falls
+        // aktiviert) gibt es nichts zu platzieren - Simulation und CrystalAura-Toggle komplett
+        // ueberspringen statt sinnlos weiterzurechnen.
         boolean hasCrystals = totalItem(Items.END_CRYSTAL) > 0;
         boolean hasAnchorItem = totalItem(Items.RESPAWN_ANCHOR) > 0 && totalItem(Items.GLOWSTONE) > 0;
+        boolean hasBedItem = useBeds.get() && totalItem(HumanPvP::isBed) > 0;
         Module ca = Modules.get().get(CrystalAura.class);
-        if (!hasCrystals && !hasAnchorItem) {
+        if (!hasCrystals && !hasAnchorItem && !hasBedItem) {
             if (ca != null && ca.isActive()) ca.toggle();
             auraMode = -1;
             return;
@@ -965,6 +1105,23 @@ public class HumanPvP extends Module {
             bestAnchorDmgCache = DamageUtils.anchorDamage(target, Vec3.atCenterOf(best));
         }
 
+        if (hasBedItem) {
+            BlockPos targetBlock = target.blockPosition();
+            boolean staleBed = bedCandidateIndex >= bedCandidates.size()
+                || bedCalcOrigin == null
+                || bedCalcOrigin.distSqr(targetBlock) > 4;
+            if (staleBed) {
+                calcBestBed(target, center);
+                bedCalcOrigin = targetBlock;
+            }
+        }
+
+        bestBedDmgCache = 0;
+        if (hasBedItem && bedCandidateIndex < bedCandidates.size()) {
+            BedSpot best = bedCandidates.get(bedCandidateIndex);
+            bestBedDmgCache = DamageUtils.bedDamage(target, Vec3.atCenterOf(best.pos()));
+        }
+
         if (ca == null) return;
 
         boolean inRange = mc.player.distanceToSqr(target) < 5.5 * 5.5;
@@ -975,10 +1132,18 @@ public class HumanPvP extends Module {
 
         boolean wantAnchor;
         if (anchorMode.get() == 1) {
-            wantAnchor = inRange && anchorCandidateIndex < anchorCandidates.size()
+            wantAnchor = hasAnchorItem && inRange && anchorCandidateIndex < anchorCandidates.size()
                 && bestAnchorDmgCache >= crystalDmg + noise;
         } else {
-            wantAnchor = inRange && bestAnchorDmgCache > crystalDmg + 0.3 + noise;
+            wantAnchor = hasAnchorItem && inRange && bestAnchorDmgCache > crystalDmg + 0.3 + noise;
+        }
+
+        boolean wantBed = hasBedItem && inRange && bedCandidateIndex < bedCandidates.size()
+            && bestBedDmgCache > crystalDmg + 0.3 + noise;
+
+        // Bei beiden verfuegbar gewinnt die schadenstaerkere Option.
+        if (wantAnchor && wantBed) {
+            if (bestBedDmgCache > bestAnchorDmgCache) wantAnchor = false; else wantBed = false;
         }
 
         // Deutlich groessere Umschalt-Traegheit als V1 - ein Mensch wechselt nicht alle paar Ticks die Taktik.
@@ -988,7 +1153,11 @@ public class HumanPvP extends Module {
             if (ca.isActive()) ca.toggle();
             auraMode = 1;
             lastAuraSwitch = tickCounter;
-        } else if (!wantAnchor && auraMode != 0) {
+        } else if (wantBed && auraMode != 2) {
+            if (ca.isActive()) ca.toggle();
+            auraMode = 2;
+            lastAuraSwitch = tickCounter;
+        } else if (!wantAnchor && !wantBed && auraMode != 0) {
             if (!ca.isActive()) ca.toggle();
             auraMode = 0;
             lastAuraSwitch = tickCounter;
@@ -1085,6 +1254,74 @@ public class HumanPvP extends Module {
             if (mc.level.getBlockState(cell.relative(dir)).is(Blocks.LAVA)) return true;
         }
         return false;
+    }
+
+    /** Alle gueltigen Bett-Plaetze um das Ziel, sortiert nach Schaden (absteigend). Ein Bett braucht anders
+     *  als Crystal/Anchor KEINE feste Unterlage - wirkt aber nur ausserhalb der Overworld (Nether/End). */
+    private void calcBestBed(LivingEntity target, Vec3 center) {
+        bedCandidates.clear();
+        bedCandidateIndex = 0;
+
+        int bx = (int) Math.floor(center.x);
+        int by = (int) Math.floor(center.y);
+        int bz = (int) Math.floor(center.z);
+
+        List<BedSpot> found = new ArrayList<>();
+        List<Double> dmgs = new ArrayList<>();
+
+        for (int dx = -1; dx <= 1; dx++) {
+            for (int dz = -1; dz <= 1; dz++) {
+                for (int dy = 0; dy <= 1; dy++) {
+                    BlockPos foot = new BlockPos(bx + dx, by + dy, bz + dz);
+                    if (!validBedCell(foot)) continue;
+
+                    Direction dir = findFreeBedDirection(foot);
+                    if (dir == null) continue;
+
+                    Vec3 pos = Vec3.atCenterOf(foot);
+                    if (target.getBoundingBox().intersects(new net.minecraft.world.phys.AABB(foot))) continue;
+                    if (mc.player.getBoundingBox().intersects(new net.minecraft.world.phys.AABB(foot))) continue;
+
+                    double selfDmg = DamageUtils.bedDamage(mc.player, pos);
+                    if (selfDmg > maxSelfDamage.get()) continue;
+
+                    double dmg = DamageUtils.bedDamage(target, pos);
+                    if (dmg <= 0) continue;
+
+                    found.add(new BedSpot(foot, dir));
+                    dmgs.add(dmg);
+                }
+            }
+        }
+
+        for (int i = 0; i < found.size(); i++) {
+            for (int j = i + 1; j < found.size(); j++) {
+                if (dmgs.get(j) > dmgs.get(i)) {
+                    BedSpot tp = found.get(i); found.set(i, found.get(j)); found.set(j, tp);
+                    Double td = dmgs.get(i); dmgs.set(i, dmgs.get(j)); dmgs.set(j, td);
+                }
+            }
+        }
+        bedCandidates.addAll(found);
+    }
+
+    /** Bett braucht keine feste Unterlage - nur eine ersetzbare (Luft-)Zelle, optional abseits von Lava. */
+    private boolean validBedCell(BlockPos cell) {
+        if (mc.level == null) return false;
+        if (!mc.level.getBlockState(cell).isAir()) return false;
+        return !(avoidLava.get() && isNearLava(cell));
+    }
+
+    /** Erste Himmelsrichtung, in der neben dem Fussteil noch eine zweite freie Zelle fuer das Kopfteil liegt. */
+    private Direction findFreeBedDirection(BlockPos foot) {
+        for (Direction dir : BED_DIRECTIONS) {
+            if (validBedCell(foot.relative(dir))) return dir;
+        }
+        return null;
+    }
+
+    private static boolean isBed(ItemStack stack) {
+        return stack.getItem() instanceof BedItem;
     }
 
     /** Haelt Fire Resistance permanent aktiv, solange man sich im Nether befindet - macht Lava-Kontakt,
@@ -1364,6 +1601,48 @@ public class HumanPvP extends Module {
     private int totalItem(net.minecraft.world.item.Item item) {
         FindItemResult r = InvUtils.find(item);
         return r.found() ? r.count() : 0;
+    }
+
+    private int totalItem(java.util.function.Predicate<ItemStack> pred) {
+        FindItemResult r = InvUtils.find(pred);
+        return r.found() ? r.count() : 0;
+    }
+
+    private static boolean isHealingSplash(ItemStack stack) {
+        if (!stack.is(Items.SPLASH_POTION)) return false;
+        PotionContents pc = stack.get(DataComponents.POTION_CONTENTS);
+        return pc != null && (pc.is(Potions.HEALING) || pc.is(Potions.STRONG_HEALING));
+    }
+
+    /** Wirft sofort eine Splash-Heiltraenke (Instant Health) zu den eigenen Fuessen, sobald frischer
+     *  Schaden erkannt wird (HP-Delta zum letzten Tick ueber heal-min-damage) - der Trank zerschellt
+     *  direkt am Boden und heilt augenblicklich. Laeuft unabhaengig vom Kampf-/Engage-Zustand. */
+    private void maintainHealPotions(Player self) {
+        if (healPotionCooldown > 0) healPotionCooldown--;
+
+        float hp = self.getHealth();
+        float lastHp = lastHpForHealPotion;
+        lastHpForHealPotion = hp;
+        if (!healPotions.get() || lastHp < 0 || healPotionCooldown > 0) return;
+
+        float dmg = lastHp - hp;
+        if (dmg < healMinDamage.get()) return;
+
+        FindItemResult potion = InvUtils.findInHotbar(HumanPvP::isHealingSplash);
+        if (!potion.found()) potion = InvUtils.find(HumanPvP::isHealingSplash);
+        if (!potion.found()) return;
+
+        healPotionCooldown = healCooldown.get();
+
+        if (potion.isOffhand()) {
+            Rotations.rotate(self.getYRot(), 80, () -> mc.gameMode.useItem(mc.player, InteractionHand.OFF_HAND));
+        } else {
+            boolean swapped = InvUtils.swap(potion.slot(), true);
+            Rotations.rotate(self.getYRot(), 80, () -> {
+                mc.gameMode.useItem(mc.player, InteractionHand.MAIN_HAND);
+                if (swapped) InvUtils.swapBack();
+            });
+        }
     }
 
     private int findMainSlotWith(net.minecraft.world.item.Item item) {

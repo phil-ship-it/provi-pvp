@@ -27,6 +27,7 @@ nothing described in the [README](README.md) is hardcoded. Defaults are the valu
 | `smart-auras` | `true` | Chooses Crystal or Anchor based on a real damage calculation. With zero End Crystals AND zero (Respawn Anchor + Glowstone) in the inventory, skips the whole damage/position simulation and forces melee-only instead of endlessly re-simulating and toggling Meteor's CrystalAura for items that don't exist (that dead-weight simulation was itself a source of visible movement stutter). |
 | `anchor-mode` | `1` | `0` = automatic (always max damage), `1` = use Anchor even on a damage tie, `2` = off. |
 | `use-anchors` | `true` | Allow Anchors at all (costs 1 Glowstone per detonation). |
+| `use-beds` | `false` | Bed Aura: places and detonates beds as an explosive (damage value 5.0, same as Anchor). Only works outside the Overworld (Nether/End — e.g. portal camping on 5b5t); the client can't verify this ahead of time, only the server decides. Off by default so beds aren't wasted in the Overworld (where using one just sleeps/sets your spawn point instead of exploding). When both an Anchor and a Bed are viable, whichever deals more damage wins — Anchor only needs 1 Glowstone, so it's usually the more efficient default on an exact tie. |
 | `pre-hit` | `true` | Melees the target right before the explosion for extra damage. |
 | `melee-fallback` | `true` | Melees normally whenever no explosion is actually about to land (e.g. Crystal mode is on but there's no obsidian left for a support block in open air, or no valid spot at all) — without this, the bot previously just stood there once every explosive option stopped being genuinely achievable, even while `pre-hit`'s own condition kept reporting "explosion imminent" just because CrystalAura was switched on. |
 | `prefer-axe-melee` | `true` | Automatically swaps to the axe for melee hits (axe-swap meta). |
@@ -94,6 +95,14 @@ nothing described in the [README](README.md) is hardcoded. Defaults are the valu
 | `pearl-gapclose` | `true` | Pearls toward the target when it's too far away (with rotation onto the target). |
 | `pearl-min-dist` | `4.0` | Distance beyond which a pearl is thrown — set to `4` this means as soon as melee range (3.6 blocks) is no longer enough. |
 
+### Healing
+
+| Setting | Default | Description |
+|---|---|---|
+| `heal-potions` | `true` | Throws a Splash Potion of Healing/Strong Healing at your own feet the instant fresh damage is detected — it shatters on the ground right there and heals immediately. Works regardless of combat/engage state, so it also covers fall/fire/environmental damage, not just hits taken mid-fight. Needs a Splash Healing potion in inventory (works fine as a 64-stack on servers with expanded stack sizes). |
+| `heal-min-damage` | `3.0` | At least this much HP must have been lost since the last tick before a potion is thrown at all — prevents wasting a potion on every tiny scratch (fall damage, thorns). |
+| `heal-cooldown` | `20` | Minimum ticks between two thrown potions — stops a single multi-hit combo from burning several potions at once. |
+
 ## HumanPvP (`.hpvp`)
 
 A deliberately slower, imperfect profile built to look like manual play. Shares the same Crystal/Anchor/defense
@@ -113,8 +122,11 @@ core as `GodmodePvP`, with these differences:
 | `max-self-damage` | `6.0` | More conservative self-damage cap than `GodmodePvP`'s `12.0`. |
 | `anti-rubberband` | `true` | Detects a server position correction and drops the stale path instead of fighting it. A moderate jump only counts outside of combat (normal explosion knockback shouldn't trigger it); a genuinely extreme jump triggers regardless, since real knockback rarely covers that much distance in one tick and rubberbanding is most common during actual Crystal/Anchor fights. |
 
-All other Combat/Defense/Inventory/Pearl settings mirror `GodmodePvP` (same names, same purpose) unless listed
-above.
+All other Combat/Defense/Inventory/Pearl/Healing settings mirror `GodmodePvP` (same names, same purpose, same
+defaults) unless listed above — including `use-beds` and the three `heal-*` settings. One mechanical difference:
+placing a bed needs an exact 90°-aligned facing (for the head-part direction), so unlike every other action in
+this module it uses one brief, precise rotation snap instead of the usual gradual human-paced turn, regardless
+of `free-look`.
 
 ## TrainingDummy
 
