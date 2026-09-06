@@ -11,7 +11,10 @@ nothing described in the [README](README.md) is hardcoded. Defaults are the valu
 |---|---|---|
 | `follow` | `true` | Automatically pursues the target with Baritone once it's within `engage-distance`. |
 | `follow-range` | `40` | Maximum distance at which a player is even recognized/watched as a target. |
-| `engage-distance` | `16` | Only within this distance does the bot actually walk/pearl toward the target. Beyond it (up to `follow-range`) it just watches — prevents the bot from sprinting across the map the instant it's activated. Sticky: a hard knockback that briefly throws the distance back out mid-fight won't cause it to give up. |
+| `engage-distance` | `16` | Only within this distance does the bot actually walk/pearl toward the target. Beyond it (up to `follow-range`) it just watches — prevents the bot from sprinting across the map the instant it's activated. Sticky in two ways: a hard knockback that briefly throws the distance back out mid-fight won't cause it to give up, and once actually engaged the bot keeps fighting the *same* target (by identity, not just distance) until it dies, leaves, or goes out of `follow-range` — a third player briefly wandering closer no longer steals the fight. |
+| `attack-range` | `3.6` | Maximum distance for melee hits (pre-hit, melee-fallback, pop-burst). Some servers/anti-cheats tolerate more or less than the vanilla-ish default. |
+| `smart-targeting` | `true` | Prefers an isolated target (no other player within `backup-range`) over pure distance when first picking a target — a lone player is a safer, faster kill than one with backup nearby, even if slightly farther away. Only affects *initial* target choice; once actually engaged, the bot commits to that target (see below) rather than re-evaluating every tick and flip-flopping whenever a third player briefly looks closer/more isolated. |
+| `backup-range` | `10.0` | How close another player has to be to a candidate target to count as "has backup" for `smart-targeting`. |
 | `pop-threshold` | `8.0` | HP drop counted as a totem pop. |
 | `prediction-ticks` | `5` | How far ahead enemy movement is predicted for attacks. |
 | `ignore-fire` | `true` | Walks straight through ground fire in melee range instead of pathing around it (Baritone otherwise treats fire as hard-impassable). |
@@ -100,6 +103,8 @@ core as `GodmodePvP`, with these differences:
 |---|---|---|
 | `follow-range` | `20` | Smaller detection range than `GodmodePvP` by default. |
 | `engage-distance` | `14` | Same sticky-engagement behavior as `GodmodePvP`, tuned to a shorter range. |
+| `attack-range` | `3.4` | Same as `GodmodePvP`'s `attack-range`, tuned slightly shorter by default. |
+| `smart-targeting` / `backup-range` | `true` / `10.0` | Same isolated-target preference and target-identity stickiness as `GodmodePvP`. |
 | `free-look` | `false` | Same silent-rotation behavior as `GodmodePvP` — off by default for the same anti-cheat-detection reason. |
 | `reaction-min` / `reaction-max` | `3` / `9` ticks | Randomized reaction delay before engaging a newly acquired target — no instant snap-to-target. |
 | `attack-chance` | `0.9` | Probability that a "ready" hit is actually thrown, simulating human misclicks. |
@@ -120,6 +125,17 @@ above.
 | `kb-up` | `0.4` | Vertical knockback (launch height). |
 | `auto-respawn` | `true` | Respawns the dummy when it dies or disappears. |
 | `invincible` | `false` | HP never reaches 0 — no despawn/respawn needed, uninterrupted practice. |
+
+## AutoArmor
+
+Automatically equips the strongest available armor piece per slot from your entire inventory. Scores candidates
+by their real `Attributes.ARMOR`/`ARMOR_TOUGHNESS` attribute value (armor points weighted 10x over toughness as
+a tiebreaker), not by guessing from material name - so an enchanted Diamond chestplate correctly beats an
+unenchanted Netherite one if it actually protects more.
+
+| Setting | Default | Description |
+|---|---|---|
+| `announce` | `true` | Chats when an armor piece gets upgraded. |
 
 ## Auto5b5tDupe
 

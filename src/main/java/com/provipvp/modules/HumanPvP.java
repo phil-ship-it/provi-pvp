@@ -98,6 +98,32 @@ public class HumanPvP extends Module {
         .build()
     );
 
+    public final Setting<Double> attackRange = sgGeneral.add(new DoubleSetting.Builder()
+        .name("attack-range")
+        .description("Maximale Distanz fuer Nahkampf-Schlaege. Manche Server/Anti-Cheats tolerieren mehr oder weniger als das Standard-3.4.")
+        .defaultValue(3.4)
+        .range(2.5, 4.5)
+        .sliderRange(2.5, 4.0)
+        .build()
+    );
+
+    public final Setting<Boolean> smartTargeting = sgGeneral.add(new BoolSetting.Builder()
+        .name("smart-targeting")
+        .description("Bevorzugt bei der Zielwahl einen isolierten Gegner (ohne Mitspieler in Rueckendeckungs-Reichweite) vor reiner Distanz. Wirkt nur auf die ANFANGS-Zielwahl, ein bereits engagiertes Ziel wird nicht mehr gewechselt.")
+        .defaultValue(true)
+        .build()
+    );
+
+    public final Setting<Double> backupRange = sgGeneral.add(new DoubleSetting.Builder()
+        .name("backup-range")
+        .description("Ab welcher Naehe zu einem anderen Spieler ein Ziel als 'hat Rueckendeckung' gilt (fuer smart-targeting).")
+        .defaultValue(10.0)
+        .range(4.0, 24.0)
+        .sliderRange(4.0, 20.0)
+        .visible(smartTargeting::get)
+        .build()
+    );
+
     public final Setting<Integer> reactionMinTicks = sgGeneral.add(new IntSetting.Builder()
         .name("reaction-min")
         .description("Minimale Reaktionszeit (Ticks) auf ein neues Ziel, bevor angegriffen wird.")
@@ -650,7 +676,7 @@ public class HumanPvP extends Module {
         if (shieldBreaker.get() && target instanceof Player p && p.isBlocking()) {
             breakShield(p);
             currentAction = "schild-brechen";
-        } else if (dist <= 3.4 && aimError <= aimTolerance.get() && self.hasLineOfSight(target)
+        } else if (dist <= attackRange.get() && aimError <= aimTolerance.get() && self.hasLineOfSight(target)
             && self.getAttackStrengthScale(0.5f) >= 0.95f && readyToClick()) {
             attackMelee(target);
             currentAction = "schlagen";
@@ -1111,12 +1137,24 @@ public class HumanPvP extends Module {
     private LivingEntity findTarget(Player self) {
         if (mc.level == null) return null;
 
+        // Bereits verfolgtes Ziel bevorzugt behalten, solange es lebt und in Reichweite bleibt - sonst
+        // kann ein dritter, kurzzeitig naeherer/isolierterer Spieler das Ziel mitten im Kampf kapern.
+        if (pursuing && engagedId != null) {
+            for (Player p : mc.level.players()) {
+                if (!p.getUUID().equals(engagedId)) continue;
+                if (p.isAlive() && !p.isSpectator() && self.distanceToSqr(p) <= followRange.get() * (double) followRange.get()) {
+                    return p;
+                }
+                break;
+            }
+        }
+
         // Echte Spieler haben immer Vorrang vor einem Trainings-Dummy (FakePlayerEntity) - der zaehlt nur
         // als Ziel, wenn wirklich kein echter Gegner in Reichweite ist.
-        Player bestReal = null;
-        double bestRealDist = followRange.get() * followRange.get();
+        double followRangeSq = followRange.get() * (double) followRange.get();
+        java.util.List<Player> realCandidates = new java.util.ArrayList<>();
         Player bestFake = null;
-        double bestFakeDist = followRange.get() * followRange.get();
+        double bestFakeDist = followRangeSq;
 
         for (Player p : mc.level.players()) {
             if (p == self || !p.isAlive() || p.isSpectator()) continue;
@@ -1124,17 +1162,58 @@ public class HumanPvP extends Module {
             if (p.isCreative() && !isFake) continue;
 
             double d = self.distanceToSqr(p);
+            if (d >= followRangeSq) continue;
+
             if (isFake) {
                 if (d < bestFakeDist) {
                     bestFakeDist = d;
                     bestFake = p;
                 }
-            } else if (d < bestRealDist) {
-                bestRealDist = d;
-                bestReal = p;
+            } else {
+                realCandidates.add(p);
             }
         }
+
+        Player bestReal = smartTargeting.get() ? pickSmartTarget(self, realCandidates) : pickClosest(self, realCandidates);
         return bestReal != null ? bestReal : bestFake;
+    }
+
+    private Player pickClosest(Player self, java.util.List<Player> candidates) {
+        Player best = null;
+        double bestDist = Double.MAX_VALUE;
+        for (Player p : candidates) {
+            double d = self.distanceToSqr(p);
+            if (d < bestDist) {
+                bestDist = d;
+                best = p;
+            }
+        }
+        return best;
+    }
+
+    private Player pickSmartTarget(Player self, java.util.List<Player> candidates) {
+        Player best = null;
+        double bestScore = Double.MAX_VALUE;
+        double backupRangeSq = backupRange.get() * backupRange.get();
+
+        for (Player p : candidates) {
+            double dist = Math.sqrt(self.distanceToSqr(p));
+            boolean hasBackup = false;
+            for (Player other : candidates) {
+                if (other == p) continue;
+                if (p.distanceToSqr(other) <= backupRangeSq) {
+                    hasBackup = true;
+                    break;
+                }
+            }
+
+            double score = hasBackup ? dist + backupRange.get() : dist;
+            if (score < bestScore) {
+                bestScore = score;
+                best = p;
+            }
+        }
+        return best;
     }
 
     // ---------- Aktionen ----------

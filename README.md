@@ -75,10 +75,13 @@ alongside everything above.
 
 The fully aggressive profile. Optimized for winning trades as fast as possible, not for looking legitimate.
 
-- **Target acquisition & movement** — tracks the closest valid player within `follow-range`, but only actively
+- **Target acquisition & movement** — picks the closest valid player within `follow-range` by default, or with
+  `smart-targeting` prefers an isolated player over a slightly closer one who has backup nearby. Only actively
   closes distance (walking or pearling) once inside a separate, smaller `engage-distance` — prevents the bot from
-  sprinting across the map the instant it's turned on. Engagement is "sticky": once a fight is underway, a hard
-  Crystal/Anchor knockback that briefly throws the distance back out won't cause the bot to give up the chase.
+  sprinting across the map the instant it's turned on. Engagement is "sticky" in two ways: a hard Crystal/Anchor
+  knockback that briefly throws the distance back out won't cause the bot to give up the chase, and once
+  actually engaged it keeps fighting that same player by identity until they die, leave, or go out of range —
+  a third player briefly wandering past no longer steals the fight.
 - **Damage-optimized Crystal/Anchor placement** — evaluates every reachable placement spot each tick, picks
   whichever deals more damage to the target than to itself, respects a self-damage cap, and avoids friendly fire
   against anyone on the Meteor friends list.
@@ -107,6 +110,12 @@ the same core Crystal/Anchor/defense logic as `GodmodePvP` tuned to a more conse
 A standalone module that spawns a fake player with configurable HP (including live adjustment while it's
 active, or an invincible mode) to test attack, knockback, and combat-timing changes without needing a second
 account or a live server.
+
+### AutoArmor
+
+Automatically equips the strongest available armor piece per slot from your entire inventory, scored by real
+armor/toughness attribute value rather than guessing from material name — an enchanted Diamond piece correctly
+beats an unenchanted Netherite one if it protects more.
 
 ### Auto5b5tDupe
 

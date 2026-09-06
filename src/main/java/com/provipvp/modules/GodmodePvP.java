@@ -93,6 +93,32 @@ public class GodmodePvP extends Module {
         .build()
     );
 
+    public final Setting<Double> attackRange = sgGeneral.add(new DoubleSetting.Builder()
+        .name("attack-range")
+        .description("Maximale Distanz fuer Nahkampf-Schlaege (pre-hit, melee-fallback, Pop-Burst). Manche Server/Anti-Cheats tolerieren mehr oder weniger als das Standard-3.6.")
+        .defaultValue(3.6)
+        .range(2.5, 4.5)
+        .sliderRange(2.5, 4.0)
+        .build()
+    );
+
+    public final Setting<Boolean> smartTargeting = sgGeneral.add(new BoolSetting.Builder()
+        .name("smart-targeting")
+        .description("Bevorzugt bei der Zielwahl einen isolierten Gegner (ohne Mitspieler in Rueckendeckungs-Reichweite) vor reiner Distanz - ein alleine stehender Spieler ist ein sichereres, schnelleres Ziel als einer mit Unterstuetzung. Wirkt nur auf die ANFANGS-Zielwahl, ein bereits engagiertes Ziel wird nicht mehr gewechselt.")
+        .defaultValue(true)
+        .build()
+    );
+
+    public final Setting<Double> backupRange = sgGeneral.add(new DoubleSetting.Builder()
+        .name("backup-range")
+        .description("Ab welcher Naehe zu einem anderen Spieler ein Ziel als 'hat Rueckendeckung' gilt (fuer smart-targeting).")
+        .defaultValue(10.0)
+        .range(4.0, 24.0)
+        .sliderRange(4.0, 20.0)
+        .visible(smartTargeting::get)
+        .build()
+    );
+
     public final Setting<Double> popThreshold = sgGeneral.add(new DoubleSetting.Builder()
         .name("pop-threshold")
         .description("Health-Drop, der als Totem-Pop gewertet wird.")
@@ -935,7 +961,7 @@ public class GodmodePvP extends Module {
 
         // Pop-Fenster: volle Aggression
         if (tickCounter < popBurstUntil) {
-            if (dist <= 3.6 && self.getAttackStrengthScale(0.5f) >= 0.9f && self.hasLineOfSight(target) && prepareCritAndCheck(dist)) attackMelee(target);
+            if (dist <= attackRange.get() && self.getAttackStrengthScale(0.5f) >= 0.9f && self.hasLineOfSight(target) && prepareCritAndCheck(dist)) attackMelee(target);
             selectAura(target);
             currentAction = "burst";
         }
@@ -1011,11 +1037,11 @@ public class GodmodePvP extends Module {
         if (shieldBreaker.get() && target instanceof Player p && p.isBlocking()) {
             breakShield(p);
             currentAction = "schild-brechen";
-        } else if (preHit.get() && dist <= 3.6 && self.getAttackStrengthScale(0.5f) >= 0.9f
+        } else if (preHit.get() && dist <= attackRange.get() && self.getAttackStrengthScale(0.5f) >= 0.9f
             && self.hasLineOfSight(target) && explosionImminent(target) && prepareCritAndCheck(dist)) {
             attackMelee(target);
             currentAction = "pre-hit";
-        } else if (meleeFallback.get() && dist <= 3.6 && self.getAttackStrengthScale(0.5f) >= 0.9f
+        } else if (meleeFallback.get() && dist <= attackRange.get() && self.getAttackStrengthScale(0.5f) >= 0.9f
             && self.hasLineOfSight(target) && !explosionImminent(target)) {
             attackMelee(target);
             currentAction = "nahkampf-fallback";
@@ -1931,10 +1957,10 @@ public class GodmodePvP extends Module {
         // Echte Spieler haben immer Vorrang vor einem Trainings-Dummy (FakePlayerEntity) - der zaehlt nur
         // als Ziel, wenn wirklich kein echter Gegner in Reichweite ist. Sonst wuerde ein liegen gelassener
         // Dummy (z.B. nach einem Server-/Welt-Wechsel) die Zielwahl von einem echten Angreifer kapern.
-        Player bestReal = null;
-        double bestRealDist = followRange.get() * followRange.get();
+        double followRangeSq = followRange.get() * (double) followRange.get();
+        java.util.List<Player> realCandidates = new java.util.ArrayList<>();
         Player bestFake = null;
-        double bestFakeDist = followRange.get() * followRange.get();
+        double bestFakeDist = followRangeSq;
 
         for (Player p : mc.level.players()) {
             if (p == self || !p.isAlive() || p.isSpectator()) continue;
@@ -1942,17 +1968,62 @@ public class GodmodePvP extends Module {
             if (p.isCreative() && !isFake) continue;
 
             double d = self.distanceToSqr(p);
+            if (d >= followRangeSq) continue;
+
             if (isFake) {
                 if (d < bestFakeDist) {
                     bestFakeDist = d;
                     bestFake = p;
                 }
-            } else if (d < bestRealDist) {
-                bestRealDist = d;
-                bestReal = p;
+            } else {
+                realCandidates.add(p);
             }
         }
+
+        Player bestReal = smartTargeting.get() ? pickSmartTarget(self, realCandidates) : pickClosest(self, realCandidates);
         return bestReal != null ? bestReal : bestFake;
+    }
+
+    private Player pickClosest(Player self, java.util.List<Player> candidates) {
+        Player best = null;
+        double bestDist = Double.MAX_VALUE;
+        for (Player p : candidates) {
+            double d = self.distanceToSqr(p);
+            if (d < bestDist) {
+                bestDist = d;
+                best = p;
+            }
+        }
+        return best;
+    }
+
+    /** Bevorzugt ein isoliertes Ziel (kein zweiter Spieler in Rueckendeckungs-Reichweite) vor reiner
+     *  Distanz - ein alleine stehender Gegner ist ein sichereres, schneller erledigtes Ziel als einer mit
+     *  Unterstuetzung, selbst wenn er etwas weiter weg steht. Faellt bei Gleichstand (alle isoliert oder
+     *  alle mit Begleitung) auf die naechste Distanz zurueck. */
+    private Player pickSmartTarget(Player self, java.util.List<Player> candidates) {
+        Player best = null;
+        double bestScore = Double.MAX_VALUE;
+        double backupRangeSq = backupRange.get() * backupRange.get();
+
+        for (Player p : candidates) {
+            double dist = Math.sqrt(self.distanceToSqr(p));
+            boolean hasBackup = false;
+            for (Player other : candidates) {
+                if (other == p) continue;
+                if (p.distanceToSqr(other) <= backupRangeSq) {
+                    hasBackup = true;
+                    break;
+                }
+            }
+
+            double score = hasBackup ? dist + backupRange.get() : dist;
+            if (score < bestScore) {
+                bestScore = score;
+                best = p;
+            }
+        }
+        return best;
     }
 
     private LivingEntity findMobTarget(Player self) {
@@ -1975,6 +2046,19 @@ public class GodmodePvP extends Module {
 
     private LivingEntity findTarget(Player self) {
         if (mc.level == null) return null;
+
+        // Bereits engagiertes Ziel bevorzugt behalten, solange es lebt und in Reichweite bleibt - sonst
+        // kann waehrend eines laufenden Kampfes ein dritter, kurzzeitig naeherer/isolierterer Spieler
+        // das Ziel mitten im Gefecht kapern (Ziel-Flackern statt einen Kampf durchzuziehen).
+        if (engaged && engagedTargetId != null) {
+            for (Player p : mc.level.players()) {
+                if (!p.getUUID().equals(engagedTargetId)) continue;
+                if (p.isAlive() && !p.isSpectator() && self.distanceToSqr(p) <= followRange.get() * (double) followRange.get()) {
+                    return p;
+                }
+                break;
+            }
+        }
 
         LivingEntity best = findPlayerTarget(self);
         if (best == null && attackMobs.get()) best = findMobTarget(self);

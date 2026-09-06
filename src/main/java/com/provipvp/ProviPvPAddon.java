@@ -1,6 +1,7 @@
 package com.provipvp;
 
 import com.provipvp.modules.Auto5b5tDupe;
+import com.provipvp.modules.AutoArmor;
 import com.provipvp.modules.BrandSpoof;
 import com.provipvp.modules.ExploitGuard;
 import com.provipvp.modules.GodmodePvP;
@@ -36,6 +37,7 @@ public class ProviPvPAddon extends MeteorAddon {
         Modules.get().add(new ExploitGuard());
         Modules.get().add(new PacketFilter());
         Modules.get().add(new MacroTriggerModule());
+        Modules.get().add(new AutoArmor());
         Commands.add(new PvpCommand());
         Commands.add(new HumanPvpCommand());
         Commands.add(new NbtCommand());
