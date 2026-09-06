@@ -133,6 +133,8 @@ Three small, honestly-scoped debug/OpSec modules:
   known client-crash vector via malicious server broadcasts. Explicitly can't protect against crashes during
   packet *decoding* itself (that happens before this can intercept anything) — only against validly-decoded
   but pathologically-structured content.
+- **PacketFilter** — blocks specific outgoing packets before they ever reach the server, matched by a
+  configurable list of class-name substrings. Direct control over what actually gets sent.
 
 ## Commands
 
@@ -144,6 +146,11 @@ Three small, honestly-scoped debug/OpSec modules:
 | `.hpvp on` / `.hpvp off`| Explicitly enable/disable       |
 | `.nbt` | Dumps components/NBT of whatever you're looking at (entity/block) or your held item if neither |
 | `.nbt item` / `.nbt entity` / `.nbt block` | Same, explicitly targeted |
+| `.proxy` / `.proxy list` | List configured proxies and which one is active |
+| `.proxy add <name> <ip> <port> [socks4\|socks5]` | Add a proxy (defaults to socks5) |
+| `.proxy switch <name>` | Switch the active proxy — takes effect on the next connection, not the current session |
+| `.proxy remove <name>` | Remove a proxy |
+| `.proxy check` | Health-check every configured proxy |
 
 Every behavior described above is a separate Meteor setting under the module's ClickGUI entry — nothing is
 hardcoded that couldn't reasonably need tuning per server. See **[FEATURES.md](FEATURES.md)** for the full

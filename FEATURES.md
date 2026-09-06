@@ -153,6 +153,8 @@ Small, standalone debug/OpSec modules - honestly scoped, no silent-fail claims.
 | PacketLogger | `filter` | (empty) | Only logs packet class names containing this text (case-insensitive). Empty = everything. |
 | BrandSpoof | `spoofed-brand` | `vanilla` | Client brand reported to the server instead of `fabric` — the simplest automated modded-client detection. Doesn't defend against behavioral analysis. |
 | ExploitGuard | `max-component-depth` | `200` | Cancels incoming chat packets whose text-component tree nests deeper than this — a known client-crash vector via malicious server broadcasts. Can't protect against crashes during packet decoding itself, only validly-decoded but pathological content. |
+| PacketFilter | `blocked-outgoing` | (empty list) | Outgoing packets whose class name contains any of these texts (case-insensitive) are never sent to the server. |
+| PacketFilter | `announce` | `true` | Chats when a packet gets blocked. |
 
 
 ## Commands
@@ -165,6 +167,11 @@ Small, standalone debug/OpSec modules - honestly scoped, no silent-fail claims.
 | `.hpvp on` / `.hpvp off` | Explicitly enable/disable `HumanPvP` |
 | `.nbt` | Dumps components/NBT of whatever's under your crosshair (entity or block), falls back to your held item if neither |
 | `.nbt item` / `.nbt entity` / `.nbt block` | Same, explicitly targeted |
+| `.proxy` / `.proxy list` | List configured proxies (uses Meteor's built-in proxy system) and which one is active |
+| `.proxy add <name> <ip> <port> [socks4\|socks5]` | Add a proxy, defaults to socks5 |
+| `.proxy switch <name>` | Switch the active proxy - takes effect on the *next* connection, not the current session |
+| `.proxy remove <name>` | Remove a proxy |
+| `.proxy check` | Health-check every configured proxy |
 
 ## Third-party tools this project relies on
 
