@@ -142,6 +142,19 @@ is unverified. Test with `single` on a worthless item before relying on it.**
 | `single` | `false` | Just the raw exploit attempt (no rotation/drop automation, no auto-opening a table) - for testing whether the gap is even still open. Requires a Crafting Table to already be open. |
 | `rotation-mode` | `Silent` | `Silent` sends a rotation packet without moving your camera; `Client` actually snaps your pitch down and back. |
 
+## PacketLogger, BrandSpoof, ExploitGuard
+
+Small, standalone debug/OpSec modules - honestly scoped, no silent-fail claims.
+
+| Module | Setting | Default | Description |
+|---|---|---|---|
+| PacketLogger | `log-receive` | `true` | Logs incoming packet class names to chat. Pure observation. |
+| PacketLogger | `log-send` | `false` | Logs outgoing packet class names to chat. |
+| PacketLogger | `filter` | (empty) | Only logs packet class names containing this text (case-insensitive). Empty = everything. |
+| BrandSpoof | `spoofed-brand` | `vanilla` | Client brand reported to the server instead of `fabric` — the simplest automated modded-client detection. Doesn't defend against behavioral analysis. |
+| ExploitGuard | `max-component-depth` | `200` | Cancels incoming chat packets whose text-component tree nests deeper than this — a known client-crash vector via malicious server broadcasts. Can't protect against crashes during packet decoding itself, only validly-decoded but pathological content. |
+
+
 ## Commands
 
 | Command | Effect |
@@ -150,6 +163,8 @@ is unverified. Test with `single` on a worthless item before relying on it.**
 | `.pvp on` / `.pvp off` | Explicitly enable/disable `GodmodePvP` |
 | `.hpvp` / `.hpvp toggle` | Toggle `HumanPvP` |
 | `.hpvp on` / `.hpvp off` | Explicitly enable/disable `HumanPvP` |
+| `.nbt` | Dumps components/NBT of whatever's under your crosshair (entity or block), falls back to your held item if neither |
+| `.nbt item` / `.nbt entity` / `.nbt block` | Same, explicitly targeted |
 
 ## Third-party tools this project relies on
 

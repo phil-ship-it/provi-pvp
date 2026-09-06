@@ -119,6 +119,21 @@ grid) - the module opens or places one automatically before attempting the explo
 server-side race condition is still unpatched is unverified - the original was last confirmed working in May
 2025. Test with the `single` setting on a worthless item first.
 
+### PacketLogger, BrandSpoof, ExploitGuard
+
+Three small, honestly-scoped debug/OpSec modules:
+
+- **PacketLogger** — logs incoming/outgoing packet class names to chat with an optional filter. Pure
+  observation, changes nothing. Useful for correlating server behavior (rubberbanding, disconnects, anti-cheat
+  reactions) with what's actually crossing the wire, without digging through the raw client log.
+- **BrandSpoof** — reports a configurable client brand (default `vanilla`) instead of `fabric` to the server,
+  the simplest and most common automated modded-client detection. Doesn't defend against behavioral analysis
+  (movement patterns, timing) — that's what the silent-rotation settings in GodmodePvP/HumanPvP are for.
+- **ExploitGuard** — cancels incoming chat packets with an excessively deep/nested text component tree, a
+  known client-crash vector via malicious server broadcasts. Explicitly can't protect against crashes during
+  packet *decoding* itself (that happens before this can intercept anything) — only against validly-decoded
+  but pathologically-structured content.
+
 ## Commands
 
 | Command                | Effect                          |
@@ -127,6 +142,8 @@ server-side race condition is still unpatched is unverified - the original was l
 | `.pvp on` / `.pvp off`  | Explicitly enable/disable       |
 | `.hpvp` / `.hpvp toggle`| Toggle `HumanPvP`                |
 | `.hpvp on` / `.hpvp off`| Explicitly enable/disable       |
+| `.nbt` | Dumps components/NBT of whatever you're looking at (entity/block) or your held item if neither |
+| `.nbt item` / `.nbt entity` / `.nbt block` | Same, explicitly targeted |
 
 Every behavior described above is a separate Meteor setting under the module's ClickGUI entry — nothing is
 hardcoded that couldn't reasonably need tuning per server. See **[FEATURES.md](FEATURES.md)** for the full
