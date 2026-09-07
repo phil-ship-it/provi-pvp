@@ -201,7 +201,7 @@ public class HumanPvP extends Module {
 
     public final Setting<Boolean> knockbackPearl = sgCombat.add(new BoolSetting.Builder()
         .name("knockback-pearl")
-        .description("Wenn der Bot selbst durch Knockback in die Luft geschleudert wird, sofort senkrecht nach unten perlen.")
+        .description("Wenn der Bot durch Knockback in die Luft geschleudert wird ODER generell gerade in einem gefaehrlichen Fall steckt (z.B. von einer Kante), sofort senkrecht nach unten perlen.")
         .defaultValue(true)
         .build()
     );
@@ -381,6 +381,24 @@ public class HumanPvP extends Module {
         .defaultValue(4)
         .range(1, 16)
         .sliderRange(1, 16)
+        .build()
+    );
+
+    public final Setting<Integer> minBeds = sgInv.add(new IntSetting.Builder()
+        .name("min-beds")
+        .description("Nachschub-Schwelle Betten (Bed Aura). Funktioniert unabhaengig von der Stack-Groesse - auch bei serverseitig erweiterten 64er-Staples (z.B. 5b5t).")
+        .defaultValue(4)
+        .range(1, 16)
+        .sliderRange(1, 16)
+        .build()
+    );
+
+    public final Setting<Integer> minHealPotionsStock = sgInv.add(new IntSetting.Builder()
+        .name("min-heal-potions")
+        .description("Nachschub-Schwelle Splash-Heiltraenke. Funktioniert unabhaengig von der Stack-Groesse - auch bei serverseitig erweiterten 64er-Staples (z.B. 5b5t).")
+        .defaultValue(8)
+        .range(1, 32)
+        .sliderRange(1, 32)
         .build()
     );
 
@@ -681,11 +699,13 @@ public class HumanPvP extends Module {
             rubberbandCooldown = 10;
             currentAction = "rubberband";
         }
-        if (knockbackPearl.get() && tookHit && self.getDeltaMovement().y > 0.35
+        boolean launchedByHit = tookHit && self.getDeltaMovement().y > 0.35;
+        boolean fallingDanger = !self.onGround() && self.fallDistance > 3.0f && self.getDeltaMovement().y < 0.05;
+        if (knockbackPearl.get() && (launchedByHit || fallingDanger)
             && tickCounter - lastPearlTick > 15
             && (InvUtils.findInHotbar(Items.ENDER_PEARL).found() || InvUtils.find(Items.ENDER_PEARL).found())) {
             throwPearlDown();
-            currentAction = "pearl-knockback";
+            currentAction = launchedByHit ? "pearl-knockback" : "pearl-fallschutz";
             return;
         }
         manageSprintForKnockback(dist);
@@ -725,7 +745,10 @@ public class HumanPvP extends Module {
 
         handleTrap(target);
 
-        if (pearlThrow.get() && dist > pearlMinDist.get() && pursuing
+        // Schwelle an attack-range gekoppelt (nie kleiner als Nahkampf-Reichweite+0.5) und Sichtlinie
+        // Pflicht - sonst fliegt die Perle nur gegen die Wand/den Huegel dazwischen statt zum Gegner.
+        double pearlReachThreshold = Math.max(pearlMinDist.get(), attackRange.get() + 0.5);
+        if (pearlThrow.get() && dist > pearlReachThreshold && pursuing && self.hasLineOfSight(target)
             && tickCounter - lastPearlTick > pearlCooldown(dist) && !guiOpen) {
             throwPearl(target, false);
             currentAction = "pearl-gapclose";
@@ -1600,6 +1623,15 @@ public class HumanPvP extends Module {
         return n;
     }
 
+    private int countHotbar(java.util.function.Predicate<ItemStack> pred) {
+        int n = 0;
+        for (int i = 0; i <= 8; i++) {
+            ItemStack s = mc.player.getInventory().getItem(i);
+            if (pred.test(s)) n += s.getCount();
+        }
+        return n;
+    }
+
     private int totalItem(net.minecraft.world.item.Item item) {
         FindItemResult r = InvUtils.find(item);
         return r.found() ? r.count() : 0;
@@ -1667,11 +1699,27 @@ public class HumanPvP extends Module {
         return -1;
     }
 
+    private int findMainSlotWith(java.util.function.Predicate<ItemStack> pred) {
+        for (int i = 9; i <= 35; i++) {
+            if (pred.test(mc.player.getInventory().getItem(i))) return i;
+        }
+        return -1;
+    }
+
     private int hotbarTargetSlot(net.minecraft.world.item.Item item) {
         for (int i = 0; i <= 8; i++) {
             ItemStack s = mc.player.getInventory().getItem(i);
             if (s.isEmpty()) return i;
             if (s.is(item) && s.getCount() < s.getMaxStackSize()) return i;
+        }
+        return -1;
+    }
+
+    private int hotbarTargetSlot(java.util.function.Predicate<ItemStack> pred) {
+        for (int i = 0; i <= 8; i++) {
+            ItemStack s = mc.player.getInventory().getItem(i);
+            if (s.isEmpty()) return i;
+            if (pred.test(s) && s.getCount() < s.getMaxStackSize()) return i;
         }
         return -1;
     }
@@ -1687,6 +1735,17 @@ public class HumanPvP extends Module {
         InvUtils.move().from(src).to(dst);
     }
 
+    private void refill(java.util.function.Predicate<ItemStack> pred, int min) {
+        if (countHotbar(pred) >= min) return;
+        if (totalItem(pred) <= min) return;
+
+        int src = findMainSlotWith(pred);
+        int dst = hotbarTargetSlot(pred);
+        if (src < 0 || dst < 0) return;
+
+        InvUtils.move().from(src).to(dst);
+    }
+
     private void inventoryTick() {
         refill(Items.END_CRYSTAL, minCrystals.get());
         refill(Items.RESPAWN_ANCHOR, minAnchors.get());
@@ -1694,6 +1753,8 @@ public class HumanPvP extends Module {
         refill(Items.ENDER_PEARL, minPearls.get());
         refill(Items.OBSIDIAN, minObsidian.get());
         refill(Items.COBWEB, minWeb.get());
+        refill(HumanPvP::isBed, minBeds.get());
+        refill(HumanPvP::isHealingSplash, minHealPotionsStock.get());
 
         warnIfEmpty(Items.END_CRYSTAL, "End Crystals");
         warnIfEmpty(Items.ENDER_PEARL, "Enderperlen");

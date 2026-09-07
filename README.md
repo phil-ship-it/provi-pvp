@@ -94,17 +94,24 @@ The fully aggressive profile. Optimized for winning trades as fast as possible, 
   direction switching.
 - **Positioning** — seeks natural or self-built one-block-deep cover, prefers standing lower than the target for
   a favorable explosion-damage ratio, builds emergency obsidian cover when nothing natural is nearby.
-- **Defensive reflexes** — auto-shield on freshly placed enemy Crystals, knockback-recovery pearling, obstacle
-  pearling, cage/critical-HP escape pearls, retreat on a losing trade or when out of totems and explosives.
+- **Defensive reflexes** — auto-shield on freshly placed enemy Crystals, cage/critical-HP escape pearls, retreat
+  on a losing trade or when out of totems and explosives. Pearling is terrain-aware: the gap-close throw
+  requires a clear line of sight and a threshold coupled to `attack-range` (never fires while melee could
+  still connect), and the knockback pearl fires on any dangerous fall — not just right after getting hit —
+  so walking off a ledge triggers the same controlled-descent pearl.
 - **Movement tuning** — Baritone is configured for aggressive pursuit (parkour, diagonal movement, cliff jumps,
   fire crossing) with `NoFall` and `AutoEat` wired in to make that survivable.
-- **Inventory management** — restocks Crystals, Anchors, Glowstone, Pearls, Obsidian, and Cobweb from the main
-  inventory into the hotbar as they run low, with configurable thresholds.
+- **Inventory management** — restocks Crystals, Anchors, Glowstone, Pearls, Obsidian, Cobweb, Beds, and Splash
+  Healing Potions from the main inventory into the hotbar as they run low, with configurable thresholds. Bed/
+  potion restocking reads each stack's actual max size dynamically, so it works unmodified on servers that
+  raise them to a 64-stack (e.g. 5b5t) instead of vanilla's 1.
 - **Self-healing** — throws a Splash Potion of Healing at your own feet the instant fresh damage is detected,
   regardless of combat state (covers fall/fire damage too, not just hits taken mid-fight).
-- **Instant mode (`no-delay`)** — an off-by-default switch that strips out every remaining artificial wait
-  (placement/maintenance pauses, D-Tap cooldown, pearl-throw cooldowns, aura-switch hysteresis, the
-  Crystal support-delay floor) for maximum throughput at the cost of reliability on laggy servers.
+- **Instant mode (`no-delay`)** — an off-by-default switch that strips out most remaining artificial waits
+  (placement/maintenance pauses, D-Tap cooldown, pearl-throw cooldowns) for maximum throughput at the cost of
+  reliability on laggy servers. Two exceptions stay active regardless of the switch — the aura-switch
+  hysteresis and the Crystal support-delay floor — because those are technical requirements, not caution:
+  removing them broke Crystal placement's sequence-number prediction outright (zero damage from any source).
 
 ### HumanPvP (`.hpvp`)
 

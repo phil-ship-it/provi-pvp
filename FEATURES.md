@@ -28,7 +28,7 @@ nothing described in the [README](README.md) is hardcoded. Defaults are the valu
 | `anchor-mode` | `1` | `0` = automatic (always max damage), `1` = use Anchor even on a damage tie, `2` = off. |
 | `use-anchors` | `true` | Allow Anchors at all (costs 1 Glowstone per detonation). |
 | `use-beds` | `false` | Bed Aura: places and detonates beds as an explosive (damage value 5.0, same as Anchor). Only works outside the Overworld (Nether/End — e.g. portal camping on 5b5t); the client can't verify this ahead of time, only the server decides. Off by default so beds aren't wasted in the Overworld (where using one just sleeps/sets your spawn point instead of exploding). When both an Anchor and a Bed are viable, whichever deals more damage wins — Anchor only needs 1 Glowstone, so it's usually the more efficient default on an exact tie. |
-| `no-delay` | `false` | Instant mode: strips out every remaining artificial wait — Anchor/Bed placement and maintenance pauses, D-Tap cooldown, all ender pearl throw cooldowns, the aura-switch hysteresis, and the floor `min-support-delay` enforces on CrystalAura's own support-delay. Pure speed over caution: on a server with noticeable latency this can make Crystal placement less reliable (see `min-support-delay`) and burn through pearls/Anchors/Beds faster than the server can actually process the resulting actions. Off by default — the existing per-action cooldowns above already exist for a reason; only turn this on if you specifically want maximum throughput and accept the tradeoff. |
+| `no-delay` | `false` | Instant mode: strips out every remaining artificial wait — Anchor/Bed placement and maintenance pauses, D-Tap cooldown, all ender pearl throw cooldowns. Pure speed over caution: can burn through pearls/Anchors/Beds faster than the server can actually process the resulting actions. Two exceptions stay active regardless — the aura-switch hysteresis and the `min-support-delay` floor — because those aren't caution, they're technical requirements: removing them broke Crystal placement's sequence-number prediction entirely (0 damage from any source, confirmed in testing) rather than just making things faster. |
 | `pre-hit` | `true` | Melees the target right before the explosion for extra damage. |
 | `melee-fallback` | `true` | Melees normally whenever no explosion is actually about to land (e.g. Crystal mode is on but there's no obsidian left for a support block in open air, or no valid spot at all) — without this, the bot previously just stood there once every explosive option stopped being genuinely achievable, even while `pre-hit`'s own condition kept reporting "explosion imminent" just because CrystalAura was switched on. |
 | `prefer-axe-melee` | `true` | Automatically swaps to the axe for melee hits (axe-swap meta). |
@@ -44,7 +44,7 @@ nothing described in the [README](README.md) is hardcoded. Defaults are the valu
 | `min-support-delay` | `4` | Minimum tick gap between placing an obsidian support block and the following crystal placement (CrystalAura's `support-delay`). Both actions use Minecraft's own sequence-numbered block-prediction system (since 1.19) — sending them too close together, before the first sequence is server-acknowledged, can desync the prediction ("crystal hitbox appears, but no crystal actually spawns"). Needs more headroom on high-latency or cross-version-translated (e.g. ViaVersion) connections than Meteor's own default. Only ever raised, never lowered. |
 | `kill-aura` | `false` | Also runs Meteor's KillAura for melee. Mob filter is shared with the `Mobs` group. Off by default since the built-in axe-melee logic already covers it. |
 | `escape-pearl` | `true` | Pearls away at low HP with an enemy nearby. |
-| `knockback-pearl` | `true` | If the bot itself gets launched into the air by knockback (hit or explosion), immediately pearls straight down — controlled descent instead of falling helplessly or hanging in the air as an easy target. |
+| `knockback-pearl` | `true` | Pearls straight down for a controlled landing whenever the bot is in real danger from a fall: either just launched by knockback (hit or explosion) with strong upward velocity, or generally airborne and already 3+ blocks into a fall (the same height Minecraft itself starts counting fall damage from) — not just the post-hit case, so walking off a ledge or getting launched by something else entirely still gets caught. |
 
 ### Defense
 
@@ -80,6 +80,8 @@ nothing described in the [README](README.md) is hardcoded. Defaults are the valu
 | `min-pearls` | `8` | Restock threshold for Ender Pearls. |
 | `min-obsidian` | `16` | Restock threshold for Obsidian (D-Tap, emergency cover). |
 | `min-web` | `4` | Restock threshold for Cobweb (trap). |
+| `min-beds` | `4` | Restock threshold for Beds (Bed Aura). Works correctly regardless of the item's actual max stack size — reads it dynamically instead of assuming vanilla's default, so it's unaffected by servers that raise beds to a 64-stack (e.g. 5b5t). |
+| `min-heal-potions` | `8` | Restock threshold for Splash Healing Potions. Same stack-size-agnostic handling as `min-beds`. |
 
 ### Mobs
 
@@ -93,8 +95,8 @@ nothing described in the [README](README.md) is hardcoded. Defaults are the valu
 
 | Setting | Default | Description |
 |---|---|---|
-| `pearl-gapclose` | `true` | Pearls toward the target when it's too far away (with rotation onto the target). |
-| `pearl-min-dist` | `4.0` | Distance beyond which a pearl is thrown — set to `4` this means as soon as melee range (3.6 blocks) is no longer enough. |
+| `pearl-gapclose` | `true` | Pearls toward the target when it's too far away to melee-hit or deal damage. The threshold is coupled to `attack-range` (never lower than `attack-range + 0.5`, regardless of `pearl-min-dist`) so it can't fire while melee could still connect, and requires a clear line of sight to the target — without it, this used to throw straight into whatever wall or hill was in between over long distances instead of holding the pearl for a clear shot. (The separate close-range "obstacle" pearl still deliberately throws through thin obstructions — that one's an intentional clip trick, not a mistake.) |
+| `pearl-min-dist` | `4.0` | Distance beyond which a pearl is thrown — acts as a floor on top of `attack-range` (see `pearl-gapclose`), not an independent value, so lowering it below your configured `attack-range` has no effect. |
 
 ### Healing
 
@@ -122,6 +124,7 @@ core as `GodmodePvP`, with these differences:
 | `max-turn-speed` | `18.0°/tick` | Maximum camera rotation per tick — human-paced turning instead of an instant snap. |
 | `max-self-damage` | `6.0` | More conservative self-damage cap than `GodmodePvP`'s `12.0`. |
 | `anti-rubberband` | `true` | Detects a server position correction and drops the stale path instead of fighting it. A moderate jump only counts outside of combat (normal explosion knockback shouldn't trigger it); a genuinely extreme jump triggers regardless, since real knockback rarely covers that much distance in one tick and rubberbanding is most common during actual Crystal/Anchor fights. |
+| `pearl-min-dist` | `10.0` | Higher default than `GodmodePvP`'s `4.0` — still just a floor on top of `attack-range` (see `GodmodePvP`'s `pearl-gapclose` entry), a human plays more conservatively with pearls than the fully aggressive profile. |
 
 All other Combat/Defense/Inventory/Pearl/Healing settings mirror `GodmodePvP` (same names, same purpose, same
 defaults) unless listed above — including `use-beds` and the three `heal-*` settings. One mechanical difference:

@@ -280,7 +280,7 @@ public class GodmodePvP extends Module {
 
     public final Setting<Boolean> instantMode = sgCombat.add(new BoolSetting.Builder()
         .name("no-delay")
-        .description("Sofort-Modus: hebelt alle verbleibenden kuenstlichen Wartezeiten aus (Anchor/Bett-Platzierungs- und Wartungspausen, D-Tap-Cooldown, alle Perlwurf-Cooldowns, Aura-Umschalt-Traegheit, Crystal-Support-Delay). Reine Geschwindigkeit statt Vorsicht - auf Servern mit spuerbarer Latenz kann das Crystal-Platzierungen unzuverlaessiger machen (siehe min-support-delay) und Perlen/Anchors/Betten verschwenden, wenn Aktionen schneller abgefeuert werden als der Server sie verarbeitet.")
+        .description("Sofort-Modus: hebelt alle verbleibenden kuenstlichen Wartezeiten aus (Anchor/Bett-Platzierungs- und Wartungspausen, D-Tap-Cooldown, alle Perlwurf-Cooldowns). Reine Geschwindigkeit statt Vorsicht - kann Perlen/Anchors/Betten verschwenden, wenn Aktionen schneller abgefeuert werden als der Server sie verarbeitet. Zwei Ausnahmen BLEIBEN aktiv, weil sie keine Vorsicht sondern technische Notwendigkeit sind: die Aura-Umschalt-Traegheit (ohne sie faengt sich CrystalAura nie ein stabiles Fenster zum tatsaechlichen Platzieren, wurde beim Testen zu 0 Schaden in JEDER Form) und min-support-delay (ohne die Untergrenze schlaegt die Server-Sequenznummer-Vorhersage fehl, Crystal kommt nie an - selbes Symptom).")
         .defaultValue(false)
         .build()
     );
@@ -301,7 +301,7 @@ public class GodmodePvP extends Module {
 
     public final Setting<Boolean> knockbackPearl = sgCombat.add(new BoolSetting.Builder()
         .name("knockback-pearl")
-        .description("Wenn der Bot selbst durch Knockback (Schlag/Explosion) in die Luft geschleudert wird, sofort senkrecht nach unten perlen - kommt kontrolliert runter statt hilflos zu fallen/als Ziel in der Luft zu haengen.")
+        .description("Wenn der Bot durch Knockback (Schlag/Explosion) in die Luft geschleudert wird ODER generell gerade in einem gefaehrlichen Fall steckt (z.B. von einer Kante), sofort senkrecht nach unten perlen - kommt kontrolliert runter statt Fallschaden zu nehmen oder als Ziel in der Luft zu haengen.")
         .defaultValue(true)
         .build()
     );
@@ -496,6 +496,24 @@ public class GodmodePvP extends Module {
         .defaultValue(4)
         .range(1, 16)
         .sliderRange(1, 16)
+        .build()
+    );
+
+    public final Setting<Integer> minBeds = sgInv.add(new IntSetting.Builder()
+        .name("min-beds")
+        .description("Nachschub-Schwelle Betten (Bed Aura). Funktioniert unabhaengig von der Stack-Groesse - auch bei serverseitig erweiterten 64er-Staples (z.B. 5b5t), da die Nachschub-Logik die tatsaechliche Maximal-Stapelgroesse des Items abfragt statt sie fest anzunehmen.")
+        .defaultValue(4)
+        .range(1, 16)
+        .sliderRange(1, 16)
+        .build()
+    );
+
+    public final Setting<Integer> minHealPotionsStock = sgInv.add(new IntSetting.Builder()
+        .name("min-heal-potions")
+        .description("Nachschub-Schwelle Splash-Heiltraenke. Funktioniert unabhaengig von der Stack-Groesse - auch bei serverseitig erweiterten 64er-Staples (z.B. 5b5t).")
+        .defaultValue(8)
+        .range(1, 32)
+        .sliderRange(1, 32)
         .build()
     );
 
@@ -933,14 +951,18 @@ public class GodmodePvP extends Module {
             currentAction = "rubberband";
         }
 
-        // Durch Knockback (Schlag/Explosion) in die Luft geschleudert: spuerbarer Schaden + starke
-        // Aufwaerts-Geschwindigkeit im selben Tick - sofort senkrecht nach unten perlen, um kontrolliert
-        // runterzukommen statt hilflos zu fallen oder als leichtes Ziel in der Luft zu haengen.
-        if (knockbackPearl.get() && tookRealDamage && self.getDeltaMovement().y > 0.35
+        // Durch Knockback (Schlag/Explosion) in die Luft geschleudert ODER generell gerade in einem
+        // gefaehrlichen Fall (z.B. von einer Kante gelaufen, durch fremden Knockback/Explosion, die wir
+        // nicht selbst als "gerade getroffen" erkennen): sofort senkrecht nach unten perlen, um kontrolliert
+        // runterzukommen statt hilflos zu fallen, Fallschaden zu nehmen oder als leichtes Ziel in der Luft
+        // zu haengen. fallDistance > 3 ist die gleiche Schwelle, ab der Minecraft selbst Fallschaden zaehlt.
+        boolean launchedByHit = tookRealDamage && self.getDeltaMovement().y > 0.35;
+        boolean fallingDanger = !self.onGround() && self.fallDistance > 3.0f && self.getDeltaMovement().y < 0.05;
+        if (knockbackPearl.get() && (launchedByHit || fallingDanger)
             && tickCounter - lastPearlTick > delay(15)
             && (InvUtils.findInHotbar(Items.ENDER_PEARL).found() || InvUtils.find(Items.ENDER_PEARL).found())) {
             throwPearlDown();
-            currentAction = "pearl-knockback";
+            currentAction = launchedByHit ? "pearl-knockback" : "pearl-fallschutz";
             return;
         }
 
@@ -1042,9 +1064,14 @@ public class GodmodePvP extends Module {
         }
 
         // Perlen-Gapclose (bei grosser Distanz schnellerer Cooldown) - nur wenn schon engaged (siehe unten),
-        // sonst wuerde auch ein 35 Blocke entfernter Spieler beim Kaltstart sofort angeperlt.
+        // sonst wuerde auch ein 35 Blocke entfernter Spieler beim Kaltstart sofort angeperlt. Die Schwelle
+        // ist an attack-range gekoppelt (nie kleiner als Nahkampf-Reichweite+0.5) - sonst wuerde ein zu
+        // niedrig gestelltes pearl-min-dist eine Perle verschwenden, obwohl der Gegner noch schlagbar waere.
+        // Sichtlinie ist Pflicht: ohne sie fliegt die Perle nur gegen die Wand/den Huegel dazwischen statt
+        // zum Gegner (anders als die gezielte Hindernis-Perle oben, die genau auf so ein Durchclippen zielt).
+        double pearlReachThreshold = Math.max(pearlMinDist.get(), attackRange.get() + 0.5);
         long pearlCooldown = delay(dist > 15 ? 8 : 10);
-        if (pearlThrow.get() && dist > pearlMinDist.get() && engaged
+        if (pearlThrow.get() && dist > pearlReachThreshold && engaged && self.hasLineOfSight(target)
             && tickCounter - lastPearlTick > pearlCooldown && !guiOpen) {
             throwPearl(target, false);
             currentAction = "pearl-gapclose";
@@ -1387,7 +1414,7 @@ public class GodmodePvP extends Module {
 
         // Deutlich seltener umschalten (0.5s statt 0.15s) - genug Zeit, damit eine begonnene
         // Platzierung/Ladung auch tatsaechlich fertig wird, statt staendig unterbrochen zu werden.
-        if (tickCounter - lastAuraSwitch < delay(10)) return;
+        if (tickCounter - lastAuraSwitch < 10) return;
 
         if (wantAnchor && auraMode != 1) {
             if (ca.isActive()) ca.toggle();
@@ -2627,6 +2654,15 @@ public class GodmodePvP extends Module {
         return n;
     }
 
+    private int countHotbar(java.util.function.Predicate<ItemStack> pred) {
+        int n = 0;
+        for (int i = 0; i <= 8; i++) {
+            ItemStack s = mc.player.getInventory().getItem(i);
+            if (pred.test(s)) n += s.getCount();
+        }
+        return n;
+    }
+
     private int totalItem(net.minecraft.world.item.Item item) {
         FindItemResult r = InvUtils.find(item);
         return r.found() ? r.count() : 0;
@@ -2644,11 +2680,27 @@ public class GodmodePvP extends Module {
         return -1;
     }
 
+    private int findMainSlotWith(java.util.function.Predicate<ItemStack> pred) {
+        for (int i = 9; i <= 35; i++) {
+            if (pred.test(mc.player.getInventory().getItem(i))) return i;
+        }
+        return -1;
+    }
+
     private int hotbarTargetSlot(net.minecraft.world.item.Item item) {
         for (int i = 0; i <= 8; i++) {
             ItemStack s = mc.player.getInventory().getItem(i);
             if (s.isEmpty()) return i;
             if (s.is(item) && s.getCount() < s.getMaxStackSize()) return i;
+        }
+        return -1;
+    }
+
+    private int hotbarTargetSlot(java.util.function.Predicate<ItemStack> pred) {
+        for (int i = 0; i <= 8; i++) {
+            ItemStack s = mc.player.getInventory().getItem(i);
+            if (s.isEmpty()) return i;
+            if (pred.test(s) && s.getCount() < s.getMaxStackSize()) return i;
         }
         return -1;
     }
@@ -2664,6 +2716,22 @@ public class GodmodePvP extends Module {
         InvUtils.move().from(src).to(dst);
     }
 
+    /** Predicate-Variante fuer Ressourcen, die nicht ueber einen einzelnen Item-Typ erfassbar sind (Betten
+     *  gibt es in 16 Farben, Heiltraenke sind ueber ihren Effekt statt ihren Item-Typ definiert). Nutzt
+     *  wie die Item-Variante die tatsaechliche Stapelgroesse jedes Slots (ItemStack.getMaxStackSize()) -
+     *  funktioniert daher unveraendert bei serverseitig erweiterten Staples (z.B. 5b5ts 64er-Betten/
+     *  -Traenke statt Vanillas 1), ohne dass hier irgendwo "max 1" angenommen wird. */
+    private void refill(java.util.function.Predicate<ItemStack> pred, int min) {
+        if (countHotbar(pred) >= min) return;
+        if (totalItem(pred) <= min) return;
+
+        int src = findMainSlotWith(pred);
+        int dst = hotbarTargetSlot(pred);
+        if (src < 0 || dst < 0) return;
+
+        InvUtils.move().from(src).to(dst);
+    }
+
     private void inventoryTick(Player self) {
         refill(Items.END_CRYSTAL, minCrystals.get());
         refill(Items.RESPAWN_ANCHOR, minAnchors.get());
@@ -2671,6 +2739,8 @@ public class GodmodePvP extends Module {
         refill(Items.ENDER_PEARL, minPearls.get());
         refill(Items.OBSIDIAN, minObsidian.get());
         refill(Items.COBWEB, minWeb.get());
+        refill(GodmodePvP::isBed, minBeds.get());
+        refill(GodmodePvP::isHealingSplash, minHealPotionsStock.get());
 
         int totems = totalItem(Items.TOTEM_OF_UNDYING);
         if (totems < 6 && !warnedLowTotems) {
@@ -2760,7 +2830,7 @@ public class GodmodePvP extends Module {
             Setting<Integer> s = (Setting<Integer>) f.get(ca);
             if (s != null) {
                 savedSupportDelay = s.get();
-                if (!instantMode.get() && s.get() < minSupportDelay.get()) s.set(minSupportDelay.get());
+                if (s.get() < minSupportDelay.get()) s.set(minSupportDelay.get());
             }
         } catch (Throwable t) {
             savedSupportDelay = -1;
