@@ -451,6 +451,10 @@ public class HumanPvP extends Module {
     private int tickCounter;
     private int lastErrorWarnTick = -999;
     private int lastPearlTick = -999;
+    // Siehe GodmodePvP fuer die volle Erklaerung: Meteors Rotations-Queue fuehrt bei mehreren im selben
+    // Tick angemeldeten Rotationen nur die ERSTE mit der tatsaechlich gesetzten Blickrichtung aus - jede
+    // weitere bekommt beim Ausfuehren ihres Callbacks schon wieder die alte Rotation zurueckgesetzt.
+    private boolean rotationQueuedThisTick;
     private int sprintResetCooldown;
     private float lastSelfHpForKnockback = -1;
     private Vec3 lastSelfPos;
@@ -641,6 +645,7 @@ public class HumanPvP extends Module {
     private void doTick() {
         Player self = mc.player;
         currentAction = "-";
+        rotationQueuedThisTick = false;
         boolean guiOpen = mc.gui.screen() != null;
         // Nur eine echte Fremd-Container-GUI hat ein anderes containerMenu als das normale Inventar -
         // Meteor-ClickGUI/eigenes Inventar teilen sich inventoryMenu, Totem-Nachlegen darf da weiterlaufen.
@@ -1046,6 +1051,8 @@ public class HumanPvP extends Module {
                 smoothLookAt(facePoint);
                 if (currentAimError(facePoint) > aimTolerance.get()) return; // erst ausrichten
 
+                if (rotationQueuedThisTick) return; // Rotations-Slot diesen Tick schon belegt - naechster Tick
+
                 FindItemResult bed = InvUtils.findInHotbar(HumanPvP::isBed);
                 if (!bed.found()) bed = InvUtils.find(HumanPvP::isBed);
                 if (!bed.found()) return;
@@ -1056,7 +1063,7 @@ public class HumanPvP extends Module {
                 // deshalb hier ein kurzer, praeziser synchroner Snap statt der sonst ueblichen graduellen
                 // Drehung, exakt fuer diesen einen Platzierungs-Tick.
                 double yaw = spot.dir().toYRot();
-                Rotations.rotate(yaw, 55, () -> {
+                rotateAndRun(yaw, 55, () -> {
                     if (BlockUtils.place(spot.pos(), foundBed, false, 50)) {
                         bedPos = spot.pos();
                         bedStage = 1;
@@ -1349,6 +1356,15 @@ public class HumanPvP extends Module {
         return stack.getItem() instanceof BedItem;
     }
 
+    /** @return true, wenn eingereiht wurde (Rotations-Slot diesen Tick noch frei war). Siehe GodmodePvP
+     *  fuer die volle Erklaerung, warum das notwendig ist. */
+    private boolean rotateAndRun(double yaw, double pitch, Runnable callback) {
+        if (rotationQueuedThisTick) return false;
+        rotationQueuedThisTick = true;
+        Rotations.rotate(yaw, pitch, callback);
+        return true;
+    }
+
     /** Haelt Fire Resistance permanent aktiv, solange man sich im Nether befindet - macht Lava-Kontakt,
      *  Explosions-Feuer und brennende Nachbarblöcke irrelevant. Laeuft unabhaengig vom Kampf-Zustand. */
     private void maintainFireResistance() {
@@ -1533,16 +1549,20 @@ public class HumanPvP extends Module {
             pitch = Rotations.getPitch(aimAt.getBoundingBox().getCenter());
         }
 
-        lastPearlTick = tickCounter;
-
         if (pearl.isOffhand()) {
-            Rotations.rotate(yaw, pitch, () -> mc.gameMode.useItem(mc.player, InteractionHand.OFF_HAND));
+            if (rotateAndRun(yaw, pitch, () -> mc.gameMode.useItem(mc.player, InteractionHand.OFF_HAND))) {
+                lastPearlTick = tickCounter;
+            }
         } else {
             boolean swapped = InvUtils.swap(pearl.slot(), true);
-            Rotations.rotate(yaw, pitch, () -> {
+            if (rotateAndRun(yaw, pitch, () -> {
                 mc.gameMode.useItem(mc.player, InteractionHand.MAIN_HAND);
                 if (swapped) InvUtils.swapBack();
-            });
+            })) {
+                lastPearlTick = tickCounter;
+            } else if (swapped) {
+                InvUtils.swapBack();
+            }
         }
     }
 
@@ -1552,16 +1572,20 @@ public class HumanPvP extends Module {
         if (!pearl.found()) pearl = InvUtils.find(Items.ENDER_PEARL);
         if (!pearl.found()) return;
 
-        lastPearlTick = tickCounter;
-
         if (pearl.isOffhand()) {
-            Rotations.rotate(mc.player.getYRot(), 80, () -> mc.gameMode.useItem(mc.player, InteractionHand.OFF_HAND));
+            if (rotateAndRun(mc.player.getYRot(), 80, () -> mc.gameMode.useItem(mc.player, InteractionHand.OFF_HAND))) {
+                lastPearlTick = tickCounter;
+            }
         } else {
             boolean swapped = InvUtils.swap(pearl.slot(), true);
-            Rotations.rotate(mc.player.getYRot(), 80, () -> {
+            if (rotateAndRun(mc.player.getYRot(), 80, () -> {
                 mc.gameMode.useItem(mc.player, InteractionHand.MAIN_HAND);
                 if (swapped) InvUtils.swapBack();
-            });
+            })) {
+                lastPearlTick = tickCounter;
+            } else if (swapped) {
+                InvUtils.swapBack();
+            }
         }
     }
 
@@ -1677,19 +1701,22 @@ public class HumanPvP extends Module {
         if (!potion.found()) potion = InvUtils.find(HumanPvP::isHealingSplash);
         if (!potion.found()) return;
 
-        healPotionCooldown = healCooldown.get();
-        hpAtHealWindowStart = hp;
-        healWindowStartTick = tickCounter;
-
+        boolean thrown;
         if (potion.isOffhand()) {
-            Rotations.rotate(self.getYRot(), 80, () -> mc.gameMode.useItem(mc.player, InteractionHand.OFF_HAND));
+            thrown = rotateAndRun(self.getYRot(), 80, () -> mc.gameMode.useItem(mc.player, InteractionHand.OFF_HAND));
         } else {
             boolean swapped = InvUtils.swap(potion.slot(), true);
-            Rotations.rotate(self.getYRot(), 80, () -> {
+            thrown = rotateAndRun(self.getYRot(), 80, () -> {
                 mc.gameMode.useItem(mc.player, InteractionHand.MAIN_HAND);
                 if (swapped) InvUtils.swapBack();
             });
+            if (!thrown && swapped) InvUtils.swapBack();
         }
+        if (!thrown) return;
+
+        healPotionCooldown = healCooldown.get();
+        hpAtHealWindowStart = hp;
+        healWindowStartTick = tickCounter;
     }
 
     private int findMainSlotWith(net.minecraft.world.item.Item item) {

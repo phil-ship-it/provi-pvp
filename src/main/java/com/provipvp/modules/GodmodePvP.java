@@ -626,6 +626,15 @@ public class GodmodePvP extends Module {
     private float lastSelfHpForRubberband = -1;
     private BlockPos activeHole;
     private BlockPos heightCalcOrigin;
+    private int buildCoverCooldown;
+    // Meteors Rotations-Queue fuehrt bei MEHREREN im selben Tick angemeldeten Rotationen nur die ERSTE mit
+    // der tatsaechlich gesetzten Blickrichtung aus - jede weitere bekommt beim Ausfuehren ihres Callbacks
+    // schon wieder die alte, zurueckgesetzte Rotation (siehe Rotations.onSendMovementPacketsPost: nur
+    // Index 0 durchlaeuft setClientRotation() VOR seinem Callback, alle weiteren senden zwar ihr Paket,
+    // aber mit der Spielerrotation von VOR der Aktion). Ohne diese Sperre feuerte z.B. ein Perlwurf
+    // gleichzeitig mit einer Anchor-/Bett-Interaktion im selben Tick - eine der beiden landete dann mit
+    // komplett falscher Blickrichtung (wild verirrte Perlen, "haengende" nie gezuendete Anchors/Betten).
+    private boolean rotationQueuedThisTick;
     private int lastFireworkTick = -999;
     private int secondEnemyWarnCooldown;
     private boolean lowOnTotems;
@@ -728,6 +737,7 @@ public class GodmodePvP extends Module {
         lastSelfHpForRubberband = -1;
         activeHole = null;
         heightCalcOrigin = null;
+        buildCoverCooldown = 0;
         lastFireworkTick = -999;
         secondEnemyWarnCooldown = 0;
         lowOnTotems = false;
@@ -866,6 +876,7 @@ public class GodmodePvP extends Module {
     private void doTick() {
         Player self = mc.player;
         currentAction = "-";
+        rotationQueuedThisTick = false;
 
         boolean guiOpen = mc.gui.screen() != null;
         // Nur eine ECHTE Fremd-Container-GUI (Kiste, Ambos, Shulker, ...) hat ein anderes containerMenu
@@ -1284,9 +1295,8 @@ public class GodmodePvP extends Module {
                         FindItemResult fir = InvUtils.findInHotbar(itemStack -> !itemStack.isEmpty() && !itemStack.is(Items.GLOWSTONE));
                         if (!fir.found()) fir = InvUtils.find(itemStack -> !itemStack.isEmpty() && !itemStack.is(Items.GLOWSTONE));
                         if (!fir.found()) continue;
-                        interactAnchorAt(pos, fir);
-                        anchorMaintCooldown = delay(3);
-                        return;
+                        if (interactAnchorAt(pos, fir)) anchorMaintCooldown = delay(3);
+                        return; // Rotations-Slot ist so oder so belegt (versucht oder schon anderweitig vergeben) - naechster Tick
                     } else {
                         FindItemResult gs = InvUtils.findInHotbar(Items.GLOWSTONE);
                         if (!gs.found()) gs = InvUtils.find(Items.GLOWSTONE);
@@ -1294,8 +1304,7 @@ public class GodmodePvP extends Module {
                             outOfGlowstone = true;
                             continue;
                         }
-                        interactAnchorAt(pos, gs);
-                        anchorMaintCooldown = delay(3);
+                        if (interactAnchorAt(pos, gs)) anchorMaintCooldown = delay(3);
                         return;
                     }
                 }
@@ -1304,15 +1313,15 @@ public class GodmodePvP extends Module {
         anchorMaintCooldown = delay(1); // nichts gefunden - naechster voller Scan erst naechsten Tick statt jeden Tick doppelt
     }
 
-    private void interactAnchorAt(BlockPos pos, FindItemResult item) {
+    /** @return true, wenn die Rotation+Interaktion tatsaechlich eingereiht wurde (Rotations-Slot frei war). */
+    private boolean interactAnchorAt(BlockPos pos, FindItemResult item) {
         Vec3 center = Vec3.atCenterOf(pos);
-        Rotations.rotate(Rotations.getYaw(center), Rotations.getPitch(center), () -> {
+        return rotateAndRun(Rotations.getYaw(center), Rotations.getPitch(center), () -> {
             boolean swapped = InvUtils.swap(item.slot(), true);
             BlockUtils.interact(new BlockHitResult(center, BlockUtils.getDirection(pos), pos, true), InteractionHand.MAIN_HAND, true);
             if (swapped) InvUtils.swapBack();
         });
     }
-
     // ---------- Aura-Steuerung ----------
 
     private void selectAura(LivingEntity target) {
@@ -1669,6 +1678,8 @@ public class GodmodePvP extends Module {
         }
         bedUnreachableTicks = 0;
 
+        if (rotationQueuedThisTick) return; // Rotations-Slot diesen Tick schon belegt - naechster Tick
+
         FindItemResult foundBed = InvUtils.findInHotbar(GodmodePvP::isBed);
         if (!foundBed.found()) foundBed = InvUtils.find(GodmodePvP::isBed);
         if (!foundBed.found()) return;
@@ -1678,7 +1689,7 @@ public class GodmodePvP extends Module {
         // Kopfteils richtet sich nach der horizontalen Blickrichtung zum Platzierungszeitpunkt, nicht nach
         // der angeklickten Blockseite. dir.toYRot() ist exakt die Umkehrung von Direction.fromYRot().
         double yaw = spot.dir().toYRot();
-        Rotations.rotate(yaw, 55, () -> {
+        rotateAndRun(yaw, 55, () -> {
             if (BlockUtils.place(spot.pos(), bed, false, 50)) {
                 bedPlaceFails = 0;
                 bedPlaceCooldown = delay(4); // kurze Pause, damit maintainNearbyBeds Zeit zum Zuenden hat
@@ -1723,8 +1734,7 @@ public class GodmodePvP extends Module {
                     double selfDmg = DamageUtils.bedDamage(mc.player, posCenter);
                     if (selfDmg > maxSelfDamage.get()) continue;
 
-                    interactBedAt(pos);
-                    bedMaintCooldown = delay(3);
+                    if (interactBedAt(pos)) bedMaintCooldown = delay(3);
                     return;
                 }
             }
@@ -1732,9 +1742,10 @@ public class GodmodePvP extends Module {
         bedMaintCooldown = delay(1); // nichts gefunden - naechster voller Scan erst naechsten Tick statt jeden Tick doppelt
     }
 
-    private void interactBedAt(BlockPos pos) {
+    /** @return true, wenn die Rotation+Interaktion tatsaechlich eingereiht wurde (Rotations-Slot frei war). */
+    private boolean interactBedAt(BlockPos pos) {
         Vec3 center = Vec3.atCenterOf(pos);
-        Rotations.rotate(Rotations.getYaw(center), Rotations.getPitch(center), () ->
+        return rotateAndRun(Rotations.getYaw(center), Rotations.getPitch(center), () ->
             BlockUtils.interact(new BlockHitResult(center, BlockUtils.getDirection(pos), pos, true), InteractionHand.MAIN_HAND, true)
         );
     }
@@ -1748,6 +1759,18 @@ public class GodmodePvP extends Module {
      *  lesbar (die "normale" Wartezeit steht direkt daneben), aber no-delay hebelt sie zentral aus. */
     private int delay(int ticks) {
         return instantMode.get() ? 0 : ticks;
+    }
+
+    /** Reiht eine Rotation+Aktion nur ein, wenn dieser Tick noch kein Rotations-Slot vergeben ist (siehe
+     *  Feld-Kommentar zu rotationQueuedThisTick). Gibt false zurueck, wenn abgelehnt - der Aufrufer MUSS
+     *  in dem Fall alle eigenen Zustandsaenderungen (Cooldowns, Verbrauchszaehler) unterlassen, damit der
+     *  naechste Tick sauber erneut versuchen kann, statt die Aktion als "erledigt" zu verbuchen, obwohl
+     *  sie nie mit korrekter Blickrichtung ausgefuehrt wurde. */
+    private boolean rotateAndRun(double yaw, double pitch, Runnable callback) {
+        if (rotationQueuedThisTick) return false;
+        rotationQueuedThisTick = true;
+        Rotations.rotate(yaw, pitch, callback);
+        return true;
     }
 
     private static boolean isHealingSplash(ItemStack stack) {
@@ -1789,19 +1812,22 @@ public class GodmodePvP extends Module {
         if (!potion.found()) potion = InvUtils.find(GodmodePvP::isHealingSplash);
         if (!potion.found()) return;
 
-        healPotionCooldown = healCooldown.get();
-        hpAtHealWindowStart = hp;
-        healWindowStartTick = tickCounter;
-
+        boolean thrown;
         if (potion.isOffhand()) {
-            Rotations.rotate(self.getYRot(), 80, () -> mc.gameMode.useItem(mc.player, InteractionHand.OFF_HAND));
+            thrown = rotateAndRun(self.getYRot(), 80, () -> mc.gameMode.useItem(mc.player, InteractionHand.OFF_HAND));
         } else {
             boolean swapped = InvUtils.swap(potion.slot(), true);
-            Rotations.rotate(self.getYRot(), 80, () -> {
+            thrown = rotateAndRun(self.getYRot(), 80, () -> {
                 mc.gameMode.useItem(mc.player, InteractionHand.MAIN_HAND);
                 if (swapped) InvUtils.swapBack();
             });
+            if (!thrown && swapped) InvUtils.swapBack(); // Rotations-Slot belegt - Swap sofort rueckgaengig, kein Trank geworfen
         }
+        if (!thrown) return; // naechster Tick erneut versuchen - Cooldown/Fenster bleiben unveraendert
+
+        healPotionCooldown = healCooldown.get();
+        hpAtHealWindowStart = hp;
+        healWindowStartTick = tickCounter;
     }
 
     /** Haelt Fire Resistance permanent aktiv, solange man sich im Nether befindet - macht Lava-Kontakt,
@@ -1906,9 +1932,10 @@ public class GodmodePvP extends Module {
                 if (!crystal.found()) crystal = InvUtils.find(Items.END_CRYSTAL);
                 if (!crystal.found()) { dtapStage = 0; return; }
 
-                placeCrystal(dtapSpot, crystal);
-                dtapStage = 2;
-                dtapStageTick = tickCounter;
+                if (placeCrystal(dtapSpot, crystal)) {
+                    dtapStage = 2;
+                    dtapStageTick = tickCounter;
+                } // sonst Rotations-Slot belegt - naechster Tick erneut versuchen, Fenster laeuft noch
             }
             case 2 -> { // 1. Crystal steht - sofort zuenden
                 EndCrystal ec = findCrystalAbove(dtapSpot);
@@ -1916,9 +1943,10 @@ public class GodmodePvP extends Module {
                     if (tickCounter - dtapStageTick > 4) dtapStage = 0; // nie angekommen
                     return;
                 }
-                attackCrystal(ec);
-                dtapStage = 3;
-                dtapStageTick = tickCounter;
+                if (attackCrystal(ec)) {
+                    dtapStage = 3;
+                    dtapStageTick = tickCounter;
+                }
             }
             case 3 -> { // Trefferimmunitaet abwarten (~10 Ticks = 0.5s), dann 2. Crystal
                 if (tickCounter - dtapStageTick < 10) return;
@@ -1932,9 +1960,10 @@ public class GodmodePvP extends Module {
                 if (!crystal.found()) crystal = InvUtils.find(Items.END_CRYSTAL);
                 if (!crystal.found()) { dtapStage = 0; return; }
 
-                placeCrystal(dtapSpot, crystal);
-                dtapStage = 4;
-                dtapStageTick = tickCounter;
+                if (placeCrystal(dtapSpot, crystal)) {
+                    dtapStage = 4;
+                    dtapStageTick = tickCounter;
+                }
             }
             case 4 -> { // 2. Crystal steht - zuenden, fertig
                 EndCrystal ec = findCrystalAbove(dtapSpot);
@@ -1942,17 +1971,19 @@ public class GodmodePvP extends Module {
                     if (tickCounter - dtapStageTick > 4) { dtapStage = 0; dtapCooldown = delay(30); }
                     return;
                 }
-                attackCrystal(ec);
-                dtapStage = 0;
-                dtapCooldown = delay(40);
+                if (attackCrystal(ec)) {
+                    dtapStage = 0;
+                    dtapCooldown = delay(40);
+                }
             }
             default -> dtapStage = 0;
         }
     }
 
-    private void placeCrystal(BlockPos floor, FindItemResult item) {
+    /** @return true, wenn die Rotation+Platzierung tatsaechlich eingereiht wurde (Rotations-Slot frei war). */
+    private boolean placeCrystal(BlockPos floor, FindItemResult item) {
         Vec3 center = Vec3.atCenterOf(floor);
-        Rotations.rotate(Rotations.getYaw(center), Rotations.getPitch(center), () -> {
+        return rotateAndRun(Rotations.getYaw(center), Rotations.getPitch(center), () -> {
             boolean swapped = InvUtils.swap(item.slot(), true);
             BlockUtils.interact(new BlockHitResult(center, BlockUtils.getDirection(floor), floor, true), InteractionHand.MAIN_HAND, true);
             if (swapped) InvUtils.swapBack();
@@ -1965,9 +1996,10 @@ public class GodmodePvP extends Module {
         return null;
     }
 
-    private void attackCrystal(EndCrystal ec) {
+    /** @return true, wenn die Rotation+Attacke tatsaechlich eingereiht wurde (Rotations-Slot frei war). */
+    private boolean attackCrystal(EndCrystal ec) {
         Vec3 center = ec.getBoundingBox().getCenter();
-        Rotations.rotate(Rotations.getYaw(center), Rotations.getPitch(center), () -> {
+        return rotateAndRun(Rotations.getYaw(center), Rotations.getPitch(center), () -> {
             mc.gameMode.attack(mc.player, ec);
             mc.player.swing(InteractionHand.MAIN_HAND);
         });
@@ -2317,6 +2349,8 @@ public class GodmodePvP extends Module {
      *  verwerfen. Findet sich nichts Natuerliches, wird notfalls selbst Deckung gebaut. Liefert true,
      *  solange Baritones CustomGoalProcess unterwegs ist - dann soll updateFollow() diesen Tick pausieren. */
     private boolean updateHolePositioning(LivingEntity target, double dist) {
+        if (buildCoverCooldown > 0) buildCoverCooldown--;
+
         if ((!holeAwareness.get() && !heightAdvantage.get()) || dist > 8) {
             activeHole = null;
             return false;
@@ -2326,8 +2360,14 @@ public class GodmodePvP extends Module {
 
         if (best == null) {
             activeHole = null;
-            if (buildCover.get() && dist <= 4.5) {
+            // Cooldown, statt jeden Tick neu zu versuchen: ohne ihn rief updateHolePositioning() das
+            // hier JEDEN Tick auf, solange kein natuerliches Loch gefunden wurde - der Bot hat sich damit
+            // Seite fuer Seite komplett selbst eingemauert (jede Platzierung eine eigene Rotation +
+            // Block-Paket), was sich als Lag bemerkbar machte UND ihn am Ende blind/bewegungsunfaehig
+            // in seiner eigenen Kiste stehen liess.
+            if (buildCover.get() && dist <= 4.5 && buildCoverCooldown <= 0) {
                 buildOwnCover(mc.player, target);
+                buildCoverCooldown = 30;
                 currentAction = "deckung-bauen";
             }
             return false;
@@ -2566,16 +2606,20 @@ public class GodmodePvP extends Module {
             return;
         }
 
-        lastPearlTick = tickCounter;
-
         if (pearl.isOffhand()) {
-            Rotations.rotate(yaw, pitch, () -> mc.gameMode.useItem(mc.player, InteractionHand.OFF_HAND));
+            if (rotateAndRun(yaw, pitch, () -> mc.gameMode.useItem(mc.player, InteractionHand.OFF_HAND))) {
+                lastPearlTick = tickCounter;
+            }
         } else {
             boolean swapped = InvUtils.swap(pearl.slot(), true);
-            Rotations.rotate(yaw, pitch, () -> {
+            if (rotateAndRun(yaw, pitch, () -> {
                 mc.gameMode.useItem(mc.player, InteractionHand.MAIN_HAND);
                 if (swapped) InvUtils.swapBack();
-            });
+            })) {
+                lastPearlTick = tickCounter;
+            } else if (swapped) {
+                InvUtils.swapBack(); // Rotations-Slot belegt - Swap sofort rueckgaengig, kein Wurf, kein Cooldown verbraucht
+            }
         }
     }
 
@@ -2585,16 +2629,20 @@ public class GodmodePvP extends Module {
         if (!pearl.found()) pearl = InvUtils.find(Items.ENDER_PEARL);
         if (!pearl.found()) return;
 
-        lastPearlTick = tickCounter;
-
         if (pearl.isOffhand()) {
-            Rotations.rotate(mc.player.getYRot(), 80, () -> mc.gameMode.useItem(mc.player, InteractionHand.OFF_HAND));
+            if (rotateAndRun(mc.player.getYRot(), 80, () -> mc.gameMode.useItem(mc.player, InteractionHand.OFF_HAND))) {
+                lastPearlTick = tickCounter;
+            }
         } else {
             boolean swapped = InvUtils.swap(pearl.slot(), true);
-            Rotations.rotate(mc.player.getYRot(), 80, () -> {
+            if (rotateAndRun(mc.player.getYRot(), 80, () -> {
                 mc.gameMode.useItem(mc.player, InteractionHand.MAIN_HAND);
                 if (swapped) InvUtils.swapBack();
-            });
+            })) {
+                lastPearlTick = tickCounter;
+            } else if (swapped) {
+                InvUtils.swapBack();
+            }
         }
     }
 
