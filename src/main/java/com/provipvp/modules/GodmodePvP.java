@@ -767,6 +767,12 @@ public class GodmodePvP extends Module {
         bs.allowParkour.value = true;
         bs.allowParkourAscend.value = true;
         bs.allowParkourPlace.value = true;
+        // Baritones eigene Bruecken-/Pillar-Logik (parkour-place) darf zwar bauen, greift aber ins
+        // Leere: die Default-Liste "erlaubter Wegwerf-Bloecke" ist [Dirt, Cobblestone, Netherrack,
+        // Stone] - nichts davon fuehren wir mit. Obsidian ist der einzige echte Ueberschuss-Block im
+        // Inventar (D-Tap/Deckung/Anchor-Unterbau) - ohne diesen Eintrag war allowParkourPlace die ganze
+        // Zeit ein reines No-Op, weil Baritone schlicht nichts hatte, das es platzieren durfte.
+        bs.acceptableThrowawayItems.value = new java.util.ArrayList<>(java.util.List.of(Items.OBSIDIAN));
         bs.sprintAscends.value = true;
         bs.allowSprint.value = true;
         // Diagonal ab-/aufsteigen: kuerzere, direktere Pfade (kein Umweg ueber zwei Kardinalschritte) -
@@ -2115,11 +2121,19 @@ public class GodmodePvP extends Module {
         if (len < 0.001) return false;
         double dx = diff.x / len;
         double dz = diff.z / len;
+        // Senkrechte Richtung zur Korridor-Verbreiterung - eine reine 1-Block-Linie direkt aufs Ziel
+        // verfehlte Feuer, das nur leicht daneben lag oder eine wegen eines Kraters/Hindernisses
+        // gekruemmte Baritone-Route blockierte, obwohl der Bot sichtbar direkt daneben durchlief.
+        double px = -dz, pz = dx;
 
         int steps = (int) Math.min(len, 6);
         for (int step = 1; step <= steps; step++) {
-            BlockPos p = here.offset((int) Math.round(dx * step), 0, (int) Math.round(dz * step));
-            if (isFireBlock(p) || isFireBlock(p.above())) return true;
+            double cx = here.getX() + dx * step;
+            double cz = here.getZ() + dz * step;
+            for (int side = -1; side <= 1; side++) {
+                BlockPos p = BlockPos.containing(cx + px * side + 0.5, here.getY(), cz + pz * side + 0.5);
+                if (isFireBlock(p) || isFireBlock(p.above())) return true;
+            }
         }
         return false;
     }
