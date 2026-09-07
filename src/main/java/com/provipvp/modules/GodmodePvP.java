@@ -842,7 +842,7 @@ public class GodmodePvP extends Module {
                 anchorCandidateIndex = 0;
             }
         }
-        if (tickCounter % 20 == 0) syncMobFilter();
+        syncMobFilter(); // rein clientseitiger Reflection-Sync (keine Serverpakete) - so schnell wie moeglich statt gedrosselt
 
         try {
             doTick();
