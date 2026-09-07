@@ -18,13 +18,13 @@ nothing described in the [README](README.md) is hardcoded. Defaults are the valu
 | `pop-threshold` | `8.0` | HP drop counted as a totem pop. |
 | `prediction-ticks` | `5` | How far ahead enemy movement is predicted for attacks. |
 | `ignore-fire` | `true` | Walks straight through ground fire in melee range instead of pathing around it (Baritone otherwise treats fire as hard-impassable). |
-| `free-look` | `false` | Silent rotations: the bot still aims/turns correctly for attacks, placements, and target tracking (the outgoing packet carries the correct look direction), but your own camera stays free to look around. **Off by default** — separate rotation packets with no matching camera movement are one of the most classic anti-cheat detection signatures (Vulcan/Grim/Matrix/NCP all have explicit rotation checks for exactly this), and can cause movement corrections/rubberbanding on servers with active anti-cheat. |
+| `free-look` | `false` | Silent rotations: the bot still aims/turns correctly for attacks, placements, and target tracking (the outgoing packet carries the correct look direction), but your own camera stays free to look around. **Off by default** — separate rotation packets with no matching camera movement are one of the most classic anti-cheat detection signatures (Vulcan/Grim/Matrix/NCP all have explicit rotation checks for exactly this), and can cause movement corrections/rubberbanding on servers with active anti-cheat. The continuous target-tracking/circle-strafe look (outside an actual attack/placement) now yields the shared per-tick rotation slot to any real combat action instead of silently claiming it first — previously, with `free-look` on, this cosmetic tracking could beat a same-tick pearl throw, Anchor/Bed interaction, or Crystal placement to Meteor's rotation queue and make that action fire with the *previous* tick's stale look direction instead of its own. |
 
 ### Combat
 
 | Setting | Default | Description |
 |---|---|---|
-| `smart-auras` | `true` | Chooses Crystal or Anchor based on a real damage calculation. With zero End Crystals AND zero (Respawn Anchor + Glowstone) in the inventory, skips the whole damage/position simulation and forces melee-only instead of endlessly re-simulating and toggling Meteor's CrystalAura for items that don't exist (that dead-weight simulation was itself a source of visible movement stutter). |
+| `smart-auras` | `true` | Chooses Crystal or Anchor based on a real damage calculation. With zero End Crystals AND zero (Respawn Anchor + Glowstone) in the inventory, skips the whole damage/position simulation and forces melee-only instead of endlessly re-simulating and toggling Meteor's CrystalAura for items that don't exist (that dead-weight simulation was itself a source of visible movement stutter). Turning this **off** now correctly falls back to simple always-Crystal mode instead of freezing all explosion combat — it used to leave the internal aura state stuck at its "nothing decided yet" initial value forever (since only this calculation ever advanced it), silently disabling Crystal/Anchor/Bed placement entirely and dropping to pure melee. |
 | `anchor-mode` | `1` | `0` = automatic (always max damage), `1` = use Anchor even on a damage tie, `2` = off. |
 | `use-anchors` | `true` | Allow Anchors at all (costs 1 Glowstone per detonation). |
 | `use-beds` | `false` | Bed Aura: places and detonates beds as an explosive (damage value 5.0, same as Anchor). Only works outside the Overworld (Nether/End — e.g. portal camping on 5b5t); the client can't verify this ahead of time, only the server decides. Off by default so beds aren't wasted in the Overworld (where using one just sleeps/sets your spawn point instead of exploding). When both an Anchor and a Bed are viable, whichever deals more damage wins — Anchor only needs 1 Glowstone, so it's usually the more efficient default on an exact tie. |
@@ -60,7 +60,7 @@ nothing described in the [README](README.md) is hardcoded. Defaults are the valu
 | `hole-awareness` | `true` | Looks for a nearby one-block-deep, open-topped hole in close combat and uses it as a fighting position instead of standing in the open. |
 | `height-advantage` | `true` | Prefers a position lower than the target — your own explosions deal more damage from there, the enemy's deal less. Once a spot is chosen it's held onto until the target moves more than 2 blocks or the spot stops being valid, instead of recalculating from scratch every tick — without that stickiness, tiny movement noise (a slope half-step, target strafing) could flip the choice between "go lower" and "just walk closer" several times a second, spamming Baritone with a new path every tick (visible stutter, and hits/explosions landing unreliably since the bot never settled into either option). |
 | `avoid-lava` | `true` | Skips crystal/anchor placement spots directly next to lava (Nether lakes, bedrock pools) — prevents self-ignition and unleashing a flood of lava after the explosion. |
-| `auto-fire-res` | `true` | Drinks a Fire Resistance potion automatically whenever you're in the Nether and don't already have one active — makes lava contact, fire, and burning explosion damage irrelevant. Runs independently of whether a fight is happening. |
+| `auto-fire-res` | `true` | Drinks a Fire Resistance potion automatically whenever you're in the Nether and don't already have one active — makes lava contact, fire, and burning explosion damage irrelevant. Runs independently of whether a fight is happening. While a drink is in progress (up to 2s) or the shield is actively blocking, the other one is now prevented from starting, and every other action that briefly swaps hotbar items (melee axe/mace swap, shield-break, Anchor/Bed interaction, Crystal placement, pearl throws, elytra firework boost) skips itself for that tick instead of overwriting the drink's held swap-back slot — previously any of those firing mid-drink could leave the bot stuck holding the wrong item once the drink finished. |
 | `build-cover` | `true` | Places obsidian to close an open side when no natural hole is nearby. Never places it in the direction facing the target — a straightforward-sounding "wall myself in" used to occasionally brick the bot's own line of sight to the enemy right in the middle of a fight (no melee, no explosions, just standing there), if the only open neighboring block happened to be the one between the bot and its target. |
 | `peek-tactic` | `true` | Crouches in cover while nothing is actively happening, only standing up briefly to attack. |
 | `retreat-threshold` | `true` | Breaks off the fight (retreats) once totems drop below 2 **and** there are no Crystal/Anchor resources left. |
@@ -117,7 +117,7 @@ core as `GodmodePvP`, with these differences:
 | `engage-distance` | `14` | Same sticky-engagement behavior as `GodmodePvP`, tuned to a shorter range. |
 | `attack-range` | `3.4` | Same as `GodmodePvP`'s `attack-range`, tuned slightly shorter by default. |
 | `smart-targeting` / `backup-range` | `true` / `10.0` | Same isolated-target preference and target-identity stickiness as `GodmodePvP`. |
-| `free-look` | `false` | Same silent-rotation behavior as `GodmodePvP` — off by default for the same anti-cheat-detection reason. |
+| `free-look` | `false` | Same silent-rotation behavior as `GodmodePvP` — off by default for the same anti-cheat-detection reason. The continuous smoothed look-tracking now yields the shared per-tick rotation slot to any real action (pearl throw, Anchor interaction) instead of silently claiming it first, same fix as `GodmodePvP`. |
 | `reaction-min` / `reaction-max` | `3` / `9` ticks | Randomized reaction delay before engaging a newly acquired target — no instant snap-to-target. |
 | `attack-chance` | `0.9` | Probability that a "ready" hit is actually thrown, simulating human misclicks. |
 | `aim-tolerance` | `4.0°` | Aim tolerance before a hit or placement is executed. |
@@ -130,7 +130,9 @@ All other Combat/Defense/Inventory/Pearl/Healing settings mirror `GodmodePvP` (s
 defaults) unless listed above — including `use-beds` and the three `heal-*` settings. One mechanical difference:
 placing a bed needs an exact 90°-aligned facing (for the head-part direction), so unlike every other action in
 this module it uses one brief, precise rotation snap instead of the usual gradual human-paced turn, regardless
-of `free-look`.
+of `free-look`. A brief target loss/switch no longer abandons an already-placed-and-loading Anchor (the internal
+stage no longer resets to "searching" on engagement loss) — it now finishes charging/detonating the Anchor once
+a target reappears, the same "finish what's already started" behavior the Bed sequence already had.
 
 ## TrainingDummy
 

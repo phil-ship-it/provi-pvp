@@ -593,6 +593,8 @@ public class GodmodePvP extends Module {
     private int tickCounter;
     private int auraMode = -1;
     private int lastErrorWarnTick = -999;
+    private boolean pendingFreeLook;
+    private double pendingFreeLookYaw, pendingFreeLookPitch;
     private boolean warnedLowTotems;
     private boolean warnedOutOfCrystals;
     private boolean warnedOutOfAnchorSupply;
@@ -691,6 +693,7 @@ public class GodmodePvP extends Module {
     public void onActivate() {
         tickCounter = 0;
         auraMode = -1;
+        lastErrorWarnTick = -999;
         savedPlaceDelay = -1;
         popBurstUntil = 0;
         anchorPlaceCooldown = 0;
@@ -877,6 +880,7 @@ public class GodmodePvP extends Module {
         Player self = mc.player;
         currentAction = "-";
         rotationQueuedThisTick = false;
+        pendingFreeLook = false;
 
         boolean guiOpen = mc.gui.screen() != null;
         // Nur eine ECHTE Fremd-Container-GUI (Kiste, Ambos, Shulker, ...) hat ein anderes containerMenu
@@ -935,7 +939,9 @@ public class GodmodePvP extends Module {
         if (trackTarget.get() && !flying && dist > 3.6) {
             Vec3 lookAt = predict(target);
             if (freeLook.get()) {
-                Rotations.rotate(Rotations.getYaw(lookAt), Rotations.getPitch(lookAt));
+                pendingFreeLook = true;
+                pendingFreeLookYaw = Rotations.getYaw(lookAt);
+                pendingFreeLookPitch = Rotations.getPitch(lookAt);
             } else {
                 mc.player.setYRot((float) Rotations.getYaw(lookAt));
                 mc.player.setXRot((float) Rotations.getPitch(lookAt));
@@ -1132,7 +1138,14 @@ public class GodmodePvP extends Module {
             runDtapTick(target);
             currentAction = "d-tap";
         } else {
-            if (smartAuras.get()) selectAura(target);
+            if (smartAuras.get()) {
+                selectAura(target);
+            } else if (auraMode != 0) {
+                // Smart-Auswahl aus: immer einfacher Crystal-Modus statt fuer immer beim Initialwert (-1)
+                // haengen zu bleiben - sonst wuerde das Ausschalten dieser reinen Auswahl-Einstellung
+                // versehentlich die GESAMTE Explosions-Kampflogik (Crystal/Anchor/Bett) stilllegen.
+                auraMode = 0;
+            }
 
             if (auraMode == 1) {
                 // 3s ohne neue Platzierung -> nicht ewig auf unerreichbaren/erschoepften Kandidaten
@@ -1184,6 +1197,16 @@ public class GodmodePvP extends Module {
         trackPop(target);
         trackPop(self);
         trackTotemEffect(target);
+
+        // Cosmetic Ziel-Verfolgung (free-look) nur anwenden, wenn diesen Tick noch keine echte
+        // Kampfaktion (Perlwurf, Anchor/Bett-Interaktion, Crystal-Platzierung, ...) den gemeinsamen
+        // Rotations-Slot belegt hat - sonst wuerde diese rein optische Drehung lautlos vor der
+        // eigentlichen Aktion in Meteors Rotations-Queue landen und deren Callback mit der alten,
+        // zurueckgesetzten Blickrichtung ausfuehren (siehe rotateAndRun-Dokumentation).
+        if (pendingFreeLook && !rotationQueuedThisTick) {
+            rotationQueuedThisTick = true;
+            Rotations.rotate(pendingFreeLookYaw, pendingFreeLookPitch);
+        }
     }
 
     @Override
@@ -1193,6 +1216,7 @@ public class GodmodePvP extends Module {
 
     /** Schild in die Haupthand (Offhand bleibt frei fuer den Totem) und blocken - reduziert Explosionsschaden. */
     private void startBlock() {
+        if (drinkingFireRes) return; // Feuerresistenz-Trank haelt gerade den gemeinsamen Swap-Merkposten - nicht ueberschreiben
         FindItemResult shield = InvUtils.findInHotbar(Items.SHIELD);
         if (!shield.found()) shield = InvUtils.find(Items.SHIELD);
         if (!shield.found()) return;
@@ -1315,6 +1339,7 @@ public class GodmodePvP extends Module {
 
     /** @return true, wenn die Rotation+Interaktion tatsaechlich eingereiht wurde (Rotations-Slot frei war). */
     private boolean interactAnchorAt(BlockPos pos, FindItemResult item) {
+        if (drinkingFireRes) return false; // s.o. - Swap-Merkposten waehrend des Trinkens nicht anfassen
         Vec3 center = Vec3.atCenterOf(pos);
         return rotateAndRun(Rotations.getYaw(center), Rotations.getPitch(center), () -> {
             boolean swapped = InvUtils.swap(item.slot(), true);
@@ -1744,6 +1769,7 @@ public class GodmodePvP extends Module {
 
     /** @return true, wenn die Rotation+Interaktion tatsaechlich eingereiht wurde (Rotations-Slot frei war). */
     private boolean interactBedAt(BlockPos pos) {
+        if (drinkingFireRes) return false; // s.o. - Swap-Merkposten waehrend des Trinkens nicht anfassen
         Vec3 center = Vec3.atCenterOf(pos);
         return rotateAndRun(Rotations.getYaw(center), Rotations.getPitch(center), () ->
             BlockUtils.interact(new BlockHitResult(center, BlockUtils.getDirection(pos), pos, true), InteractionHand.MAIN_HAND, true)
@@ -1843,6 +1869,7 @@ public class GodmodePvP extends Module {
             return;
         }
 
+        if (blocking) return; // Schild-Swap laeuft gerade - nicht mit einem eigenen Trank-Swap ueberschreiben
         if (!autoFireRes.get()) return;
         if (mc.level == null || mc.level.dimension() != Level.NETHER) return;
         if (mc.player.hasEffect(MobEffects.FIRE_RESISTANCE)) return;
@@ -1989,6 +2016,7 @@ public class GodmodePvP extends Module {
 
     /** @return true, wenn die Rotation+Platzierung tatsaechlich eingereiht wurde (Rotations-Slot frei war). */
     private boolean placeCrystal(BlockPos floor, FindItemResult item) {
+        if (drinkingFireRes) return false; // s.o. - Swap-Merkposten waehrend des Trinkens nicht anfassen
         Vec3 center = Vec3.atCenterOf(floor);
         return rotateAndRun(Rotations.getYaw(center), Rotations.getPitch(center), () -> {
             boolean swapped = InvUtils.swap(item.slot(), true);
@@ -2123,7 +2151,9 @@ public class GodmodePvP extends Module {
 
         Vec3 center = target.getBoundingBox().getCenter();
         if (freeLook.get()) {
-            Rotations.rotate(Rotations.getYaw(center), Rotations.getPitch(center));
+            pendingFreeLook = true;
+            pendingFreeLookYaw = Rotations.getYaw(center);
+            pendingFreeLookPitch = Rotations.getPitch(center);
         } else {
             mc.player.setYRot((float) Rotations.getYaw(center));
             mc.player.setXRot((float) Rotations.getPitch(center));
@@ -2186,6 +2216,7 @@ public class GodmodePvP extends Module {
     /** Feuerwerk-Boost, wenn die Fluggeschwindigkeit beim Gleiten zu niedrig wird (Elytra-Flugkampf). */
     private void updateElytraFlight() {
         if (!elytraCombat.get() || !mc.player.isFallFlying()) return;
+        if (drinkingFireRes) return; // s.o. - Swap-Merkposten waehrend des Trinkens nicht anfassen
 
         Vec3 vel = mc.player.getDeltaMovement();
         double speed = Math.sqrt(vel.x * vel.x + vel.z * vel.z);
@@ -2568,6 +2599,7 @@ public class GodmodePvP extends Module {
     }
 
     private void attackMelee(LivingEntity target) {
+        if (drinkingFireRes) return; // s.o. - Swap-Merkposten waehrend des Trinkens nicht anfassen
         boolean swapped = false;
         if (useMace.get() && mc.player.fallDistance > 1.5f) {
             FindItemResult mace = InvUtils.findInHotbar(itemStack -> itemStack.getItem() instanceof MaceItem);
@@ -2588,6 +2620,7 @@ public class GodmodePvP extends Module {
     }
 
     private void breakShield(Player target) {
+        if (drinkingFireRes) return; // s.o. - Swap-Merkposten waehrend des Trinkens nicht anfassen
         FindItemResult axe = InvUtils.findInHotbar(itemStack -> itemStack.getItem() instanceof AxeItem);
         if (!axe.found()) return;
 
@@ -2598,6 +2631,7 @@ public class GodmodePvP extends Module {
     }
 
     private void throwPearl(LivingEntity aimAt, boolean away) {
+        if (drinkingFireRes) return; // s.o. - Swap-Merkposten waehrend des Trinkens nicht anfassen
         FindItemResult pearl = InvUtils.findInHotbar(Items.ENDER_PEARL);
         if (!pearl.found()) pearl = InvUtils.find(Items.ENDER_PEARL);
         if (!pearl.found()) return;
@@ -2632,6 +2666,7 @@ public class GodmodePvP extends Module {
 
     /** Perle senkrecht nach unten - teleportiert bei Landung, kein unkontrolliertes Fallen nach Knockback. */
     private void throwPearlDown() {
+        if (drinkingFireRes) return; // s.o. - Swap-Merkposten waehrend des Trinkens nicht anfassen
         FindItemResult pearl = InvUtils.findInHotbar(Items.ENDER_PEARL);
         if (!pearl.found()) pearl = InvUtils.find(Items.ENDER_PEARL);
         if (!pearl.found()) return;

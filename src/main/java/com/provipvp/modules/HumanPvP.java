@@ -455,6 +455,8 @@ public class HumanPvP extends Module {
     // Tick angemeldeten Rotationen nur die ERSTE mit der tatsaechlich gesetzten Blickrichtung aus - jede
     // weitere bekommt beim Ausfuehren ihres Callbacks schon wieder die alte Rotation zurueckgesetzt.
     private boolean rotationQueuedThisTick;
+    private boolean pendingFreeLook;
+    private double pendingFreeLookYaw, pendingFreeLookPitch;
     private int sprintResetCooldown;
     private float lastSelfHpForKnockback = -1;
     private Vec3 lastSelfPos;
@@ -610,6 +612,10 @@ public class HumanPvP extends Module {
             blocking = false;
             blockingSwapBack = false;
         }
+        if (drinkingFireRes) {
+            InvUtils.swapBack();
+            drinkingFireRes = false;
+        }
         warnedOutOfMisc.clear();
         Input.setKeyState(mc.options.keySprint, false);
         mc.player.setSprinting(false);
@@ -646,6 +652,7 @@ public class HumanPvP extends Module {
         Player self = mc.player;
         currentAction = "-";
         rotationQueuedThisTick = false;
+        pendingFreeLook = false;
         boolean guiOpen = mc.gui.screen() != null;
         // Nur eine echte Fremd-Container-GUI hat ein anderes containerMenu als das normale Inventar -
         // Meteor-ClickGUI/eigenes Inventar teilen sich inventoryMenu, Totem-Nachlegen darf da weiterlaufen.
@@ -779,6 +786,16 @@ public class HumanPvP extends Module {
         }
 
         if (currentAction.equals("-")) currentAction = auraMode == 0 ? "crystal" : "zielen";
+
+        // Cosmetic Ziel-Verfolgung (free-look) nur anwenden, wenn diesen Tick noch keine echte
+        // Kampfaktion (Perlwurf, Anchor-Interaktion, ...) den gemeinsamen Rotations-Slot belegt hat -
+        // sonst wuerde diese rein optische Drehung lautlos vor der eigentlichen Aktion in Meteors
+        // Rotations-Queue landen und deren Callback mit der alten, zurueckgesetzten Blickrichtung
+        // ausfuehren (siehe rotateAndRun-Dokumentation).
+        if (pendingFreeLook && !rotationQueuedThisTick) {
+            rotationQueuedThisTick = true;
+            Rotations.rotate(pendingFreeLookYaw, pendingFreeLookPitch);
+        }
     }
 
     @Override
@@ -794,7 +811,12 @@ public class HumanPvP extends Module {
         engagedId = null;
         engageAtTick = 0;
         nextClickTick = -1;
-        anchorStage = 0;
+        // anchorStage wird hier BEWUSST NICHT zurueckgesetzt (anders als in einer frueheren Version):
+        // ein kurzer Ziel-Verlust/-Wechsel wuerde sonst einen bereits platzierten und teilweise
+        // geladenen Anchor komplett verwaisen lassen (Investition futsch, nie gezuendet) - exakt das
+        // gleiche "begonnene Aktion zu Ende bringen"-Verhalten wie beim Bett (bedStage bleibt hier
+        // ebenfalls unangetastet). runAnchorTick() pausiert einfach ohne Ziel und macht beim naechsten
+        // Ziel an der gleichen Stelle weiter.
         pursuing = false;
         aimInitialized = false;
     }
@@ -851,7 +873,9 @@ public class HumanPvP extends Module {
             aimYaw = newYaw;
             aimPitch = newPitch;
             aimInitialized = true;
-            Rotations.rotate(aimYaw, aimPitch);
+            pendingFreeLook = true;
+            pendingFreeLookYaw = aimYaw;
+            pendingFreeLookPitch = aimPitch;
         } else {
             aimInitialized = false;
             mc.player.setYRot(newYaw);
@@ -885,6 +909,7 @@ public class HumanPvP extends Module {
 
     /** Schild in die Haupthand (Offhand bleibt frei fuer den Totem) und blocken - reduziert Explosionsschaden. */
     private void startBlock() {
+        if (drinkingFireRes) return; // Feuerresistenz-Trank haelt gerade den gemeinsamen Swap-Merkposten - nicht ueberschreiben
         FindItemResult shield = InvUtils.findInHotbar(Items.SHIELD);
         if (!shield.found()) shield = InvUtils.find(Items.SHIELD);
         if (!shield.found()) return;
@@ -914,6 +939,7 @@ public class HumanPvP extends Module {
     // ---------- Anchor-Executor (humanisiert: sichtbare Rotation + zufaellige Wartezeiten) ----------
 
     private void runAnchorTick(LivingEntity target, double aimError) {
+        if (drinkingFireRes) return; // s.o. - Swap-Merkposten waehrend des Trinkens nicht anfassen
         if (anchorCooldown > 0) {
             anchorCooldown--;
             return;
@@ -1008,6 +1034,7 @@ public class HumanPvP extends Module {
 
     /** Interagiert nur, wenn die (sichtbare, tempolimitierte) Rotation schon nah genug am Ziel ist. */
     private boolean interactAnchor(FindItemResult item, double currentError) {
+        if (drinkingFireRes) return false; // s.o. - Swap-Merkposten waehrend des Trinkens nicht anfassen
         Vec3 center = Vec3.atCenterOf(anchorPos);
         smoothLookAt(center);
         if (currentAimError(center) > aimTolerance.get()) return false;
@@ -1378,6 +1405,7 @@ public class HumanPvP extends Module {
             return;
         }
 
+        if (blocking) return; // Schild-Swap laeuft gerade - nicht mit einem eigenen Trank-Swap ueberschreiben
         if (!autoFireRes.get()) return;
         if (mc.level == null || mc.level.dimension() != Level.NETHER) return;
         if (mc.player.hasEffect(MobEffects.FIRE_RESISTANCE)) return;
@@ -1512,6 +1540,7 @@ public class HumanPvP extends Module {
     }
 
     private void attackMelee(LivingEntity target) {
+        if (drinkingFireRes) return; // s.o. - Swap-Merkposten waehrend des Trinkens nicht anfassen
         boolean swapped = false;
         if (preferAxeMelee.get()) {
             FindItemResult axe = InvUtils.findInHotbar(itemStack -> itemStack.getItem() instanceof AxeItem);
@@ -1526,6 +1555,7 @@ public class HumanPvP extends Module {
     }
 
     private void breakShield(Player target) {
+        if (drinkingFireRes) return; // s.o. - Swap-Merkposten waehrend des Trinkens nicht anfassen
         FindItemResult axe = InvUtils.findInHotbar(itemStack -> itemStack.getItem() instanceof AxeItem);
         if (!axe.found()) return;
 
@@ -1536,6 +1566,7 @@ public class HumanPvP extends Module {
     }
 
     private void throwPearl(LivingEntity aimAt, boolean away) {
+        if (drinkingFireRes) return; // s.o. - Swap-Merkposten waehrend des Trinkens nicht anfassen
         FindItemResult pearl = InvUtils.findInHotbar(Items.ENDER_PEARL);
         if (!pearl.found()) pearl = InvUtils.find(Items.ENDER_PEARL);
         if (!pearl.found()) return;
@@ -1568,6 +1599,7 @@ public class HumanPvP extends Module {
 
     /** Perle senkrecht nach unten - teleportiert bei Landung, kein unkontrolliertes Fallen nach Knockback. */
     private void throwPearlDown() {
+        if (drinkingFireRes) return; // s.o. - Swap-Merkposten waehrend des Trinkens nicht anfassen
         FindItemResult pearl = InvUtils.findInHotbar(Items.ENDER_PEARL);
         if (!pearl.found()) pearl = InvUtils.find(Items.ENDER_PEARL);
         if (!pearl.found()) return;
