@@ -625,6 +625,7 @@ public class GodmodePvP extends Module {
     private int nextStrafeSwitchTick = -1;
     private float lastSelfHpForRubberband = -1;
     private BlockPos activeHole;
+    private BlockPos heightCalcOrigin;
     private int lastFireworkTick = -999;
     private int secondEnemyWarnCooldown;
     private boolean lowOnTotems;
@@ -726,6 +727,7 @@ public class GodmodePvP extends Module {
         rubberbandCooldown = 0;
         lastSelfHpForRubberband = -1;
         activeHole = null;
+        heightCalcOrigin = null;
         lastFireworkTick = -999;
         secondEnemyWarnCooldown = 0;
         lowOnTotems = false;
@@ -895,6 +897,7 @@ public class GodmodePvP extends Module {
             dtapStage = 0;
             cancelFollow();
             activeHole = null;
+            heightCalcOrigin = null;
             Input.setKeyState(mc.options.keyLeft, false);
             Input.setKeyState(mc.options.keyRight, false);
             mc.player.setShiftKeyDown(false);
@@ -1086,6 +1089,7 @@ public class GodmodePvP extends Module {
         if (!engaged) {
             cancelFollow();
             activeHole = null;
+            heightCalcOrigin = null;
             currentAction = "beobachten-fern";
         } else if (flying) {
             updateFollow(target);
@@ -2196,9 +2200,24 @@ public class GodmodePvP extends Module {
     /** Scannt einen 7x7-Bereich (dx/dz -3..3) UM DAS ZIEL herum, spaltenweise von 3 ueber bis 4 unter
      *  Ziel-Hoehe, und liefert die niedrigste erreichbare stehbare Stelle - eigene Explosionen treffen
      *  von dort mehr, gegnerische treffen weniger. Nur Kandidaten, die tatsaechlich niedriger als die
-     *  aktuelle eigene Position und in vertretbarer Laufdistanz liegen, zaehlen. */
+     *  aktuelle eigene Position und in vertretbarer Laufdistanz liegen, zaehlen.
+     *
+     *  Einmal gewaehlte Stelle bleibt bestehen, bis das Ziel sich meaningful (>2 Bloecke, gleiche
+     *  Schwelle wie bei Anchor-/Bett-Kandidaten) bewegt hat oder ungueltig wird - sonst kippt die
+     *  Entscheidung "tiefer gehen vs. direkt naeher laufen" bei jeder kleinen Bewegungsschwankung
+     *  (Slope-Halbschritt beim Laufen, Ziel-Zittern beim Strafen) mehrmals pro Sekunde hin und her:
+     *  ohne diese Stabilisierung flippt findBestPosition() zwischen "Kandidat gefunden" (-> Loch-Pfad)
+     *  und "nichts gefunden" (-> direkte Verfolgung) und Baritone bekommt jeden Tick ein neues Ziel. */
     private BlockPos findLowestAroundTarget(Player self, LivingEntity target) {
         BlockPos targetPos = target.blockPosition();
+
+        if (activeHole != null && heightCalcOrigin != null && heightCalcOrigin.distSqr(targetPos) <= 4
+            && isStandable(activeHole)
+            && Math.sqrt(self.distanceToSqr(Vec3.atCenterOf(activeHole))) <= 8.0) {
+            return activeHole;
+        }
+
+        heightCalcOrigin = targetPos;
         BlockPos best = null;
         int bestY = self.blockPosition().getY();
         double selfX = self.getX(), selfZ = self.getZ();
