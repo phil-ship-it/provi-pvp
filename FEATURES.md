@@ -100,8 +100,8 @@ nothing described in the [README](README.md) is hardcoded. Defaults are the valu
 | Setting | Default | Description |
 |---|---|---|
 | `heal-potions` | `true` | Throws a Splash Potion of Healing/Strong Healing at your own feet the instant fresh damage is detected — it shatters on the ground right there and heals immediately. Works regardless of combat/engage state, so it also covers fall/fire/environmental damage, not just hits taken mid-fight. Needs a Splash Healing potion in inventory (works fine as a 64-stack on servers with expanded stack sizes). |
-| `heal-min-damage` | `3.0` | At least this much HP must have been lost since the last tick before a potion is thrown at all — prevents wasting a potion on every tiny scratch (fall damage, thorns). |
-| `heal-cooldown` | `20` | Minimum ticks between two thrown potions — stops a single multi-hit combo from burning several potions at once. |
+| `heal-min-damage` | `3.0` | HP lost within a short rolling window (0.4s) must reach this before a potion is thrown — prevents wasting a potion on every tiny scratch, while still catching a hit whose damage/knockback ticks land a frame or two apart (which a strict single-tick comparison used to miss entirely, making throws feel late/skipped). |
+| `heal-cooldown` | `12` | Minimum ticks between two thrown potions — stops a single multi-hit combo from burning several potions at once, without stalling badly under sustained pressure (multiple pops in quick succession). Skipped entirely while actively shield-blocking or drinking Fire Resistance, since both hold Meteor's shared hotbar-swap-back slot for several ticks — throwing a potion in the middle would silently corrupt that slot and leave the module stuck on the wrong item once the block/drink ends. |
 
 ## HumanPvP (`.hpvp`)
 

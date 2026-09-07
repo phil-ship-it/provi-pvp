@@ -420,8 +420,8 @@ public class HumanPvP extends Module {
 
     public final Setting<Integer> healCooldown = sgHeal.add(new IntSetting.Builder()
         .name("heal-cooldown")
-        .description("Mindestabstand (Ticks) zwischen zwei geworfenen Heiltraenken.")
-        .defaultValue(20)
+        .description("Mindestabstand (Ticks) zwischen zwei geworfenen Heiltraenken - verhindert, dass ein einzelner Mehrfach-Treffer-Combo sofort mehrere Traenke auf einmal verbraucht, ohne bei anhaltendem Druck spuerbar zu blockieren.")
+        .defaultValue(12)
         .range(0, 100)
         .sliderRange(0, 100)
         .build()
@@ -479,7 +479,8 @@ public class HumanPvP extends Module {
     private BlockPos bedCalcOrigin;
     private double bestBedDmgCache;
 
-    private float lastHpForHealPotion = -1;
+    private float hpAtHealWindowStart = -999;
+    private int healWindowStartTick = -999;
     private int healPotionCooldown;
 
     private record BedSpot(BlockPos pos, Direction dir) {}
@@ -527,7 +528,8 @@ public class HumanPvP extends Module {
         bedCandidateIndex = 0;
         bedCalcOrigin = null;
         bestBedDmgCache = 0;
-        lastHpForHealPotion = -1;
+        hpAtHealWindowStart = -999;
+        healWindowStartTick = -999;
         healPotionCooldown = 0;
         lastTrapTick = -999;
         nextTotemCheckTick = -999;
@@ -1615,17 +1617,28 @@ public class HumanPvP extends Module {
     }
 
     /** Wirft sofort eine Splash-Heiltraenke (Instant Health) zu den eigenen Fuessen, sobald frischer
-     *  Schaden erkannt wird (HP-Delta zum letzten Tick ueber heal-min-damage) - der Trank zerschellt
-     *  direkt am Boden und heilt augenblicklich. Laeuft unabhaengig vom Kampf-/Engage-Zustand. */
+     *  Schaden erkannt wird - der Trank zerschellt direkt am Boden und heilt augenblicklich. Laeuft
+     *  unabhaengig vom Kampf-/Engage-Zustand.
+     *
+     *  Zwei Korrekturen gegenueber der ersten Version (siehe GodmodePvP fuer Details): Schaden wird ueber
+     *  ein kurzes Zeitfenster (8 Ticks/0.4s) aufsummiert statt nur Tick-zu-Tick verglichen (ein Treffer
+     *  verteilt sich oft ueber mehrere Ticks), und der Wurf wird waehrend `blocking`/`drinkingFireRes`
+     *  komplett uebersprungen - beide teilen sich mit diesem Wurf denselben globalen
+     *  InvUtils.previousSlot-Merkposten fuer ihren eigenen, laenger andauernden Hotbar-Swap; ein
+     *  dazwischengefunkter swapBack() ueberschrieb den Merkposten und liess das Modul im Schild-/
+     *  Trank-Zustand haengenbleiben bzw. auf die falsche Waffe wechseln. */
     private void maintainHealPotions(Player self) {
         if (healPotionCooldown > 0) healPotionCooldown--;
 
         float hp = self.getHealth();
-        float lastHp = lastHpForHealPotion;
-        lastHpForHealPotion = hp;
-        if (!healPotions.get() || lastHp < 0 || healPotionCooldown > 0) return;
+        if (tickCounter - healWindowStartTick > 8 || hp > hpAtHealWindowStart) {
+            hpAtHealWindowStart = hp;
+            healWindowStartTick = tickCounter;
+        }
 
-        float dmg = lastHp - hp;
+        if (!healPotions.get() || blocking || drinkingFireRes || healPotionCooldown > 0) return;
+
+        float dmg = hpAtHealWindowStart - hp;
         if (dmg < healMinDamage.get()) return;
 
         FindItemResult potion = InvUtils.findInHotbar(HumanPvP::isHealingSplash);
@@ -1633,6 +1646,8 @@ public class HumanPvP extends Module {
         if (!potion.found()) return;
 
         healPotionCooldown = healCooldown.get();
+        hpAtHealWindowStart = hp;
+        healWindowStartTick = tickCounter;
 
         if (potion.isOffhand()) {
             Rotations.rotate(self.getYRot(), 80, () -> mc.gameMode.useItem(mc.player, InteractionHand.OFF_HAND));

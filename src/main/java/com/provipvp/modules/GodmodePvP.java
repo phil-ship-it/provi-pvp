@@ -552,8 +552,8 @@ public class GodmodePvP extends Module {
 
     public final Setting<Integer> healCooldown = sgHeal.add(new IntSetting.Builder()
         .name("heal-cooldown")
-        .description("Mindestabstand (Ticks) zwischen zwei geworfenen Heiltraenken - verhindert, dass ein einzelner Mehrfach-Treffer-Combo sofort mehrere Traenke auf einmal verbraucht.")
-        .defaultValue(20)
+        .description("Mindestabstand (Ticks) zwischen zwei geworfenen Heiltraenken - verhindert, dass ein einzelner Mehrfach-Treffer-Combo sofort mehrere Traenke auf einmal verbraucht, ohne bei anhaltendem Druck (mehrere Pops kurz hintereinander) spuerbar zu blockieren.")
+        .defaultValue(12)
         .range(0, 100)
         .sliderRange(0, 100)
         .build()
@@ -636,7 +636,8 @@ public class GodmodePvP extends Module {
 
     // Heiltraenke: Schaden-Delta pro Tick verfolgen, um frischen Treffern sofort einen Splash-Heiltrank
     // entgegenzusetzen.
-    private float lastHpForHealPotion = -1;
+    private float hpAtHealWindowStart = -999;
+    private int healWindowStartTick = -999;
     private int healPotionCooldown;
 
     private record BedSpot(BlockPos pos, Direction dir) {}
@@ -671,7 +672,8 @@ public class GodmodePvP extends Module {
         bedCandidates.clear();
         bedCandidateIndex = 0;
         lastBedProgressTick = 0;
-        lastHpForHealPotion = -1;
+        hpAtHealWindowStart = -999;
+        healWindowStartTick = -999;
         healPotionCooldown = 0;
         drinkingFireRes = false;
         fireResStartTick = -999;
@@ -1710,18 +1712,32 @@ public class GodmodePvP extends Module {
     }
 
     /** Wirft sofort eine Splash-Heiltraenke (Instant Health) zu den eigenen Fuessen, sobald frischer
-     *  Schaden erkannt wird (HP-Delta zum letzten Tick ueber heal-min-damage) - der Trank zerschellt
-     *  direkt am Boden und heilt augenblicklich. Laeuft unabhaengig vom Kampf-/Engage-Zustand, damit auch
-     *  Fall-/Feuer-/Umweltschaden abgefedert wird, nicht nur Treffer im aktiven Gefecht. */
+     *  Schaden erkannt wird - der Trank zerschellt direkt am Boden und heilt augenblicklich. Laeuft
+     *  unabhaengig vom Kampf-/Engage-Zustand, damit auch Fall-/Feuer-/Umweltschaden abgefedert wird.
+     *
+     *  Zwei Korrekturen gegenueber der ersten Version:
+     *  1) Schaden wird ueber ein kurzes Zeitfenster (8 Ticks/0.4s) aufsummiert statt nur Tick-zu-Tick
+     *     verglichen - ein Crystal-/Anchor-Treffer verteilt sich oft ueber 2+ Ticks (Knockback- und
+     *     Schadens-Tick getrennt), wodurch jeder einzelne Tick fuer sich unter heal-min-damage bleiben
+     *     kann, obwohl der Gesamtschaden klar ueber der Schwelle liegt - genau das liess Wuerfe bisher
+     *     "zu spaet" wirken.
+     *  2) Wird komplett uebersprungen, waehrend `blocking` (aktives Schild) oder `drinkingFireRes` laeuft:
+     *     beide nutzen denselben globalen InvUtils.previousSlot-Merkposten fuer ihren eigenen, mehrere
+     *     Ticks andauernden Hotbar-Swap. Ein dazwischengefunkter Heiltrank-Swap+swapBack() ueberschreibt
+     *     diesen Merkposten und liefert beim Zurueckwechseln den FALSCHEN Slot - das Modul "haengt" dann
+     *     im Schild/Trank-Zustand fest bzw. wechselt auf die falsche Waffe (die gemeldeten Aussetzer). */
     private void maintainHealPotions(Player self) {
         if (healPotionCooldown > 0) healPotionCooldown--;
 
         float hp = self.getHealth();
-        float lastHp = lastHpForHealPotion;
-        lastHpForHealPotion = hp;
-        if (!healPotions.get() || lastHp < 0 || healPotionCooldown > 0) return;
+        if (tickCounter - healWindowStartTick > 8 || hp > hpAtHealWindowStart) {
+            hpAtHealWindowStart = hp;
+            healWindowStartTick = tickCounter;
+        }
 
-        float dmg = lastHp - hp;
+        if (!healPotions.get() || blocking || drinkingFireRes || healPotionCooldown > 0) return;
+
+        float dmg = hpAtHealWindowStart - hp;
         if (dmg < healMinDamage.get()) return;
 
         FindItemResult potion = InvUtils.findInHotbar(GodmodePvP::isHealingSplash);
@@ -1729,6 +1745,8 @@ public class GodmodePvP extends Module {
         if (!potion.found()) return;
 
         healPotionCooldown = healCooldown.get();
+        hpAtHealWindowStart = hp;
+        healWindowStartTick = tickCounter;
 
         if (potion.isOffhand()) {
             Rotations.rotate(self.getYRot(), 80, () -> mc.gameMode.useItem(mc.player, InteractionHand.OFF_HAND));
