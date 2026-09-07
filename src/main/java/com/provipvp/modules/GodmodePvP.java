@@ -2506,8 +2506,15 @@ public class GodmodePvP extends Module {
      *  pro Tick, damit die Vorhersage der echten Wurfparabel folgt statt geradeaus davonzulaufen - sonst zielt
      *  Crystal/Anchor-Platzierung bei einem in der Luft befindlichen Gegner systematisch daneben. */
     private Vec3 predict(LivingEntity target) {
+        return predictOverTicks(target, leadTicks.get());
+    }
+
+    /** Wie predict(), aber mit frei waehlbarer Tick-Anzahl statt der festen 'lead-ticks'-Einstellung - fuer
+     *  Faelle mit eigener, datengetriebener Vorlaufzeit statt eines fixen kurzen Vorhersage-Fensters (z.B.
+     *  die tatsaechliche Flugzeit eines Perlwurfs, die je nach Distanz stark variiert). */
+    private Vec3 predictOverTicks(LivingEntity target, int ticks) {
+        if (ticks <= 0) return target.position();
         Vec3 vel = velocities.getOrDefault(target.getUUID(), Vec3.ZERO);
-        int ticks = leadTicks.get();
 
         if (target.onGround()) {
             return target.position().add(vel.scale(ticks));
@@ -2697,8 +2704,22 @@ public class GodmodePvP extends Module {
             yaw = Rotations.getYaw(aimAt) + 180.0;
             pitch = -20;
         } else if (aimAt != null) {
-            yaw = Rotations.getYaw(aimAt);
-            pitch = solvePearlPitch(mc.player.getEyePosition().subtract(0, 0.1, 0), yaw, aimAt.getBoundingBox().getCenter());
+            // Auf einen bewegten (v.a. in der Luft befindlichen, fallenden/geworfenen) Gegner reicht die
+            // aktuelle Position als Zielpunkt nicht - die Perle braucht je nach Distanz oft 0.5-2s Flugzeit,
+            // in der sich das Ziel spuerbar weiterbewegt (Ursache fuer "Perlen sind nicht akkurat, wenn der
+            // Gegner in der Luft ist"). Iteriert kurz zwischen "Pitch fuer den aktuellen Zielpunkt loesen"
+            // und "Zielpunkt anhand der dabei ermittelten Flugzeit neu vorhersagen" - konvergiert in der
+            // Praxis nach 2-3 Runden, da die Korrektur pro Runde schnell kleiner wird.
+            Vec3 from = mc.player.getEyePosition().subtract(0, 0.1, 0);
+            Vec3 aimPoint = aimAt.getBoundingBox().getCenter();
+            double[] arrivalTicks = {0};
+            yaw = Rotations.getYaw(aimPoint);
+            pitch = solvePearlPitch(from, yaw, aimPoint, arrivalTicks);
+            for (int i = 0; i < 2; i++) {
+                aimPoint = predictOverTicks(aimAt, (int) Math.round(arrivalTicks[0]));
+                yaw = Rotations.getYaw(aimPoint);
+                pitch = solvePearlPitch(from, yaw, aimPoint, arrivalTicks);
+            }
         } else {
             return;
         }
@@ -2728,25 +2749,30 @@ public class GodmodePvP extends Module {
      *  instead of guessing a fixed arc offset. Falls back to the direct look-pitch if nothing in the
      *  bounded search range lands close (never happens in practice within pearl-gapclose's own range caps,
      *  purely a safety net). */
-    private double solvePearlPitch(Vec3 from, double yaw, Vec3 to) {
+    private double solvePearlPitch(Vec3 from, double yaw, Vec3 to, double[] arrivalTicksOut) {
         double dx = to.x - from.x, dz = to.z - from.z;
         double distXZ = Math.sqrt(dx * dx + dz * dz);
         double dy = to.y - from.y;
         double directPitch = Math.toDegrees(-Math.atan2(dy, distXZ));
-        if (distXZ < 0.5) return directPitch; // praktisch am eigenen Fuss - keine Ballistik noetig
+        if (distXZ < 0.5) { // praktisch am eigenen Fuss - keine Ballistik noetig
+            if (arrivalTicksOut != null) arrivalTicksOut[0] = 0;
+            return directPitch;
+        }
 
         double lo = directPitch - 40; // mehr nach oben -> mehr Resthoehe am Ziel
         double hi = directPitch;      // direkter Blick -> am Ziel definitionsgemaess zu niedrig (Schwerkraft)
 
         for (int i = 0; i < 40; i++) {
             double mid = (lo + hi) / 2;
-            double heightAtDist = simulatePearlHeightAt(yaw, mid, distXZ);
+            double heightAtDist = simulatePearlHeightAt(yaw, mid, distXZ, null);
             // NaN (Distanz nie erreicht, zu steil nach oben verschossen) zaehlt wie "deutlich zu hoch" -
             // also wie beim Ueberschiessen weniger Korrektur nach oben nehmen.
             boolean overshootsHeight = Double.isNaN(heightAtDist) || heightAtDist > dy;
             if (overshootsHeight) lo = mid; else hi = mid;
         }
-        return (lo + hi) / 2;
+        double finalPitch = (lo + hi) / 2;
+        if (arrivalTicksOut != null) simulatePearlHeightAt(yaw, finalPitch, distXZ, arrivalTicksOut);
+        return finalPitch;
     }
 
     /** Simuliert einen Perlenwurf mit gegebenem Yaw/Pitch nach Minecrafts eigener Projektil-Physik
@@ -2754,7 +2780,7 @@ public class GodmodePvP extends Module {
      *  pos += v) und liefert die Hoehe relativ zum Startpunkt, sobald die Perle horizontal targetDistXZ
      *  erreicht hat (zwischen den beiden umgebenden Ticks linear interpoliert). NaN, wenn sie die Distanz
      *  innerhalb von 300 Ticks (15s, weit jenseits jeder echten Wurfdistanz) nie erreicht. */
-    private double simulatePearlHeightAt(double yaw, double pitch, double targetDistXZ) {
+    private double simulatePearlHeightAt(double yaw, double pitch, double targetDistXZ, double[] arrivalTicksOut) {
         double yawRad = Math.toRadians(yaw), pitchRad = Math.toRadians(pitch);
         double vx = -Math.sin(yawRad) * Math.cos(pitchRad);
         double vy = -Math.sin(pitchRad);
@@ -2780,9 +2806,11 @@ public class GodmodePvP extends Module {
             double distXZ = Math.sqrt(x * x + z * z);
             if (distXZ >= targetDistXZ) {
                 double frac = distXZ > prevDistXZ ? (targetDistXZ - prevDistXZ) / (distXZ - prevDistXZ) : 1.0;
+                if (arrivalTicksOut != null) arrivalTicksOut[0] = tick + frac;
                 return prevY + (y - prevY) * frac;
             }
         }
+        if (arrivalTicksOut != null) arrivalTicksOut[0] = 300;
         return Double.NaN;
     }
 
@@ -2836,7 +2864,11 @@ public class GodmodePvP extends Module {
         if (mode == 1 && dist > 6) return;
         if (mc.gui.screen() != null || tickCounter % 3 != 0) return;
 
-        BlockPos feet = target.blockPosition();
+        // In der Luft (Sprung, Knockback, Anchor-/Crystal-Wurf) hat die AKTUELLE Position kein tragendes
+        // Blockdarunter zum draufkleben - ohne Vorhersage versagte das Web hier komplett, bis der Gegner
+        // wieder gelandet war. Dieselbe Kurzzeit-Vorhersage wie fuer D-Tap/Crystal-Platzierung nutzen,
+        // damit das Web dort wartet, wo der Gegner voraussichtlich als naechstes ist.
+        BlockPos feet = target.onGround() ? target.blockPosition() : BlockPos.containing(predict(target));
         if (feet.equals(mc.player.blockPosition())) return; // sonst web(t) sich der Bot bei Ueberlappung selbst ein
         if (!mc.level.getBlockState(feet).isAir()) return;
         if (!mc.level.getBlockState(feet.below()).blocksMotion()) return;
