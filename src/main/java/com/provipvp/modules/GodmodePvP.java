@@ -1889,7 +1889,13 @@ public class GodmodePvP extends Module {
 
     /** Sucht rund um die vorhergesagte Landeposition eine gueltige Crystal-Basis (bestehendes Obsidian/
      *  Bedrock oder freie Luft zum selbst Obsidian setzen) mit maximalem Schaden am Ziel. Der Eigenschaden-
-     *  Deckel wird verschaerft (60%), weil bei D-Tap zwei Explosionen in ca. 0.5s Abstand zusammenkommen. */
+     *  Deckel wird verschaerft (60%), weil bei D-Tap zwei Explosionen in ca. 0.5s Abstand zusammenkommen.
+     *
+     *  Kandidaten muessen zusaetzlich in Reichweite des BOTS liegen (nicht nur nahe der Ziel-Vorhersage):
+     *  bei starkem Knockback (Ziel fliegt hoch/weit) kann die extrapolierte Landeposition deutlich vom
+     *  Bot abweichen - ohne diese Pruefung landete der Obsidian-Unterbau gelegentlich freischwebend
+     *  ausser Reichweite, der nachfolgende Crystal-Platzierungsversuch schlug dann lautlos fehl und
+     *  der Bot blieb wirkungslos vor dem selbstgebauten Turm stehen. */
     private BlockPos findDtapSpot(LivingEntity target, Vec3 predicted) {
         int bx = (int) Math.floor(predicted.x);
         int by = (int) Math.floor(predicted.y);
@@ -1903,6 +1909,7 @@ public class GodmodePvP extends Module {
                 for (int dy = -1; dy <= 1; dy++) {
                     BlockPos floor = new BlockPos(bx + dx, by + dy, bz + dz);
                     BlockPos cell = floor.above();
+                    if (Math.sqrt(mc.player.distanceToSqr(Vec3.atCenterOf(cell))) > 4.5) continue;
                     if (!validExplosionSpot(cell, true)) continue;
                     if (hitsFriend(Vec3.atCenterOf(cell), true)) continue;
 

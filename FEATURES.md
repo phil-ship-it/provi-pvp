@@ -37,7 +37,7 @@ nothing described in the [README](README.md) is hardcoded. Defaults are the valu
 | `sprint-reset` | `true` | W-tap: briefly cancels and re-enables sprint before every melee hit so *every* hit gets the sprint-knockback bonus, not just the first of a sprint sequence. |
 | `track-target` | `true` | Keeps looking at the target's predicted position outside melee-strafe range, instead of only during a single aim action. |
 | `crit-jump` | `true` | Jumps right before swinging so the hit lands while falling (+50% damage) — the same thing real top-tier players do. |
-| `d-tap` | `true` | After a knockback hit, places obsidian in the predicted flight path and detonates two Crystals spaced at the hit-invulnerability window, for a fast double-totem-pop. |
+| `d-tap` | `true` | After a knockback hit, places obsidian in the predicted flight path and detonates two Crystals spaced at the hit-invulnerability window, for a fast double-totem-pop. Candidate floor spots must be within the bot's own reach (4.5 blocks), not just near the target's predicted position — on a hard vertical/horizontal launch the prediction can drift well past that, and without this check the bot occasionally built an obsidian pillar it couldn't actually reach to follow up on, leaving it standing there doing nothing. |
 | `use-mace` | `true` | Uses the Mace over axe/sword for finishing hits while falling (Smash Attack bonus). |
 | `elytra-combat` | `true` | Firework boost when gliding speed drops too low during elytra combat. |
 | `zero-delay` | `true` | Sets CrystalAura's placement delay to 0 (instant reaction). |
