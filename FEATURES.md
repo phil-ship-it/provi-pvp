@@ -29,8 +29,8 @@ nothing described in the [README](README.md) is hardcoded. Defaults are the valu
 | `use-anchors` | `true` | Allow Anchors at all (costs 1 Glowstone per detonation). |
 | `use-beds` | `false` | Bed Aura: places and detonates beds as an explosive (damage value 5.0, same as Anchor). Only works outside the Overworld (Nether/End — e.g. portal camping on 5b5t); the client can't verify this ahead of time, only the server decides. Off by default so beds aren't wasted in the Overworld (where using one just sleeps/sets your spawn point instead of exploding). When both an Anchor and a Bed are viable, whichever deals more damage wins — Anchor only needs 1 Glowstone, so it's usually the more efficient default on an exact tie. |
 | `no-delay` | `false` | Instant mode: strips out every remaining artificial wait — Anchor/Bed placement and maintenance pauses, D-Tap cooldown, all ender pearl throw cooldowns. Pure speed over caution: can burn through pearls/Anchors/Beds faster than the server can actually process the resulting actions. Two exceptions stay active regardless — the aura-switch hysteresis and the `min-support-delay` floor — because those aren't caution, they're technical requirements: removing them broke Crystal placement's sequence-number prediction entirely (0 damage from any source, confirmed in testing) rather than just making things faster. |
-| `pre-hit` | `true` | Melees the target right before the explosion for extra damage. |
-| `melee-fallback` | `true` | Melees normally whenever no explosion is actually about to land (e.g. Crystal mode is on but there's no obsidian left for a support block in open air, or no valid spot at all) — without this, the bot previously just stood there once every explosive option stopped being genuinely achievable, even while `pre-hit`'s own condition kept reporting "explosion imminent" just because CrystalAura was switched on. |
+| `pre-hit` | `false` | Melees the target right before the explosion for extra damage. Off by default — vanilla's attack cooldown (~0.5-0.6s depending on weapon) is pure wasted time against an Anchor/Crystal barrage; without this extra hit, Anchor and Crystal can fire back-to-back as fast as the server can process them. |
+| `melee-fallback` | `false` | Melees normally whenever no explosion is actually about to land (e.g. Crystal mode is on but there's no obsidian left for a support block in open air, or no valid spot at all). Off by default for the same reason as `pre-hit` — costs only the attack cooldown while Anchor/Crystal could immediately try again. Only enable if the bot is genuinely out of Crystals/Anchors/Beds and should still throw hands instead of just following. |
 | `prefer-axe-melee` | `true` | Automatically swaps to the axe for melee hits (axe-swap meta). |
 | `shield-breaker` | `true` | Swaps to the axe against a blocking target. |
 | `melee-strafe` | `true` | Faces the target and circle-strafes in melee — harder to hit, varies the explosion angle. Direction switches on a randomized interval, not a fixed period. |
@@ -136,11 +136,16 @@ a target reappears, the same "finish what's already started" behavior the Bed se
 
 ## TrainingDummy
 
+Melee hits use the real vanilla knockback formula (`LivingEntity#knockback`) instead of arbitrary sliders:
+base strength 0.4, existing velocity halved rather than replaced (so a hit mid-knockback blends instead of
+overriding), vertical boost only applied while the dummy is on the ground (airborne hits keep the existing
+fall speed, exactly like a real player), and both a sprint bonus (sprint roughly doubles knockback per the
+Minecraft Wiki) and the attacker's actual Knockback-enchant level are taken into account.
+
 | Setting | Default | Description |
 |---|---|---|
 | `health` | `20` | Dummy's HP — can be changed live while it's running. |
-| `kb-strength` | `0.5` | Horizontal knockback strength. |
-| `kb-up` | `0.4` | Vertical knockback (launch height). |
+| `real-explosion-hits` | `true` | The dummy also reacts to nearby Crystal/Anchor/Bed explosions with real damage and knockback, not just melee hits — detected by the Crystal/Anchor/Bed disappearing between two ticks (an Anchor's charge dropping counts too). Damage comes from Meteor's own `DamageUtils` (the same real line-of-sight-aware calculation GodmodePvP/HumanPvP use for their own targeting), and the knockback direction/strength is derived from that same calculation — the dummy launches further from a closer, more exposed hit, same as a real player would. |
 | `auto-respawn` | `true` | Respawns the dummy when it dies or disappears. |
 | `invincible` | `false` | HP never reaches 0 — no despawn/respawn needed, uninterrupted practice. |
 

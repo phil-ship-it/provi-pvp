@@ -4,17 +4,28 @@ import meteordevelopment.meteorclient.events.entity.player.AttackEntityEvent;
 import meteordevelopment.meteorclient.events.world.TickEvent;
 import meteordevelopment.meteorclient.MeteorClient;
 import meteordevelopment.meteorclient.settings.BoolSetting;
-import meteordevelopment.meteorclient.settings.DoubleSetting;
 import meteordevelopment.meteorclient.settings.IntSetting;
 import meteordevelopment.meteorclient.settings.Setting;
-import net.minecraft.core.BlockPos;
 import meteordevelopment.meteorclient.settings.SettingGroup;
-import net.minecraft.world.phys.Vec3;
 import meteordevelopment.meteorclient.utils.Utils;
 import meteordevelopment.meteorclient.utils.entity.DamageUtils;
 import meteordevelopment.meteorclient.utils.entity.fakeplayer.FakePlayerEntity;
 import meteordevelopment.meteorclient.systems.modules.Module;
 import meteordevelopment.orbit.EventHandler;
+import net.minecraft.core.BlockPos;
+import net.minecraft.world.entity.boss.enderdragon.EndCrystal;
+import net.minecraft.world.entity.player.Player;
+import net.minecraft.world.item.enchantment.Enchantments;
+import net.minecraft.world.level.block.BedBlock;
+import net.minecraft.world.level.block.Blocks;
+import net.minecraft.world.level.block.state.properties.BlockStateProperties;
+import net.minecraft.world.phys.AABB;
+import net.minecraft.world.phys.Vec3;
+
+import java.util.HashMap;
+import java.util.HashSet;
+import java.util.Map;
+import java.util.Set;
 
 public class TrainingDummy extends Module {
     private final SettingGroup sgGeneral = settings.getDefaultGroup();
@@ -28,21 +39,10 @@ public class TrainingDummy extends Module {
         .build()
     );
 
-    public final Setting<Double> kbStrength = sgGeneral.add(new DoubleSetting.Builder()
-        .name("kb-strength")
-        .description("Staerke des horizontalen Knockbacks.")
-        .defaultValue(0.5)
-        .range(0.1, 1.5)
-        .sliderRange(0.1, 1.0)
-        .build()
-    );
-
-    public final Setting<Double> kbUp = sgGeneral.add(new DoubleSetting.Builder()
-        .name("kb-up")
-        .description("Vertikaler Knockback (Hoehe).")
-        .defaultValue(0.4)
-        .range(0.0, 1.0)
-        .sliderRange(0.0, 0.8)
+    public final Setting<Boolean> realExplosionHits = sgGeneral.add(new BoolSetting.Builder()
+        .name("real-explosion-hits")
+        .description("Der Dummy reagiert auch auf Crystal-/Anchor-/Bett-Explosionen in der Naehe mit echtem Schaden und Rueckstoss (nicht nur auf Nahkampf-Treffer) - erkannt daran, dass das jeweilige Crystal/der Anchor/das Bett zwischen zwei Ticks verschwindet.")
+        .defaultValue(true)
         .build()
     );
 
@@ -65,8 +65,15 @@ public class TrainingDummy extends Module {
     private int appliedHealth = -1;
     private Vec3 velocity = Vec3.ZERO;
 
+    // Explosions-Erkennung: pro Tick verglichen mit dem vorherigen Snapshot - ein Crystal/Anchor/Bett, das
+    // zwischen zwei Ticks verschwindet (bzw. beim Anchor: dessen Ladung sinkt), hat gerade detoniert.
+    private final Set<Integer> trackedCrystalIds = new HashSet<>();
+    private final Map<Integer, Vec3> lastCrystalPos = new HashMap<>();
+    private final Map<BlockPos, Integer> trackedAnchorCharges = new HashMap<>();
+    private final Set<BlockPos> trackedBeds = new HashSet<>();
+
     public TrainingDummy() {
-        super(com.provipvp.ProviPvPAddon.CATEGORY, "training-dummy", "Spawnt einen Dummy mit einstellbarer HP, Schaden und Knockback - auch vom PvP-Bot.");
+        super(com.provipvp.ProviPvPAddon.CATEGORY, "training-dummy", "Spawnt einen Dummy mit einstellbarer HP - Nahkampf-Knockback UND Crystal-/Anchor-/Bett-Explosionen wirken wie bei einem echten Spieler, ausgeloest vom PvP-Bot oder manuell.");
     }
 
     @Override
@@ -89,7 +96,13 @@ public class TrainingDummy extends Module {
         dummy.spawn();
         spawnLevel = mc.level;
         appliedHealth = dummyHealth.get();
-        info("Dummy gespawnt (HP %d) - Bot und Manuell-Schlaege machen Schaden + Knockback.", dummyHealth.get());
+        // Neuer Dummy -> alte Explosions-Snapshots sind wertlos (koennten sonst faelschlich eine laengst
+        // verschwundene Crystal/einen laengst geladenen Anchor vom VORHERIGEN Dummy als Treffer werten).
+        trackedCrystalIds.clear();
+        lastCrystalPos.clear();
+        trackedAnchorCharges.clear();
+        trackedBeds.clear();
+        info("Dummy gespawnt (HP %d) - Nahkampf UND Crystal/Anchor/Bett-Explosionen machen echten Schaden + Knockback.", dummyHealth.get());
     }
 
     /** HP live aendern: ueber 20 HP wird Absorption genutzt. */
@@ -103,7 +116,12 @@ public class TrainingDummy extends Module {
         }
     }
 
-    /** Schaden + Knockback, wenn IRGENDETWER (Bot, KillAura, du) den Dummy schlaegt. */
+    /** Schaden + Knockback, wenn IRGENDETWER (Bot, KillAura, du) den Dummy schlaegt - echte Vanilla-
+     *  Rueckstoss-Formel (siehe LivingEntity#knockback): bestehende Geschwindigkeit wird halbiert statt
+     *  ersetzt, der neue Schub kommt oben drauf; der vertikale Anteil wird nur dann auf 0.4 angehoben,
+     *  wenn der Dummy gerade am Boden steht (in der Luft getroffen behaelt er seine Fallgeschwindigkeit -
+     *  exakt wie bei einem echten Spieler). Beruecksichtigt Sprint-Bonus und die Knockback-Verzauberung
+     *  der tatsaechlich gehaltenen Waffe. */
     @EventHandler
     public void onAttack(AttackEntityEvent event) {
         if (dummy == null || event.entity != dummy) return;
@@ -120,15 +138,25 @@ public class TrainingDummy extends Module {
         }
         if (dmg > 0) dummy.setHealth(Math.max(invincible.get() ? 1.0f : 0.0f, dummy.getHealth() - dmg));
 
-        // Knockback als Eigengeschwindigkeit (eigene Physik integriert sie pro Tick)
-        Vec3 push = dummy.position().subtract(mc.player.position());
-        push = new Vec3(push.x, 0, push.z);
-        if (push.lengthSqr() > 0.01) {
-            push = push.normalize();
-            velocity = new Vec3(push.x * kbStrength.get(), kbUp.get(), push.z * kbStrength.get());
-        } else {
-            velocity = new Vec3(0, kbUp.get(), 0);
-        }
+        applyMeleeKnockback(mc.player);
+    }
+
+    /** Vanilla-Basiswert 0.4 (siehe LivingEntity#knockback), +0.4 bei Sprint-Treffer ("sprint doubles
+     *  knockback" - Minecraft Wiki), + pro Knockback-Stufe der Waffe skaliert auf denselben Faktor wie
+     *  die von der Wiki dokumentierte Reichweiten-Erhoehung (2.586/1.552 Bloecke Zusatzstrecke pro Stufe
+     *  gegenueber der 1.552-Bloecke-Basisreichweite). */
+    private void applyMeleeKnockback(Player attacker) {
+        double strength = 0.4;
+        if (attacker.isSprinting()) strength += 0.4;
+        int kbLevel = Utils.getEnchantmentLevel(attacker.getMainHandItem(), Enchantments.KNOCKBACK);
+        strength += kbLevel * 0.4 * (2.586 / 1.552);
+
+        Vec3 towardAttacker = attacker.position().subtract(dummy.position());
+        towardAttacker = new Vec3(towardAttacker.x, 0, towardAttacker.z);
+        towardAttacker = towardAttacker.lengthSqr() > 1.0E-4 ? towardAttacker.normalize() : new Vec3(0, 0, 1);
+
+        double newVy = dummy.onGround() ? Math.min(0.4, velocity.y / 2.0 + strength) : velocity.y;
+        velocity = new Vec3(velocity.x / 2.0 - towardAttacker.x * strength, newVy, velocity.z / 2.0 - towardAttacker.z * strength);
     }
 
     @EventHandler
@@ -161,6 +189,8 @@ public class TrainingDummy extends Module {
             applyHealth(dummyHealth.get());
             appliedHealth = dummyHealth.get();
         }
+
+        checkExplosions();
 
         // Eigene Physik: Remote-Player integrieren deltaMovement nicht selbst
         Vec3 pos = dummy.position();
@@ -195,6 +225,94 @@ public class TrainingDummy extends Module {
         }
 
         dummy.setPos(nx, ny, nz);
+    }
+
+    /** Scannt Crystals/Anchors/Betten im 16-Block-Radius; verschwindet eines zwischen zwei Ticks (bzw.
+     *  sinkt bei einem Anchor die Ladung), ist genau das die Detonation. Schaden kommt aus Meteors eigener
+     *  DamageUtils - dieselbe Berechnung, die GodmodePvP/HumanPvP auch fuer die eigene Zielauswahl nutzen,
+     *  inklusive echter Explosions-Sichtlinien-Pruefung. Der Rueckstoss wird aus der bereits berechneten
+     *  Schadenszahl zurueckgerechnet (damage = (impact^2+impact)/2*84+1 -> impact), derselben Groesse, die
+     *  Vanilla intern auch fuer den tatsaechlichen Explosions-Rueckstoss verwendet - der Dummy traegt
+     *  planmaessig keine Ruestung, sonst waere die Ruecktransformation nicht mehr exakt. */
+    private void checkExplosions() {
+        if (!realExplosionHits.get()) return;
+
+        Vec3 center = dummy.position();
+        AABB scanBox = new AABB(center.x - 16, center.y - 16, center.z - 16, center.x + 16, center.y + 16, center.z + 16);
+
+        Set<Integer> currentCrystals = new HashSet<>();
+        for (EndCrystal ec : mc.level.getEntitiesOfClass(EndCrystal.class, scanBox)) {
+            currentCrystals.add(ec.getId());
+            lastCrystalPos.put(ec.getId(), ec.position());
+        }
+        for (int id : trackedCrystalIds) {
+            if (!currentCrystals.contains(id)) {
+                Vec3 pos = lastCrystalPos.remove(id);
+                if (pos != null) applyExplosion(pos, DamageUtils.crystalDamage(dummy, pos));
+            }
+        }
+        trackedCrystalIds.clear();
+        trackedCrystalIds.addAll(currentCrystals);
+
+        BlockPos dCenter = dummy.blockPosition();
+        Map<BlockPos, Integer> currentAnchors = new HashMap<>();
+        Set<BlockPos> currentBeds = new HashSet<>();
+        for (int dx = -5; dx <= 5; dx++) {
+            for (int dy = -5; dy <= 5; dy++) {
+                for (int dz = -5; dz <= 5; dz++) {
+                    BlockPos p = dCenter.offset(dx, dy, dz);
+                    var state = mc.level.getBlockState(p);
+                    if (state.is(Blocks.RESPAWN_ANCHOR)) {
+                        currentAnchors.put(p, state.getValue(BlockStateProperties.RESPAWN_ANCHOR_CHARGES));
+                    } else if (state.getBlock() instanceof BedBlock) {
+                        currentBeds.add(p);
+                    }
+                }
+            }
+        }
+        for (Map.Entry<BlockPos, Integer> entry : trackedAnchorCharges.entrySet()) {
+            Integer now = currentAnchors.get(entry.getKey());
+            if (entry.getValue() > 0 && (now == null || now < entry.getValue())) {
+                Vec3 pos = Vec3.atCenterOf(entry.getKey());
+                applyExplosion(pos, DamageUtils.anchorDamage(dummy, pos));
+            }
+        }
+        trackedAnchorCharges.clear();
+        trackedAnchorCharges.putAll(currentAnchors);
+
+        for (BlockPos p : trackedBeds) {
+            if (!currentBeds.contains(p)) {
+                Vec3 pos = Vec3.atCenterOf(p);
+                applyExplosion(pos, DamageUtils.bedDamage(dummy, pos));
+            }
+        }
+        trackedBeds.clear();
+        trackedBeds.addAll(currentBeds);
+    }
+
+    // Kalibriert per Simulation ueber dieselbe Luft-Physik wie oben (vy -= 0.08, *0.98; vx/vz *0.91):
+    // impact=1.0 (Volltreffer aus naechster Naehe) launcht ~9 Bloecke hoch/~10 Bloecke weit - deckt sich
+    // mit ueblichen Crystal-PvP-Pops, statt einem willkuerlich gegriffenen Wert.
+    private static final double EXPLOSION_KNOCKBACK_SCALE = 1.6;
+
+    private void applyExplosion(Vec3 explosionPos, float damage) {
+        if (damage <= 0) return; // zu weit weg / komplett verdeckt - kein Treffer, kein Rueckstoss
+
+        float remaining = damage;
+        float abs = dummy.getAbsorptionAmount();
+        if (abs > 0) {
+            float used = Math.min(abs, remaining);
+            dummy.setAbsorptionAmount(abs - used);
+            remaining -= used;
+        }
+        if (remaining > 0) dummy.setHealth(Math.max(invincible.get() ? 1.0f : 0.0f, dummy.getHealth() - remaining));
+
+        double impact = Math.max(0, Math.min(1, (-1 + Math.sqrt(Math.max(0, 1 + 8.0 * (damage - 1) / 84.0))) / 2.0));
+
+        Vec3 away = dummy.position().add(0, dummy.getBbHeight() / 2.0, 0).subtract(explosionPos);
+        away = away.lengthSqr() > 1.0E-6 ? away.normalize() : new Vec3(0, 1, 0);
+
+        velocity = velocity.add(away.scale(impact * EXPLOSION_KNOCKBACK_SCALE));
     }
 
     @Override

@@ -187,15 +187,15 @@ public class GodmodePvP extends Module {
 
     public final Setting<Boolean> preHit = sgCombat.add(new BoolSetting.Builder()
         .name("pre-hit")
-        .description("Schlaegt den Gegner vor der Explosion fuer mehr Schaden.")
-        .defaultValue(true)
+        .description("Schlaegt den Gegner vor der Explosion fuer mehr Schaden. Off by default - Vanillas Angriffs-Cooldown (~0.5-0.6s je nach Waffe) ist gegen ein Anchor/Crystal-Sperrfeuer reine Zeitverschwendung; ohne diesen Extra-Hit koennen Anchor und Crystal so schnell hintereinander gezuendet werden, wie der Server sie verarbeitet.")
+        .defaultValue(false)
         .build()
     );
 
     public final Setting<Boolean> meleeFallback = sgCombat.add(new BoolSetting.Builder()
         .name("melee-fallback")
-        .description("Schlaegt normal im Nahkampf, wenn gerade keine Explosion bevorsteht (z.B. kein Obsidian mehr fuer Crystal-Unterbau) - sonst steht der Bot nur da, sobald Crystal/Anchor tatsaechlich nichts mehr zustande bringen.")
-        .defaultValue(true)
+        .description("Schlaegt normal im Nahkampf, wenn gerade keine Explosion bevorsteht (z.B. kein Obsidian mehr fuer Crystal-Unterbau). Off by default aus demselben Grund wie pre-hit - kostet nur den Angriffs-Cooldown, waehrend Anchor/Crystal sofort weiterversuchen koennen. Nur aktivieren, wenn der Bot tatsaechlich komplett ohne Crystals/Anchor/Betten dasteht und wenigstens noch Nahkampf machen soll, statt nur zu verfolgen.")
+        .defaultValue(false)
         .build()
     );
 
@@ -1078,7 +1078,7 @@ public class GodmodePvP extends Module {
 
         // Pop-Fenster: volle Aggression
         if (tickCounter < popBurstUntil) {
-            if (dist <= attackRange.get() && self.getAttackStrengthScale(0.5f) >= 0.9f && self.hasLineOfSight(target) && prepareCritAndCheck(dist)) attackMelee(target);
+            if (preHit.get() && dist <= attackRange.get() && self.getAttackStrengthScale(0.5f) >= 0.9f && self.hasLineOfSight(target) && prepareCritAndCheck(dist)) attackMelee(target);
             selectAura(target);
             currentAction = "burst";
         }
