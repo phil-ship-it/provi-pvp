@@ -2279,14 +2279,29 @@ public class GodmodePvP extends Module {
         return best;
     }
 
-    /** Notdeckung: platziert einen Obsidian-Block an einer offenen Seite, wenn kein natuerliches Loch da ist. */
-    private void buildOwnCover(Player self) {
+    /** Notdeckung: platziert einen Obsidian-Block an einer offenen Seite, wenn kein natuerliches Loch da ist.
+     *  Baut NIE in die Richtung des Ziels - sonst mauert sich der Bot die eigene Sichtlinie zu und kann
+     *  weder Nahkampf noch Explosionen mehr landen (genau das erzeugte den "steht nur noch da"-Bug: der
+     *  einzige offene Nachbarblock lag zufaellig zwischen Bot und Gegner). */
+    private void buildOwnCover(Player self, LivingEntity target) {
         FindItemResult obsidian = InvUtils.findInHotbar(Items.OBSIDIAN);
         if (!obsidian.found()) obsidian = InvUtils.find(Items.OBSIDIAN);
         if (!obsidian.found()) return;
 
+        Vec3 toTarget = target.position().subtract(self.position());
+        net.minecraft.core.Direction towardTarget = null;
+        double bestDot = 0;
+        for (net.minecraft.core.Direction dir : net.minecraft.core.Direction.Plane.HORIZONTAL) {
+            double dot = dir.getStepX() * toTarget.x + dir.getStepZ() * toTarget.z;
+            if (dot > bestDot) {
+                bestDot = dot;
+                towardTarget = dir;
+            }
+        }
+
         BlockPos feet = self.blockPosition();
         for (net.minecraft.core.Direction dir : net.minecraft.core.Direction.Plane.HORIZONTAL) {
+            if (dir == towardTarget) continue;
             BlockPos side = feet.relative(dir);
             if (mc.level.getBlockState(side).isAir()) {
                 BlockUtils.place(side, obsidian, true, 50);
@@ -2312,7 +2327,7 @@ public class GodmodePvP extends Module {
         if (best == null) {
             activeHole = null;
             if (buildCover.get() && dist <= 4.5) {
-                buildOwnCover(mc.player);
+                buildOwnCover(mc.player, target);
                 currentAction = "deckung-bauen";
             }
             return false;
