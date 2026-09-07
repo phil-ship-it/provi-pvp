@@ -2711,12 +2711,18 @@ public class GodmodePvP extends Module {
             // und "Zielpunkt anhand der dabei ermittelten Flugzeit neu vorhersagen" - konvergiert in der
             // Praxis nach 2-3 Runden, da die Korrektur pro Runde schnell kleiner wird.
             Vec3 from = mc.player.getEyePosition().subtract(0, 0.1, 0);
+            // predictOverTicks() arbeitet mit der rohen Entity-Position (Fuesse) - dieselbe Referenz wie
+            // fuer D-Tap/Crystal-Bodensuche anderswo im File. Ohne diesen Offset wuerde jede verfeinerte
+            // Iteration nach der ersten leise auf Fusshoehe statt Koerpermitte zielen (~0.9 Bloecke zu
+            // niedrig) - genau das machte auch schon den ERSTEN Wurf (keine Zielbewegung noetig, aber die
+            // Iteration laeuft trotzdem) systematisch zu flach/kurz.
+            Vec3 centerOffset = aimAt.getBoundingBox().getCenter().subtract(aimAt.position());
             Vec3 aimPoint = aimAt.getBoundingBox().getCenter();
             double[] arrivalTicks = {0};
             yaw = Rotations.getYaw(aimPoint);
             pitch = solvePearlPitch(from, yaw, aimPoint, arrivalTicks);
             for (int i = 0; i < 2; i++) {
-                aimPoint = predictOverTicks(aimAt, (int) Math.round(arrivalTicks[0]));
+                aimPoint = predictOverTicks(aimAt, (int) Math.round(arrivalTicks[0])).add(centerOffset);
                 yaw = Rotations.getYaw(aimPoint);
                 pitch = solvePearlPitch(from, yaw, aimPoint, arrivalTicks);
             }
