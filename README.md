@@ -112,12 +112,22 @@ The fully aggressive profile. Optimized for winning trades as fast as possible, 
   reliability on laggy servers. Two exceptions stay active regardless of the switch — the aura-switch
   hysteresis and the Crystal support-delay floor — because those are technical requirements, not caution:
   removing them broke Crystal placement's sequence-number prediction outright (zero damage from any source).
+- **Single-rotation-per-tick guarantee** — Meteor's silent-rotation queue only applies the correct look
+  direction to the *first* rotate-and-act call queued in a given tick; any second one (e.g. a pearl throw
+  coinciding with an Anchor/Bed interaction or a D-Tap Crystal placement) used to silently execute with
+  whatever direction the player was facing *before* that tick's rotations, not the intended target —
+  manifesting as wildly misdirected pearls and Anchors/Beds/Crystals that never actually get interacted
+  with. Every rotate-and-act call now goes through a shared per-tick guard: if the slot is already taken,
+  the action is skipped cleanly (no cooldown spent, no item swapped away) and retried the following tick.
 
 ### HumanPvP (`.hpvp`)
 
 A deliberately slower, imperfect variant designed to look like manual play: randomized reaction delay before
 engaging a new target, capped turn speed instead of instant snapping, a chance to simply miss a "ready" hit, and
-the same core Crystal/Anchor/defense logic as `GodmodePvP` tuned to a more conservative self-damage limit.
+the same core Crystal/Anchor/defense logic as `GodmodePvP` tuned to a more conservative self-damage limit. Its
+own Anchor/Bed interactions use a separate humanized aiming system (gradual turning, not the instant silent
+queue) and were never affected by the rotation-collision bug above, but pearl throws, Bed placement, and heal
+potions share the same queue as `GodmodePvP` and got the same per-tick guard.
 
 ### TrainingDummy
 
