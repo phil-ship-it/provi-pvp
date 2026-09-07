@@ -1137,6 +1137,10 @@ public class GodmodePvP extends Module {
         if (dtapStage != 0) {
             runDtapTick(target);
             currentAction = "d-tap";
+        } else if (interceptEnemyBoxing(target)) {
+            // currentAction wurde bereits in interceptEnemyBoxing() gesetzt - der Anchor liegt jetzt in
+            // der Luecke, maintainNearbyAnchors() (laeuft oben unabhaengig vom Aura-Modus) laedt/zuendet
+            // ihn in den naechsten Ticks ganz normal weiter.
         } else {
             if (smartAuras.get()) {
                 selectAura(target);
@@ -1335,6 +1339,49 @@ public class GodmodePvP extends Module {
             }
         }
         anchorMaintCooldown = delay(1); // nichts gefunden - naechster voller Scan erst naechsten Tick statt jeden Tick doppelt
+    }
+
+    /** Erkennt, wenn der Gegner sich gerade aktiv selbst einmauert (nur noch eine von vier Seiten offen)
+     *  und wirft sofort einen Anchor in genau diese Luecke, bevor der naechste Block sie schliesst - das
+     *  Zeitfenster dafuer ist nur 1-2 Platzierungen lang, dafuer lohnt sich ein eigener Sofort-Check statt
+     *  auf die normale, langsamere Anchor-Kandidatenwertung in selectAura() zu warten. Laden/Zuenden
+     *  uebernimmt danach ganz normal maintainNearbyAnchors() (laeuft oben unabhaengig vom Aura-Modus).
+     *  @return true, wenn diesen Tick ein Anchor in eine erkannte Luecke geworfen wurde. */
+    private boolean interceptEnemyBoxing(LivingEntity target) {
+        if (!useAnchors.get() || anchorMode.get() == 2) return false;
+
+        BlockPos center = target.blockPosition();
+        net.minecraft.core.Direction openSide = null;
+        int openCount = 0;
+        for (net.minecraft.core.Direction dir : net.minecraft.core.Direction.Plane.HORIZONTAL) {
+            if (mc.level.getBlockState(center.relative(dir)).isAir()) {
+                openCount++;
+                openSide = dir;
+            }
+        }
+        // Genau eine offene Seite = der Gegner baut sich gerade aktiv ein und hat nur noch eine Wand
+        // uebrig. Alle vier offen ist einfach freies Feld (keine Box im Bau), null offene ist schon
+        // fertig versiegelt - dafuer gibt es hier nichts mehr zu retten (die normale Anchor-/Crystal-
+        // Kandidatenwertung findet noch verbliebene Lecks, z.B. oben/unten, von selbst ueber die echte
+        // Schadensberechnung).
+        if (openCount != 1) return false;
+
+        BlockPos gap = center.relative(openSide);
+        double d = Math.sqrt(mc.player.distanceToSqr(Vec3.atCenterOf(gap)));
+        if (d > 4.2) return false;
+
+        FindItemResult anchor = InvUtils.findInHotbar(Items.RESPAWN_ANCHOR);
+        if (!anchor.found()) anchor = InvUtils.find(Items.RESPAWN_ANCHOR);
+        if (!anchor.found()) return false;
+        if (totalItem(Items.GLOWSTONE) <= 0) return false;
+
+        if (DamageUtils.anchorDamage(mc.player, Vec3.atCenterOf(gap)) > maxSelfDamage.get()) return false;
+
+        if (BlockUtils.place(gap, anchor, true, 50)) {
+            currentAction = "box-luecke";
+            return true;
+        }
+        return false;
     }
 
     /** @return true, wenn die Rotation+Interaktion tatsaechlich eingereiht wurde (Rotations-Slot frei war). */
@@ -2403,7 +2450,16 @@ public class GodmodePvP extends Module {
             // Seite fuer Seite komplett selbst eingemauert (jede Platzierung eine eigene Rotation +
             // Block-Paket), was sich als Lag bemerkbar machte UND ihn am Ende blind/bewegungsunfaehig
             // in seiner eigenen Kiste stehen liess.
-            if (buildCover.get() && dist <= 4.5 && buildCoverCooldown <= 0) {
+            boolean outOfExplosives = totalItem(Items.END_CRYSTAL) <= 0
+                && !(totalItem(Items.RESPAWN_ANCHOR) > 0 && totalItem(Items.GLOWSTONE) > 0)
+                && !(useBeds.get() && totalItem(GodmodePvP::isBed) > 0);
+            // Echte Notdeckung heisst: NICHTS Explosives mehr verfuegbar - solange noch Crystals/Anchor+
+            // Glowstone/Betten da sind, soll der Bot damit kaempfen (Block neben dem GEGNER fuer die
+            // Crystal-Unterlage, schlagen, crystaln, verfolgen), statt sich staendig ohne echten Grund
+            // selbst einzumauern, nur weil kein natuerliches Loch in der Naehe lag (auf offenem Feld quasi
+            // immer der Fall - das liess den Bot bislang WAEHREND aktiver Gefechte pausenlos Deckung um
+            // sich selbst bauen statt zu kaempfen).
+            if (buildCover.get() && dist <= 4.5 && buildCoverCooldown <= 0 && outOfExplosives) {
                 buildOwnCover(mc.player, target);
                 buildCoverCooldown = 30;
                 currentAction = "deckung-bauen";
