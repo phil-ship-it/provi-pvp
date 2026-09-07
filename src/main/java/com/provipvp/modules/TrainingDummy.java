@@ -194,8 +194,25 @@ public class TrainingDummy extends Module {
 
         // Eigene Physik: Remote-Player integrieren deltaMovement nicht selbst
         Vec3 pos = dummy.position();
+
+        // Horizontale Kollision, Achsen getrennt aufgeloest (wie Vanilla: X und Z einzeln testen, damit
+        // an einer Wand entlang "gleiten" moeglich bleibt) - ohne das konnte harter horizontaler Knockback
+        // (starke Explosion) den Dummy IN eine Wand/einen Huegel hineinschieben statt davor zu stoppen,
+        // wo er dann sichtbar in der Wand haengen blieb statt normal abzuprallen.
+        double testFeetY = pos.y + 0.1;
+        double testHeadY = pos.y + 1.5;
         double nx = pos.x + velocity.x;
+        if (mc.level.getBlockState(BlockPos.containing(nx, testFeetY, pos.z)).blocksMotion()
+            || mc.level.getBlockState(BlockPos.containing(nx, testHeadY, pos.z)).blocksMotion()) {
+            nx = pos.x;
+            velocity = new Vec3(0, velocity.y, velocity.z);
+        }
         double nz = pos.z + velocity.z;
+        if (mc.level.getBlockState(BlockPos.containing(nx, testFeetY, nz)).blocksMotion()
+            || mc.level.getBlockState(BlockPos.containing(nx, testHeadY, nz)).blocksMotion()) {
+            nz = pos.z;
+            velocity = new Vec3(velocity.x, velocity.y, 0);
+        }
         double ny = pos.y + velocity.y;
 
         if (velocity.y < 0) {

@@ -194,8 +194,8 @@ public class GodmodePvP extends Module {
 
     public final Setting<Boolean> meleeFallback = sgCombat.add(new BoolSetting.Builder()
         .name("melee-fallback")
-        .description("Schlaegt normal im Nahkampf, wenn gerade keine Explosion bevorsteht (z.B. kein Obsidian mehr fuer Crystal-Unterbau). Off by default aus demselben Grund wie pre-hit - kostet nur den Angriffs-Cooldown, waehrend Anchor/Crystal sofort weiterversuchen koennen. Nur aktivieren, wenn der Bot tatsaechlich komplett ohne Crystals/Anchor/Betten dasteht und wenigstens noch Nahkampf machen soll, statt nur zu verfolgen.")
-        .defaultValue(false)
+        .description("Schlaegt normal im Nahkampf, wenn gerade keine Explosion bevorsteht (z.B. kein Obsidian mehr fuer Crystal-Unterbau, oder gerade kein gueltiger Anchor-/Crystal-Kandidat in Reichweite). Bleibt an - ohne das steht der Bot direkt neben einem treffbaren Ziel einfach nur da, sobald Anchor/Crystal kurzzeitig nichts zustande bringen (z.B. durch Krater/unebenes Gelaende von vorherigen Explosionen). Nur `pre-hit` (redundanter Schlag WAEHREND eine Explosion schon so gut wie sicher kommt) ist aus - das kostet wirklich nur Zeit.")
+        .defaultValue(true)
         .build()
     );
 
@@ -651,6 +651,7 @@ public class GodmodePvP extends Module {
     private double bestAnchorDmgCache;
     private double bestCrystalDmgCache;
     private boolean outOfGlowstone;
+    private final java.util.Set<BlockPos> anchorsChargedByUs = new java.util.HashSet<>();
     private int anchorPlaceFails;
     private int crystalForcedUntil;
     private int anchorUnreachableTicks;
@@ -1323,16 +1324,29 @@ public class GodmodePvP extends Module {
                         FindItemResult fir = InvUtils.findInHotbar(itemStack -> !itemStack.isEmpty() && !itemStack.is(Items.GLOWSTONE));
                         if (!fir.found()) fir = InvUtils.find(itemStack -> !itemStack.isEmpty() && !itemStack.is(Items.GLOWSTONE));
                         if (!fir.found()) continue;
-                        if (interactAnchorAt(pos, fir)) anchorMaintCooldown = delay(3);
+                        if (interactAnchorAt(pos, fir)) {
+                            anchorMaintCooldown = delay(3);
+                            anchorsChargedByUs.remove(pos); // gezuendet (bzw. versucht) - Position wieder frei fuer einen kuenftigen neuen Anchor
+                        }
                         return; // Rotations-Slot ist so oder so belegt (versucht oder schon anderweitig vergeben) - naechster Tick
                     } else {
+                        // Blitz-Anchor braucht nur 1 Glowstone - aber der Blockstate hier kommt erst nach
+                        // einem Server-Rundlauf zurueck (auch Singleplayer laeuft ueber denselben Paket-Weg).
+                        // Ohne diese eigene Merkliste liest charges hier fuer 1+ weitere Ticks noch 0, obwohl
+                        // wir schon geladen haben, und der Bot steckt ungewollt ein zweites/drittes/viertes
+                        // Glowstone rein - aus dem gewollten 1-Glowstone-Blitz-Anchor wurde eine volle 4er-Ladung.
+                        if (anchorsChargedByUs.contains(pos)) continue;
+
                         FindItemResult gs = InvUtils.findInHotbar(Items.GLOWSTONE);
                         if (!gs.found()) gs = InvUtils.find(Items.GLOWSTONE);
                         if (!gs.found()) {
                             outOfGlowstone = true;
                             continue;
                         }
-                        if (interactAnchorAt(pos, gs)) anchorMaintCooldown = delay(3);
+                        if (interactAnchorAt(pos, gs)) {
+                            anchorMaintCooldown = delay(3);
+                            anchorsChargedByUs.add(pos);
+                        }
                         return;
                     }
                 }
@@ -2494,8 +2508,13 @@ public class GodmodePvP extends Module {
                 ChatUtils.info("Pearl-Teleport erkannt (%.0f m) - verfolge neue Position.", jump);
                 // FollowProcess verfolgt automatisch zur neuen Position
             } else {
+                // Cap knapp unter der Teleport-Schwelle statt bei 2.0: ein hartes Crystal-/Anchor-Pop
+                // (oder ein frisch getroffener Vollnahkampf-Knockback) launcht durchaus mit 3-5 Bloecken/
+                // Tick - der alte 2.0-Cap hat genau diese Faelle systematisch unterschaetzt und damit die
+                // Pearl-/Anchor-/Crystal-Vorhersage bei einem gerade weggeschleuderten Ziel voellig
+                // daneben zielen lassen (das Ziel "sah" fuer die Vorhersage viel langsamer aus als es war).
                 Vec3 vel = cur.subtract(prev);
-                if (vel.length() > 2.0) vel = vel.normalize().scale(2.0);
+                if (vel.length() > 5.5) vel = vel.normalize().scale(5.5);
                 velocities.put(id, vel);
             }
         }
