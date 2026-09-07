@@ -278,6 +278,13 @@ public class GodmodePvP extends Module {
         .build()
     );
 
+    public final Setting<Boolean> instantMode = sgCombat.add(new BoolSetting.Builder()
+        .name("no-delay")
+        .description("Sofort-Modus: hebelt alle verbleibenden kuenstlichen Wartezeiten aus (Anchor/Bett-Platzierungs- und Wartungspausen, D-Tap-Cooldown, alle Perlwurf-Cooldowns, Aura-Umschalt-Traegheit, Crystal-Support-Delay). Reine Geschwindigkeit statt Vorsicht - auf Servern mit spuerbarer Latenz kann das Crystal-Platzierungen unzuverlaessiger machen (siehe min-support-delay) und Perlen/Anchors/Betten verschwenden, wenn Aktionen schneller abgefeuert werden als der Server sie verarbeitet.")
+        .defaultValue(false)
+        .build()
+    );
+
     public final Setting<Boolean> killAuraOn = sgCombat.add(new BoolSetting.Builder()
         .name("kill-aura")
         .description("Zusaetzlich KillAura fuer Nahkampf. Mob-Filter wird automatisch aus 'Mobs' uebernommen. Standard aus - eigener Axt-Nahkampf aktiv.")
@@ -713,7 +720,7 @@ public class GodmodePvP extends Module {
 
         CrystalAura ca = m.get(CrystalAura.class);
         if (ca != null) {
-            if (zeroDelay.get()) {
+            if (zeroDelay.get() || instantMode.get()) {
                 savedPlaceDelay = ca.placeDelay.get();
                 ca.placeDelay.set(0);
             }
@@ -918,11 +925,11 @@ public class GodmodePvP extends Module {
         lastSelfHpForRubberband = self.getHealth();
         if (rubberbandCooldown > 0) {
             rubberbandCooldown--;
-        } else if (antiRubberband.get() && tickCounter - lastPearlTick > 10
+        } else if (antiRubberband.get() && tickCounter - lastPearlTick > delay(10)
             && (selfMoved > 6.0 || (selfMoved > 2.5 && !tookRealDamage))) {
             BaritoneAPI.getProvider().getPrimaryBaritone().getPathingBehavior().cancelEverything();
             followActive = false;
-            rubberbandCooldown = 10;
+            rubberbandCooldown = delay(10);
             currentAction = "rubberband";
         }
 
@@ -930,7 +937,7 @@ public class GodmodePvP extends Module {
         // Aufwaerts-Geschwindigkeit im selben Tick - sofort senkrecht nach unten perlen, um kontrolliert
         // runterzukommen statt hilflos zu fallen oder als leichtes Ziel in der Luft zu haengen.
         if (knockbackPearl.get() && tookRealDamage && self.getDeltaMovement().y > 0.35
-            && tickCounter - lastPearlTick > 15
+            && tickCounter - lastPearlTick > delay(15)
             && (InvUtils.findInHotbar(Items.ENDER_PEARL).found() || InvUtils.find(Items.ENDER_PEARL).found())) {
             throwPearlDown();
             currentAction = "pearl-knockback";
@@ -946,7 +953,7 @@ public class GodmodePvP extends Module {
 
         // Kein Sichtkontakt trotz Naehe (Hindernis im Weg): so gut wie sofort reagieren,
         // klappt das nicht, zum Gegner perlen statt festzustehen.
-        if (obstacleStuckTicks > 1 && pearlThrow.get() && tickCounter - lastPearlTick > 20
+        if (obstacleStuckTicks > 1 && pearlThrow.get() && tickCounter - lastPearlTick > delay(20)
             && (InvUtils.findInHotbar(Items.ENDER_PEARL).found() || InvUtils.find(Items.ENDER_PEARL).found())) {
             throwPearl(target, false);
             currentAction = "pearl-obstacle";
@@ -969,7 +976,7 @@ public class GodmodePvP extends Module {
         // bevor die letzte Wand zugeht. Deckung mit offenem Himmel (z.B. unser eigenes Loch, Feature 8)
         // zaehlt bewusst NICHT als Kaefig - da kann man jederzeit selbst wieder raus.
         if (countBoxedSides(self) >= 3 && mc.level.getBlockState(self.blockPosition().above(2)).blocksMotion()
-            && escapePearl.get() && tickCounter - lastPearlTick > 15
+            && escapePearl.get() && tickCounter - lastPearlTick > delay(15)
             && (InvUtils.findInHotbar(Items.ENDER_PEARL).found() || InvUtils.find(Items.ENDER_PEARL).found())) {
             throwPearl(target, true);
             currentAction = "escape-cage";
@@ -978,7 +985,7 @@ public class GodmodePvP extends Module {
 
         // Notfall-Flucht: kritisches HP -> Perle weg statt sinnlos weiterzukaempfen, egal wie weit der Gegner ist
         if (escapePearl.get() && self.getHealth() <= 6.0f
-            && tickCounter - lastPearlTick > 20
+            && tickCounter - lastPearlTick > delay(20)
             && (InvUtils.findInHotbar(Items.ENDER_PEARL).found() || InvUtils.find(Items.ENDER_PEARL).found())) {
             throwPearl(target, true);
             currentAction = "escape-pearl";
@@ -989,7 +996,7 @@ public class GodmodePvP extends Module {
         // aussichtslos im reinen Nahkampf weiterzumachen.
         if (retreatThreshold.get() && lowOnTotems && warnedOutOfCrystals && warnedOutOfAnchorSupply) {
             cancelFollow();
-            if (dist <= 10.0 && tickCounter - lastPearlTick > 30
+            if (dist <= 10.0 && tickCounter - lastPearlTick > delay(30)
                 && (InvUtils.findInHotbar(Items.ENDER_PEARL).found() || InvUtils.find(Items.ENDER_PEARL).found())) {
                 throwPearl(target, true);
             }
@@ -1001,7 +1008,7 @@ public class GodmodePvP extends Module {
         // aber unsere eigenen Explosionen richten seit einer Weile keinen Schaden beim Gegner an
         // (Platzierung blockiert/unerreichbar, Schild, o.ae.) - abhauen statt einen Verlust-Trade fortzusetzen.
         if (retreatOnLosingTrade.get() && tickCounter - lastSelfPopTick < 60
-            && tickCounter - lastTargetDamageTick > 60 && tickCounter - lastPearlTick > 30
+            && tickCounter - lastTargetDamageTick > 60 && tickCounter - lastPearlTick > delay(30)
             && (InvUtils.findInHotbar(Items.ENDER_PEARL).found() || InvUtils.find(Items.ENDER_PEARL).found())) {
             throwPearl(target, true);
             currentAction = "pearl-verlorener-trade";
@@ -1036,7 +1043,7 @@ public class GodmodePvP extends Module {
 
         // Perlen-Gapclose (bei grosser Distanz schnellerer Cooldown) - nur wenn schon engaged (siehe unten),
         // sonst wuerde auch ein 35 Blocke entfernter Spieler beim Kaltstart sofort angeperlt.
-        long pearlCooldown = dist > 15 ? 8 : 10;
+        long pearlCooldown = delay(dist > 15 ? 8 : 10);
         if (pearlThrow.get() && dist > pearlMinDist.get() && engaged
             && tickCounter - lastPearlTick > pearlCooldown && !guiOpen) {
             throwPearl(target, false);
@@ -1198,7 +1205,7 @@ public class GodmodePvP extends Module {
 
         if (BlockUtils.place(spot, anchor, true, 50)) {
             anchorPlaceFails = 0;
-            anchorPlaceCooldown = 6; // kurze Pause, damit maintainNearbyAnchors Zeit zum Laden hat
+            anchorPlaceCooldown = delay(6); // kurze Pause, damit maintainNearbyAnchors Zeit zum Laden hat
             lastAnchorProgressTick = tickCounter;
         } else {
             anchorCandidateIndex++;
@@ -1247,7 +1254,7 @@ public class GodmodePvP extends Module {
                         if (!fir.found()) fir = InvUtils.find(itemStack -> !itemStack.isEmpty() && !itemStack.is(Items.GLOWSTONE));
                         if (!fir.found()) continue;
                         interactAnchorAt(pos, fir);
-                        anchorMaintCooldown = 3;
+                        anchorMaintCooldown = delay(3);
                         return;
                     } else {
                         FindItemResult gs = InvUtils.findInHotbar(Items.GLOWSTONE);
@@ -1257,13 +1264,13 @@ public class GodmodePvP extends Module {
                             continue;
                         }
                         interactAnchorAt(pos, gs);
-                        anchorMaintCooldown = 3;
+                        anchorMaintCooldown = delay(3);
                         return;
                     }
                 }
             }
         }
-        anchorMaintCooldown = 1; // nichts gefunden - naechster voller Scan erst naechsten Tick statt jeden Tick doppelt
+        anchorMaintCooldown = delay(1); // nichts gefunden - naechster voller Scan erst naechsten Tick statt jeden Tick doppelt
     }
 
     private void interactAnchorAt(BlockPos pos, FindItemResult item) {
@@ -1380,7 +1387,7 @@ public class GodmodePvP extends Module {
 
         // Deutlich seltener umschalten (0.5s statt 0.15s) - genug Zeit, damit eine begonnene
         // Platzierung/Ladung auch tatsaechlich fertig wird, statt staendig unterbrochen zu werden.
-        if (tickCounter - lastAuraSwitch < 10) return;
+        if (tickCounter - lastAuraSwitch < delay(10)) return;
 
         if (wantAnchor && auraMode != 1) {
             if (ca.isActive()) ca.toggle();
@@ -1643,7 +1650,7 @@ public class GodmodePvP extends Module {
         Rotations.rotate(yaw, 55, () -> {
             if (BlockUtils.place(spot.pos(), bed, false, 50)) {
                 bedPlaceFails = 0;
-                bedPlaceCooldown = 4; // kurze Pause, damit maintainNearbyBeds Zeit zum Zuenden hat
+                bedPlaceCooldown = delay(4); // kurze Pause, damit maintainNearbyBeds Zeit zum Zuenden hat
                 lastBedProgressTick = tickCounter;
             } else {
                 bedCandidateIndex++;
@@ -1686,12 +1693,12 @@ public class GodmodePvP extends Module {
                     if (selfDmg > maxSelfDamage.get()) continue;
 
                     interactBedAt(pos);
-                    bedMaintCooldown = 3;
+                    bedMaintCooldown = delay(3);
                     return;
                 }
             }
         }
-        bedMaintCooldown = 1; // nichts gefunden - naechster voller Scan erst naechsten Tick statt jeden Tick doppelt
+        bedMaintCooldown = delay(1); // nichts gefunden - naechster voller Scan erst naechsten Tick statt jeden Tick doppelt
     }
 
     private void interactBedAt(BlockPos pos) {
@@ -1703,6 +1710,13 @@ public class GodmodePvP extends Module {
 
     private static boolean isBed(ItemStack stack) {
         return stack.getItem() instanceof BedItem;
+    }
+
+    /** Zentrale Stelle fuer alle kuenstlichen Wartezeiten: liefert `ticks` normal, oder 0 wenn der
+     *  Sofort-Modus (no-delay) aktiv ist. So bleibt jede einzelne Cooldown-Stelle im Code weiterhin
+     *  lesbar (die "normale" Wartezeit steht direkt daneben), aber no-delay hebelt sie zentral aus. */
+    private int delay(int ticks) {
+        return instantMode.get() ? 0 : ticks;
     }
 
     private static boolean isHealingSplash(ItemStack stack) {
@@ -1879,7 +1893,7 @@ public class GodmodePvP extends Module {
                 if (tickCounter - dtapStageTick < 10) return;
                 if (tickCounter - dtapStageTick > 30 || !mc.level.getBlockState(dtapSpot.above()).isAir()) {
                     dtapStage = 0;
-                    dtapCooldown = 30;
+                    dtapCooldown = delay(30);
                     return;
                 }
 
@@ -1894,12 +1908,12 @@ public class GodmodePvP extends Module {
             case 4 -> { // 2. Crystal steht - zuenden, fertig
                 EndCrystal ec = findCrystalAbove(dtapSpot);
                 if (ec == null) {
-                    if (tickCounter - dtapStageTick > 4) { dtapStage = 0; dtapCooldown = 30; }
+                    if (tickCounter - dtapStageTick > 4) { dtapStage = 0; dtapCooldown = delay(30); }
                     return;
                 }
                 attackCrystal(ec);
                 dtapStage = 0;
-                dtapCooldown = 40;
+                dtapCooldown = delay(40);
             }
             default -> dtapStage = 0;
         }
@@ -2746,7 +2760,7 @@ public class GodmodePvP extends Module {
             Setting<Integer> s = (Setting<Integer>) f.get(ca);
             if (s != null) {
                 savedSupportDelay = s.get();
-                if (s.get() < minSupportDelay.get()) s.set(minSupportDelay.get());
+                if (!instantMode.get() && s.get() < minSupportDelay.get()) s.set(minSupportDelay.get());
             }
         } catch (Throwable t) {
             savedSupportDelay = -1;

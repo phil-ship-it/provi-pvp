@@ -102,6 +102,9 @@ The fully aggressive profile. Optimized for winning trades as fast as possible, 
   inventory into the hotbar as they run low, with configurable thresholds.
 - **Self-healing** — throws a Splash Potion of Healing at your own feet the instant fresh damage is detected,
   regardless of combat state (covers fall/fire damage too, not just hits taken mid-fight).
+- **Instant mode (`no-delay`)** — an off-by-default switch that strips out every remaining artificial wait
+  (placement/maintenance pauses, D-Tap cooldown, pearl-throw cooldowns, aura-switch hysteresis, the
+  Crystal support-delay floor) for maximum throughput at the cost of reliability on laggy servers.
 
 ### HumanPvP (`.hpvp`)
 
