@@ -165,13 +165,31 @@ public class TrainingDummy extends Module {
         // Eigene Physik: Remote-Player integrieren deltaMovement nicht selbst
         Vec3 pos = dummy.position();
         double nx = pos.x + velocity.x;
-        double ny = pos.y + velocity.y;
         double nz = pos.z + velocity.z;
+        double ny = pos.y + velocity.y;
 
-        BlockPos ground = BlockPos.containing(nx, ny - 0.05, nz);
-        if (velocity.y < 0 && mc.level.getBlockState(ground).blocksMotion()) {
-            ny = ground.getY() + 1.0;
-            velocity = new Vec3(velocity.x * 0.6, 0, velocity.z * 0.6);
+        if (velocity.y < 0) {
+            // Swept statt Einzelpunkt-Check: nach Knockback faellt der Dummy gravitationsbeschleunigt
+            // (konvergiert gegen ~3.9 Bloecke/Tick), da reicht ein Bodencheck nur an der ZIEL-Position
+            // dieses Ticks nicht - bei duennen Plattformen/Boeden ueber einer Hoehle sprang die Zielposition
+            // schon mal komplett unter den soliden Block, ohne dass der einzelne Check-Punkt ihn je traf
+            // (der Dummy fiel dann sichtbar durch ein paar Bloecke durch). Jetzt wird jede Block-Grenze
+            // zwischen alter und neuer Y-Position der Reihe nach geprueft, von oben nach unten, und beim
+            // ersten soliden Treffer gestoppt.
+            int fromY = (int) Math.floor(pos.y - 0.05);
+            int toY = (int) Math.floor(ny - 0.05);
+            int bx = (int) Math.floor(nx);
+            int bz = (int) Math.floor(nz);
+            boolean landed = false;
+            for (int by = fromY; by >= toY; by--) {
+                if (mc.level.getBlockState(new BlockPos(bx, by, bz)).blocksMotion()) {
+                    ny = by + 1.0;
+                    velocity = new Vec3(velocity.x * 0.6, 0, velocity.z * 0.6);
+                    landed = true;
+                    break;
+                }
+            }
+            if (!landed) velocity = new Vec3(velocity.x * 0.91, (velocity.y - 0.08) * 0.98, velocity.z * 0.91);
         } else {
             velocity = new Vec3(velocity.x * 0.91, (velocity.y - 0.08) * 0.98, velocity.z * 0.91);
         }
