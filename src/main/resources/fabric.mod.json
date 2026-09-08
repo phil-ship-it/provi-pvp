@@ -13,6 +13,9 @@
       "com.provipvp.ProviPvPAddon"
     ]
   },
+  "mixins": [
+    "provi-pvp.mixins.json"
+  ],
   "depends": {
     "java": ">=${jdk_version}",
     "minecraft": "${minecraft_version}",

@@ -1,0 +1,11 @@
+{
+  "required": true,
+  "minVersion": "0.8",
+  "package": "com.provipvp.mixin",
+  "client": [
+    "AutoMendMixin"
+  ],
+  "injectors": {
+    "defaultRequire": 1
+  }
+}
