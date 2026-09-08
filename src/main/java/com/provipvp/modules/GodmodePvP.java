@@ -679,6 +679,7 @@ public class GodmodePvP extends Module {
     private float hpAtHealWindowStart = -999;
     private int healWindowStartTick = -999;
     private int healPotionCooldown;
+    private boolean healingUntilFull;
 
     private record BedSpot(BlockPos pos, Direction dir) {}
 
@@ -716,6 +717,7 @@ public class GodmodePvP extends Module {
         hpAtHealWindowStart = -999;
         healWindowStartTick = -999;
         healPotionCooldown = 0;
+        healingUntilFull = false;
         drinkingFireRes = false;
         fireResStartTick = -999;
         dtapStage = 0;
@@ -1020,7 +1022,7 @@ public class GodmodePvP extends Module {
 
         // Kein Sichtkontakt trotz Naehe (Hindernis im Weg): so gut wie sofort reagieren,
         // klappt das nicht, zum Gegner perlen statt festzustehen.
-        if (obstacleStuckTicks > 1 && pearlThrow.get() && tickCounter - lastPearlTick > delay(20)
+        if (obstacleStuckTicks > 8 && pearlThrow.get() && tickCounter - lastPearlTick > delay(20)
             && (InvUtils.findInHotbar(Items.ENDER_PEARL).found() || InvUtils.find(Items.ENDER_PEARL).found())) {
             throwPearl(target, false);
             currentAction = "pearl-obstacle";
@@ -1134,7 +1136,10 @@ public class GodmodePvP extends Module {
         // Sichtlinie ist Pflicht: ohne sie fliegt die Perle nur gegen die Wand/den Huegel dazwischen statt
         // zum Gegner (anders als die gezielte Hindernis-Perle oben, die genau auf so ein Durchclippen zielt).
         double pearlReachThreshold = Math.max(pearlMinDist.get(), attackRange.get() + 0.5);
-        long pearlCooldown = delay(dist > 15 ? 8 : 10);
+        // Fixer, konservativer Cooldown statt distanzabhaengig gestaffelt: in einer grossen Arena ist
+        // "weit weg" der Normalfall, nicht die Ausnahme - die alte Staffelung (schneller ab >15 Bloecke)
+        // machte den "schnellen" Ast faktisch zum Standardfall und hielt den Perlen-Spam am Leben.
+        long pearlCooldown = delay(50);
         if (pearlThrow.get() && dist > pearlReachThreshold && engaged && self.hasLineOfSight(target)
             && tickCounter - lastPearlTick > pearlCooldown && !guiOpen) {
             throwPearl(target, false);
@@ -1933,17 +1938,21 @@ public class GodmodePvP extends Module {
         // Fenster erst verschieben, wenn entweder geheilt wurde ODER es veraltet ist UND gerade kein
         // nennenswerter Schaden ansteht - ein Reset auf den AKTUELLEN (gerade erst gefallenen) Wert im
         // selben Tick wie ein Treffer wuerde den Schaden loeschen, bevor er ueberhaupt geprueft wird.
-        // Genau das liess einen Totem-Pop nach laengerer stabiler Gesundheit (>0.4s ohne HP-Aenderung -
-        // der Normalfall zwischen zwei Treffern) komplett ungeheilt durch, weil die Alt-Logik das
-        // "veraltete Fenster" IMMER zuerst zuruecksetzte, egal ob der aktuelle Tick selbst der Treffer war.
         if (hp > hpAtHealWindowStart || (tickCounter - healWindowStartTick > 8 && dmg < healMinDamage.get())) {
             hpAtHealWindowStart = hp;
             healWindowStartTick = tickCounter;
             dmg = hpAtHealWindowStart - hp;
         }
 
+        // Sobald genug Schaden erkannt wurde, bleibt Heilen aktiv - nicht nur EIN Trank pro Treffer,
+        // sondern jeden Cooldown-Zyklus erneut, bis die HP wieder (fast) voll sind. Erst dann endet
+        // der Heil-Modus wieder, statt bei jedem folgenden Tick neu ueber die Schadens-Schwelle zu
+        // pruefen (die nach dem ersten Trank sowieso meist wieder unter der Schwelle laege).
+        if (dmg >= healMinDamage.get()) healingUntilFull = true;
+        if (hp >= self.getMaxHealth() - 0.5f) healingUntilFull = false;
+
         if (!healPotions.get() || blocking || drinkingFireRes || healPotionCooldown > 0) return;
-        if (dmg < healMinDamage.get()) return;
+        if (!healingUntilFull) return;
 
         FindItemResult potion = InvUtils.findInHotbar(GodmodePvP::isHealingSplash);
         if (!potion.found()) potion = InvUtils.find(GodmodePvP::isHealingSplash);
@@ -1960,11 +1969,11 @@ public class GodmodePvP extends Module {
             });
             if (!thrown && swapped) InvUtils.swapBack(); // Rotations-Slot belegt - Swap sofort rueckgaengig, kein Trank geworfen
         }
-        if (!thrown) return; // naechster Tick erneut versuchen - Cooldown/Fenster bleiben unveraendert
+        if (!thrown) return; // naechster Tick erneut versuchen - Cooldown/Fenster/Heil-Modus bleiben unveraendert
 
         healPotionCooldown = healCooldown.get();
-        hpAtHealWindowStart = hp;
-        healWindowStartTick = tickCounter;
+        // hpAtHealWindowStart bewusst NICHT hier zuruecksetzen - healingUntilFull haelt den Heil-Modus
+        // ueber mehrere Traenke hinweg aktiv, bis maxHealth-0.5 erreicht ist (siehe oben).
     }
 
     /** Haelt Fire Resistance permanent aktiv, solange man sich im Nether befindet - macht Lava-Kontakt,
@@ -2779,7 +2788,7 @@ public class GodmodePvP extends Module {
         double yaw, pitch;
         if (away && aimAt != null) {
             yaw = Rotations.getYaw(aimAt) + 180.0;
-            pitch = -20;
+            pitch = -35; // steilerer Bogen als vorher (-20 war zu flach - Perle blieb oft am Boden/Hindernis haengen)
         } else if (aimAt != null) {
             // Auf einen bewegten (v.a. in der Luft befindlichen, fallenden/geworfenen) Gegner reicht die
             // aktuelle Position als Zielpunkt nicht - die Perle braucht je nach Distanz oft 0.5-2s Flugzeit,

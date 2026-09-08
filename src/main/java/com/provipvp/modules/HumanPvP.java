@@ -506,6 +506,7 @@ public class HumanPvP extends Module {
     private float hpAtHealWindowStart = -999;
     private int healWindowStartTick = -999;
     private int healPotionCooldown;
+    private boolean healingUntilFull;
 
     private record BedSpot(BlockPos pos, Direction dir) {}
 
@@ -555,6 +556,7 @@ public class HumanPvP extends Module {
         hpAtHealWindowStart = -999;
         healWindowStartTick = -999;
         healPotionCooldown = 0;
+        healingUntilFull = false;
         lastTrapTick = -999;
         nextTotemCheckTick = -999;
         lastPositions.clear();
@@ -1580,7 +1582,7 @@ public class HumanPvP extends Module {
         double yaw, pitch;
         if (away) {
             yaw = Rotations.getYaw(aimAt) + 180.0;
-            pitch = -20;
+            pitch = -35; // steilerer Bogen als vorher (-20 war zu flach)
         } else {
             yaw = Rotations.getYaw(aimAt);
             pitch = solvePearlPitch(mc.player.getEyePosition().subtract(0, 0.1, 0), yaw, aimAt.getBoundingBox().getCenter());
@@ -1817,8 +1819,11 @@ public class HumanPvP extends Module {
             dmg = hpAtHealWindowStart - hp;
         }
 
+        if (dmg >= healMinDamage.get()) healingUntilFull = true;
+        if (hp >= self.getMaxHealth() - 0.5f) healingUntilFull = false;
+
         if (!healPotions.get() || blocking || drinkingFireRes || healPotionCooldown > 0) return;
-        if (dmg < healMinDamage.get()) return;
+        if (!healingUntilFull) return;
 
         FindItemResult potion = InvUtils.findInHotbar(HumanPvP::isHealingSplash);
         if (!potion.found()) potion = InvUtils.find(HumanPvP::isHealingSplash);
@@ -1838,8 +1843,8 @@ public class HumanPvP extends Module {
         if (!thrown) return;
 
         healPotionCooldown = healCooldown.get();
-        hpAtHealWindowStart = hp;
-        healWindowStartTick = tickCounter;
+        // hpAtHealWindowStart bewusst NICHT hier zuruecksetzen - healingUntilFull haelt den Heil-Modus
+        // ueber mehrere Traenke hinweg aktiv, bis maxHealth-0.5 erreicht ist (siehe oben).
     }
 
     private int findMainSlotWith(net.minecraft.world.item.Item item) {
