@@ -1736,6 +1736,9 @@ public class HumanPvP extends Module {
 
         double dist = Math.sqrt(mc.player.distanceToSqr(target));
         if (mode == 1 && dist > 6) return;
+        // Bereits in Nahkampf-Reichweite: Trap bringt nichts mehr und der Rotations-Slot geht sonst
+        // zulasten des naechsten Nahkampf-Schlags (siehe GodmodePvP fuer den vollen Kontext).
+        if (dist <= attackRange.get()) return;
         if (mc.gui.screen() != null) return;
         if (tickCounter - lastTrapTick < 8 + rng.nextInt(8)) return; // menschlich unregelmaessiger Rhythmus
 
@@ -1800,14 +1803,21 @@ public class HumanPvP extends Module {
         if (healPotionCooldown > 0) healPotionCooldown--;
 
         float hp = self.getHealth();
-        if (tickCounter - healWindowStartTick > 8 || hp > hpAtHealWindowStart) {
+        float dmg = hpAtHealWindowStart - hp;
+
+        // Fenster erst verschieben, wenn entweder geheilt wurde ODER es veraltet ist UND gerade kein
+        // nennenswerter Schaden ansteht - ein Reset auf den AKTUELLEN (gerade erst gefallenen) Wert im
+        // selben Tick wie ein Treffer wuerde den Schaden loeschen, bevor er ueberhaupt geprueft wird.
+        // Genau das liess einen Totem-Pop nach laengerer stabiler Gesundheit (>0.4s ohne HP-Aenderung -
+        // der Normalfall zwischen zwei Treffern) komplett ungeheilt durch, weil die Alt-Logik das
+        // "veraltete Fenster" IMMER zuerst zuruecksetzte, egal ob der aktuelle Tick selbst der Treffer war.
+        if (hp > hpAtHealWindowStart || (tickCounter - healWindowStartTick > 8 && dmg < healMinDamage.get())) {
             hpAtHealWindowStart = hp;
             healWindowStartTick = tickCounter;
+            dmg = hpAtHealWindowStart - hp;
         }
 
         if (!healPotions.get() || blocking || drinkingFireRes || healPotionCooldown > 0) return;
-
-        float dmg = hpAtHealWindowStart - hp;
         if (dmg < healMinDamage.get()) return;
 
         FindItemResult potion = InvUtils.findInHotbar(HumanPvP::isHealingSplash);

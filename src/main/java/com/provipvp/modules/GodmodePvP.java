@@ -622,6 +622,8 @@ public class GodmodePvP extends Module {
     private float lastTargetHpForStuck = -1;
     private int watchdogStuckTicks;
     private int lastAnchorProgressTick;
+    private Vec3 oscillationAnchorPos;
+    private int oscillationAnchorTick;
     private int rubberbandCooldown;
     private boolean strafeLeft = true;
     private int nextStrafeSwitchTick = -1;
@@ -737,6 +739,8 @@ public class GodmodePvP extends Module {
         lastTargetHpForStuck = -1;
         watchdogStuckTicks = 0;
         lastAnchorProgressTick = 0;
+        oscillationAnchorPos = null;
+        oscillationAnchorTick = 0;
         rubberbandCooldown = 0;
         lastSelfHpForRubberband = -1;
         activeHole = null;
@@ -1021,6 +1025,25 @@ public class GodmodePvP extends Module {
             throwPearl(target, false);
             currentAction = "pearl-obstacle";
             obstacleStuckTicks = 0;
+        }
+
+        // Oszillations-Erkennung: an einer Krater-/Kanten-Kante kann Baritone zwischen zwei fast
+        // gleich guten Routen hin- und herspringen (z.B. hochklettern vs. drumherum) - das ist AKTIVE
+        // Bewegung (selfMoved bleibt hoch, targetHpChanged aendert nichts daran), also greift weder der
+        // LOS-basierte Obstacle-Check oben (Ziel bleibt sichtbar von der Kraterkante aus) noch der
+        // Total-Stillstand-Watchdog unten (selfMoved liegt weit ueber der 0.05-Schwelle). Stattdessen den
+        // NETTO-Fortschritt ueber ein laengeres Zeitfenster (1.5s) pruefen statt nur Tick-zu-Tick -
+        // bleibt die Position dabei praktisch gleich trotz staendiger Bewegung, zum Ziel perlen statt
+        // endlos weiter hin- und herzulaufen.
+        if (oscillationAnchorPos == null || tickCounter - oscillationAnchorTick > 30) {
+            if (oscillationAnchorPos != null && self.position().distanceTo(oscillationAnchorPos) < 1.5
+                && pearlThrow.get() && tickCounter - lastPearlTick > delay(20)
+                && (InvUtils.findInHotbar(Items.ENDER_PEARL).found() || InvUtils.find(Items.ENDER_PEARL).found())) {
+                throwPearl(target, false);
+                currentAction = "pearl-oszillation";
+            }
+            oscillationAnchorPos = self.position();
+            oscillationAnchorTick = tickCounter;
         }
 
         // Generischer Watchdog: 5s weder Eigenbewegung noch Schaden am Ziel -> kompletter Reset,
@@ -1905,14 +1928,21 @@ public class GodmodePvP extends Module {
         if (healPotionCooldown > 0) healPotionCooldown--;
 
         float hp = self.getHealth();
-        if (tickCounter - healWindowStartTick > 8 || hp > hpAtHealWindowStart) {
+        float dmg = hpAtHealWindowStart - hp;
+
+        // Fenster erst verschieben, wenn entweder geheilt wurde ODER es veraltet ist UND gerade kein
+        // nennenswerter Schaden ansteht - ein Reset auf den AKTUELLEN (gerade erst gefallenen) Wert im
+        // selben Tick wie ein Treffer wuerde den Schaden loeschen, bevor er ueberhaupt geprueft wird.
+        // Genau das liess einen Totem-Pop nach laengerer stabiler Gesundheit (>0.4s ohne HP-Aenderung -
+        // der Normalfall zwischen zwei Treffern) komplett ungeheilt durch, weil die Alt-Logik das
+        // "veraltete Fenster" IMMER zuerst zuruecksetzte, egal ob der aktuelle Tick selbst der Treffer war.
+        if (hp > hpAtHealWindowStart || (tickCounter - healWindowStartTick > 8 && dmg < healMinDamage.get())) {
             hpAtHealWindowStart = hp;
             healWindowStartTick = tickCounter;
+            dmg = hpAtHealWindowStart - hp;
         }
 
         if (!healPotions.get() || blocking || drinkingFireRes || healPotionCooldown > 0) return;
-
-        float dmg = hpAtHealWindowStart - hp;
         if (dmg < healMinDamage.get()) return;
 
         FindItemResult potion = InvUtils.findInHotbar(GodmodePvP::isHealingSplash);
@@ -2927,6 +2957,11 @@ public class GodmodePvP extends Module {
 
         double dist = Math.sqrt(mc.player.distanceToSqr(target));
         if (mode == 1 && dist > 6) return;
+        // Bereits in Nahkampf-Reichweite: Trap bringt nichts mehr (das Ziel muss ja nicht mehr
+        // anlaufen) und der dafuer verbrauchte Rotations-Slot geht sonst zulasten des naechsten
+        // Nahkampf-Schlags - genau das liess den Bot direkt neben einem regungslosen Ziel (z.B. Dummy)
+        // ein Web setzen und dann sichtbar eine Weile untaetig wirken, statt sofort zuzuschlagen.
+        if (dist <= attackRange.get()) return;
         if (mc.gui.screen() != null || tickCounter % 3 != 0) return;
 
         // In der Luft (Sprung, Knockback, Anchor-/Crystal-Wurf) hat die AKTUELLE Position kein tragendes
