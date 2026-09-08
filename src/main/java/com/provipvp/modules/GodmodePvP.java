@@ -789,6 +789,15 @@ public class GodmodePvP extends Module {
         bs.failureTimeoutMS.value = 1200L;
         bs.planAheadPrimaryTimeoutMS.value = 1200L;
         bs.planAheadFailureTimeoutMS.value = 2500L;
+        // Ein Kampf-Bot soll NIE mitten im Gefecht in ein zufaellig auf dem Pfad liegendes Nether-Portal
+        // spazieren, nur weil Baritones Pfadsuche es als kuerzeste Route ansieht - das wuerde die
+        // Verfolgung/den Kampf komplett abbrechen und den Bot in eine andere Dimension verfrachten, weit
+        // ausserhalb jeder engage-distance/follow-range-Kontrolle dieses Moduls. enterPortal=false verhindert
+        // nur das ABSICHTLICHE Ziel "geh in dieses Portal" - ein Portal, das zufaellig auf dem Weg zu einem
+        // ANDEREN Ziel liegt, wuerde trotzdem einfach durchquert. blocksToAvoid zwingt Baritone, aktiv
+        // drumherum zu routen statt nur nicht direkt hineinzulaufen.
+        bs.enterPortal.value = false;
+        bs.blocksToAvoid.value = new java.util.ArrayList<>(java.util.List.of(net.minecraft.world.level.block.Blocks.NETHER_PORTAL));
 
         if (autoMendOn.get()) {
             safeEnable(m, AutoMend.class);
@@ -835,6 +844,7 @@ public class GodmodePvP extends Module {
         mc.player.setShiftKeyDown(false);
         Input.setKeyState(mc.options.keyJump, false);
         Input.setKeyState(mc.options.keySprint, false);
+        Input.setKeyState(mc.options.keyUp, false);
         mc.player.setSprinting(false);
 
         lastHealth.clear();
@@ -886,6 +896,10 @@ public class GodmodePvP extends Module {
     private void doTick() {
         Player self = mc.player;
         currentAction = "-";
+        // walkThroughFire() setzt keyUp=true, ruft sich aber nicht mehr auf sobald kein Feuer mehr
+        // blockiert - ohne diesen Reset bleibt "W" clientseitig fuer immer gedrueckt (auch Freecam
+        // sieht diesen rohen Tastenzustand und laeuft dann von selbst vorwaerts).
+        Input.setKeyState(mc.options.keyUp, false);
         rotationQueuedThisTick = false;
         pendingFreeLook = false;
 

@@ -580,6 +580,12 @@ public class HumanPvP extends Module {
         bs.jumpPenalty.value = 2.0;
         bs.maxFallHeightNoWater.value = 15; // genug fuer normales Gelaende; Fallschaden wird ueber escape-pearl abgefangen, kein eigener Fallschaden-Hack
         bs.followRadius.value = 3; // Baritone haelt/regelt selbst diesen Abstand - kontinuierlich statt hart cancel+neu
+        // Ein Kampf-Bot soll NIE mitten im Gefecht in ein zufaellig auf dem Pfad liegendes Nether-Portal
+        // spazieren, nur weil Baritones Pfadsuche es als kuerzeste Route ansieht. enterPortal=false
+        // verhindert nur das ABSICHTLICHE Ziel "geh in dieses Portal" - blocksToAvoid zwingt Baritone,
+        // aktiv drumherum zu routen statt nur nicht direkt hineinzulaufen.
+        bs.enterPortal.value = false;
+        bs.blocksToAvoid.value = new java.util.ArrayList<>(java.util.List.of(net.minecraft.world.level.block.Blocks.NETHER_PORTAL));
 
         if (autoMendOn.get()) safeEnable(m, AutoMend.class);
         if (autoEatOn.get()) safeEnable(m, AutoEat.class);
