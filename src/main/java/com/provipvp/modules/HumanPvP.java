@@ -1578,6 +1578,9 @@ public class HumanPvP extends Module {
         } else {
             yaw = Rotations.getYaw(aimAt);
             pitch = solvePearlPitch(mc.player.getEyePosition().subtract(0, 0.1, 0), yaw, aimAt.getBoundingBox().getCenter());
+            // Ziel physisch ausserhalb der Perlen-Reichweite (z.B. gerade sehr hoch explosionsgeschleudert)
+            // - lieber die Perle sparen als sie sicher danebenzuwerfen.
+            if (Double.isNaN(pitch)) return;
         }
 
         if (pearl.isOffhand()) {
@@ -1612,8 +1615,11 @@ public class HumanPvP extends Module {
         double directPitch = Math.toDegrees(-Math.atan2(dy, distXZ));
         if (distXZ < 0.5) return directPitch; // praktisch am eigenen Fuss - keine Ballistik noetig
 
-        double lo = directPitch - 40; // mehr nach oben -> mehr Resthoehe am Ziel
-        double hi = directPitch;      // direkter Blick -> am Ziel definitionsgemaess zu niedrig (Schwerkraft)
+        // Pitch ist auf [-90,90] begrenzt - ohne diese Klammer suchte die Bisektion bei sehr steilen
+        // Wuerfen (Ziel hoch UND nah) in physisch unmoeglichem Terrain jenseits von -90 Grad und
+        // lieferte einen sinnlosen, viel zu flachen Pitch - die Perle landete weit vor dem Ziel.
+        double lo = Math.max(-89, directPitch - 40);
+        double hi = directPitch;
 
         for (int i = 0; i < 40; i++) {
             double mid = (lo + hi) / 2;
@@ -1623,7 +1629,10 @@ public class HumanPvP extends Module {
             boolean overshootsHeight = Double.isNaN(heightAtDist) || heightAtDist > dy;
             if (overshootsHeight) lo = mid; else hi = mid;
         }
-        return (lo + hi) / 2;
+        double finalPitch = (lo + hi) / 2;
+        double landedHeight = simulatePearlHeightAt(yaw, finalPitch, distXZ);
+        if (Double.isNaN(landedHeight) || landedHeight < dy - 0.5) return Double.NaN;
+        return finalPitch;
     }
 
     /** Simuliert einen Perlenwurf mit gegebenem Yaw/Pitch nach Minecrafts eigener Projektil-Physik

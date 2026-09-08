@@ -2754,11 +2754,15 @@ public class GodmodePvP extends Module {
             double[] arrivalTicks = {0};
             yaw = Rotations.getYaw(aimPoint);
             pitch = solvePearlPitch(from, yaw, aimPoint, arrivalTicks);
-            for (int i = 0; i < 2; i++) {
+            for (int i = 0; i < 2 && !Double.isNaN(pitch); i++) {
                 aimPoint = predictOverTicks(aimAt, (int) Math.round(arrivalTicks[0])).add(centerOffset);
                 yaw = Rotations.getYaw(aimPoint);
                 pitch = solvePearlPitch(from, yaw, aimPoint, arrivalTicks);
             }
+            // Ziel physisch ausserhalb der Perlen-Reichweite (z.B. gerade sehr hoch explosionsgeschleudert,
+            // steiler Wurf noetig als selbst ein Pitch von -90 hergibt) - lieber die Perle sparen als sie
+            // sicher danebenzuwerfen. Naechster Tick probiert es mit der dann aktuellen Position erneut.
+            if (Double.isNaN(pitch)) return;
         } else {
             return;
         }
@@ -2798,8 +2802,12 @@ public class GodmodePvP extends Module {
             return directPitch;
         }
 
-        double lo = directPitch - 40; // mehr nach oben -> mehr Resthoehe am Ziel
-        double hi = directPitch;      // direkter Blick -> am Ziel definitionsgemaess zu niedrig (Schwerkraft)
+        // Pitch ist auf [-90,90] begrenzt - ohne diese Klammer suchte die Bisektion bei sehr steilen
+        // Wuerfen (Ziel hoch UND nah, z.B. gerade explosionsgeschleudert) in physisch unmoeglichem
+        // Terrain jenseits von -90 Grad und lieferte einen voellig sinnlosen, viel zu flachen Pitch -
+        // die Perle landete dann weit vor dem Ziel statt in dessen Naehe.
+        double lo = Math.max(-89, directPitch - 40);
+        double hi = directPitch;
 
         for (int i = 0; i < 40; i++) {
             double mid = (lo + hi) / 2;
@@ -2810,7 +2818,11 @@ public class GodmodePvP extends Module {
             if (overshootsHeight) lo = mid; else hi = mid;
         }
         double finalPitch = (lo + hi) / 2;
-        if (arrivalTicksOut != null) simulatePearlHeightAt(yaw, finalPitch, distXZ, arrivalTicksOut);
+        double landedHeight = simulatePearlHeightAt(yaw, finalPitch, distXZ, arrivalTicksOut);
+        // Selbst der steilst erlaubte Wurf (Pitch nahe -90) erreicht die Zielhoehe nicht - das Ziel ist
+        // bei dieser Distanz schlicht ausserhalb der physischen Reichweite einer Perle (z.B. gerade sehr
+        // hoch explosionsgeschleudert, aber noch zu nah, um genug Anlauf fuer die Hoehe zu nehmen).
+        if (Double.isNaN(landedHeight) || landedHeight < dy - 0.5) return Double.NaN;
         return finalPitch;
     }
 
