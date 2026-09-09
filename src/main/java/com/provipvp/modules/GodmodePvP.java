@@ -1147,6 +1147,7 @@ public class GodmodePvP extends Module {
         // 100 Ticks (5s) - gegen einen mobilen Gegner laengst wieder weg, viel zu lang.
         if (watchdogStuckTicks > watchdogTicks.get()) {
             cancelFollow();
+            resetPositioningState();
             dtapStage = 0;
             anchorCandidates.clear();
             anchorCandidateIndex = 0;
@@ -1823,15 +1824,17 @@ public class GodmodePvP extends Module {
             }
         }
 
-        for (int i = 0; i < found.size(); i++) {
-            for (int j = i + 1; j < found.size(); j++) {
-                if (dmgs.get(j) > dmgs.get(i)) {
-                    BlockPos tp = found.get(i); found.set(i, found.get(j)); found.set(j, tp);
-                    Double td = dmgs.get(i); dmgs.set(i, dmgs.get(j)); dmgs.set(j, td);
-                }
-            }
-        }
-        anchorCandidates.addAll(found);
+        // Stabile Sortierung mit deterministischem Tie-Break (BlockPos-Hash) statt manuellem Bubble-Sort
+        // ohne Tie-Break - bei exakt gleichem Schaden konnten zwei Kandidaten sonst bei aufeinander-
+        // folgenden Neuberechnungen ihre Position tauschen und so unentschlossen zwischen zwei
+        // gleichwertigen Optionen hin- und herwechseln, statt konsequent bei einer zu bleiben.
+        java.util.List<Integer> order = new java.util.ArrayList<>();
+        for (int i = 0; i < found.size(); i++) order.add(i);
+        order.sort((a, b) -> {
+            int cmp = Double.compare(dmgs.get(b), dmgs.get(a));
+            return cmp != 0 ? cmp : Integer.compare(found.get(a).hashCode(), found.get(b).hashCode());
+        });
+        for (int i : order) anchorCandidates.add(found.get(i));
     }
 
     /** Crystal: Obsidian/Bedrock-Basis ODER offene Luft-Tasche (CrystalAura setzt dort im Support-Modus
@@ -1882,6 +1885,16 @@ public class GodmodePvP extends Module {
 
     private static final Direction[] BED_DIRECTIONS = { Direction.NORTH, Direction.SOUTH, Direction.EAST, Direction.WEST };
 
+    /** Toleranz fuer den LoS-Block-Raycast (hasRaycastLineOfSight): ein Treffer NAEHER als dieser Abstand
+     *  zum eigentlichen Zielpunkt zaehlt noch als "erreicht", nicht als blockiert. Kein exakter MISS
+     *  ist der Normalfall an einer Kandidaten-Zelle, die direkt an einer Wand/Kante liegt (Slab-Stufe,
+     *  Zaun, angewinkelte Treppe) - der Raycast trifft dann die Nachbarflaeche statt exakt durchzugehen.
+     *  0.6 Bloecke (bisher als Magic Number inline) deckt diesen "am Rand liegt"-Fall ab, ohne echte
+     *  Deckung (eine ganze Wand dazwischen, deutlich groesserer Rest-Abstand) durchzulassen - Wert bewusst
+     *  UNVERAENDERT gelassen (kein Live-Tuning-Beleg fuer einen anderen Wert), nur benannt/dokumentiert.
+     */
+    private static final double LOS_RAYCAST_TOLERANCE = 0.6;
+
     /** Alle gueltigen Bett-Plaetze um das Ziel, sortiert nach Schaden (absteigend). Ein Bett braucht anders
      *  als Crystal/Anchor KEINE feste Unterlage (nur zwei freie, ersetzbare Bloecke: Fuss- + Kopfteil in
      *  eine der vier Himmelsrichtungen) - wirkt aber nur ausserhalb der Overworld (Nether/End); das kann der
@@ -1925,15 +1938,15 @@ public class GodmodePvP extends Module {
             }
         }
 
-        for (int i = 0; i < found.size(); i++) {
-            for (int j = i + 1; j < found.size(); j++) {
-                if (dmgs.get(j) > dmgs.get(i)) {
-                    BedSpot tp = found.get(i); found.set(i, found.get(j)); found.set(j, tp);
-                    Double td = dmgs.get(i); dmgs.set(i, dmgs.get(j)); dmgs.set(j, td);
-                }
-            }
-        }
-        bedCandidates.addAll(found);
+        // Stabile Sortierung mit deterministischem Tie-Break (BedSpot-Position-Hash) - siehe
+        // calcBestAnchor() fuer dieselbe Begruendung (kein Hin- und Herwechseln bei Gleichstand).
+        java.util.List<Integer> order = new java.util.ArrayList<>();
+        for (int i = 0; i < found.size(); i++) order.add(i);
+        order.sort((a, b) -> {
+            int cmp = Double.compare(dmgs.get(b), dmgs.get(a));
+            return cmp != 0 ? cmp : Integer.compare(found.get(a).pos().hashCode(), found.get(b).pos().hashCode());
+        });
+        for (int i : order) bedCandidates.add(found.get(i));
     }
 
     /** Bett braucht keine feste Unterlage - nur eine ersetzbare (Luft-)Zelle, optional abseits von Lava. */
@@ -1955,7 +1968,7 @@ public class GodmodePvP extends Module {
         Vec3 eye = mc.player.getEyePosition();
         ClipContext ctx = new ClipContext(eye, point, ClipContext.Block.COLLIDER, ClipContext.Fluid.NONE, mc.player);
         BlockHitResult result = mc.level.clip(ctx);
-        return result.getType() == HitResult.Type.MISS || result.getLocation().distanceTo(point) < 0.6;
+        return result.getType() == HitResult.Type.MISS || result.getLocation().distanceTo(point) < LOS_RAYCAST_TOLERANCE;
     }
 
     /** Erste Himmelsrichtung, in der neben dem Fussteil noch eine zweite freie Zelle fuer das Kopfteil
@@ -2428,6 +2441,18 @@ public class GodmodePvP extends Module {
         }
     }
 
+    /** Buendelt alle Felder, die eine als "veraltet" erkannte Positionierung/Navigation zuruecksetzen
+     *  muessen - bisher setzte der Watchdog nur Anchor-/Follow-Zustand zurueck, liess aber activeHole/
+     *  heightCalcOrigin (updateHolePositioning navigierte dann weiter zu einer laengst veralteten
+     *  Loch-Position) und die Oszillations-Anker (oscillationAnchorPos/-Tick) unangetastet stehen -
+     *  Ping-Pong-Bewegung statt eines sauberen Neustarts. */
+    private void resetPositioningState() {
+        activeHole = null;
+        heightCalcOrigin = null;
+        oscillationAnchorPos = null;
+        oscillationAnchorTick = 0;
+    }
+
     /** Vermeidet Explosionen, die einen befreundeten Spieler (Meteor-Friends-Liste) mittreffen wuerden. */
     private boolean hitsFriend(Vec3 pos, boolean crystal) {
         if (!respectFriends.get() || Friends.get().isEmpty()) return false;
@@ -2466,7 +2491,7 @@ public class GodmodePvP extends Module {
             Input.setKeyState(mc.options.keyLeft, false);
             Input.setKeyState(mc.options.keyRight, false);
             Input.setKeyState(mc.options.keyDown, false);
-            nextStrafeSwitchTick = -1; // frisches, zufaelliges Intervall beim naechsten Nahkampf-Eintritt
+            nextStrafeSwitchTick = -1; // Sentinel: naechster Nahkampf-Eintritt bekommt frischen Zufalls-Versatz
             return;
         }
 
@@ -2482,8 +2507,12 @@ public class GodmodePvP extends Module {
 
         // Zufaellig getaktete Richtungswechsel (10-24 Ticks, 0.5-1.2s) statt eines starren 20-Tick-Rhythmus -
         // ein exakt periodisches Strafing ist leicht zu lesen (fuer Gegner UND Anti-Cheat-Heuristiken),
-        // echte Spieler wechseln unregelmaessig.
-        if (tickCounter >= nextStrafeSwitchTick) {
+        // echte Spieler wechseln unregelmaessig. Bei frischem Nahkampf-Eintritt (Sentinel -1) NICHT sofort
+        // auf Tick 0 flippen (waere ein exakt vorhersagbares Timing-Signal) - nur einen zufaelligen
+        // Zeitpunkt fuer den ERSTEN Wechsel vormerken und die aktuelle Strafe-Richtung vorerst behalten.
+        if (nextStrafeSwitchTick < 0) {
+            nextStrafeSwitchTick = tickCounter + rng.nextInt(15);
+        } else if (tickCounter >= nextStrafeSwitchTick) {
             strafeLeft = !strafeLeft;
             nextStrafeSwitchTick = tickCounter + 10 + rng.nextInt(15);
         }
@@ -2832,7 +2861,14 @@ public class GodmodePvP extends Module {
      *  die tatsaechliche Flugzeit eines Perlwurfs, die je nach Distanz stark variiert). */
     private Vec3 predictOverTicks(LivingEntity target, int ticks) {
         if (ticks <= 0) return target.position();
-        Vec3 vel = velocities.getOrDefault(target.getUUID(), Vec3.ZERO);
+        // Kein Tracking-Datenpunkt fuer dieses Ziel (allererster Tick nach Zielwahl/Zielwechsel,
+        // updateTracking() hat noch keine Geschwindigkeit gemessen) - eine angenommene Nullgeschwindigkeit
+        // waere fuer ein Ziel in der Luft (gerade explosionsgeschleudert, mitten im Sprung) komplett falsch
+        // (die Fallsimulation unten wuerde bei "ruht gerade" statt der echten Ausgangsgeschwindigkeit
+        // starten). Lieber ehrlich keine Vorhersage liefern (aktuelle Position), bis der naechste Tick
+        // eine echte gemessene Geschwindigkeit beisteuert.
+        Vec3 vel = velocities.get(target.getUUID());
+        if (vel == null) return target.position();
 
         if (target.onGround()) {
             return target.position().add(vel.scale(ticks));
@@ -2849,8 +2885,15 @@ public class GodmodePvP extends Module {
             // wirft, wo sie waeren, wenn sie ewig weiterfallen wuerden" statt an die echte Landestelle.
             if (v.y < 0) {
                 BlockPos landPos = BlockPos.containing(next.x, next.y, next.z);
-                if (mc.level.getBlockState(landPos).blocksMotion()) {
-                    return new Vec3(next.x, landPos.getY() + 1.0, next.z);
+                BlockState landState = mc.level.getBlockState(landPos);
+                if (landState.blocksMotion()) {
+                    // Echte Oberflaechenhoehe der Kollisionsform statt pauschal "ganzer Block" (Y+1) -
+                    // eine Slab-Kante (Top bei Y+0.5) oder ein Zaun (Top bei Y+1.5) wurde sonst um bis zu
+                    // einen halben Block falsch platziert, die Landestelle des Ziels also verfehlt.
+                    double topOffset = 1.0;
+                    var shape = landState.getCollisionShape(mc.level, landPos);
+                    if (!shape.isEmpty()) topOffset = shape.max(net.minecraft.core.Direction.Axis.Y);
+                    return new Vec3(next.x, landPos.getY() + topOffset, next.z);
                 }
             }
             pos = next;

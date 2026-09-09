@@ -1295,12 +1295,19 @@ public class HumanPvP extends Module {
         // Umschalt-Verhalten bei exakt derselben Schadensdifferenz (wirkt sonst wie ein Taschenrechner).
         double noise = (rng.nextDouble() - 0.5) * 0.3;
 
+        // Hysterese: zum Wechsel IN den Anchor-/Bett-Modus braucht es einen klaren Vorsprung, zum
+        // BLEIBEN reicht ein kleinerer Abstand - sonst kippt der Modus bei jedem kleinen Schadens-
+        // Unterschied hin und her (siehe GodmodePvP fuer dieselbe, dort schon vorhandene Traegheit -
+        // HumanPvP nutzte bisher fuer beide Richtungen dieselbe feste Schwelle).
+        double anchorStickyBonus = auraMode == 1 ? 0.3 : 0.0;
+        double bedStickyBonus = auraMode == 2 ? 0.3 : 0.0;
+
         boolean wantAnchor;
         if (anchorMode.get() == 1) {
             wantAnchor = hasAnchorItem && inRange && anchorCandidateIndex < anchorCandidates.size()
-                && bestAnchorDmgCache >= crystalDmg + noise;
+                && bestAnchorDmgCache + anchorStickyBonus >= crystalDmg + noise;
         } else {
-            wantAnchor = hasAnchorItem && inRange && bestAnchorDmgCache > crystalDmg + 0.3 + noise;
+            wantAnchor = hasAnchorItem && inRange && bestAnchorDmgCache + anchorStickyBonus > crystalDmg + 0.3 + noise;
         }
 
         // syncSupport() konnte CrystalAuras Obsidian-Auto-Unterbau nicht erzwingen -> Crystal-Modus ist
@@ -1313,7 +1320,7 @@ public class HumanPvP extends Module {
         }
 
         boolean wantBed = hasBedItem && inRange && bedCandidateIndex < bedCandidates.size()
-            && bestBedDmgCache > crystalDmg + 0.3 + noise;
+            && bestBedDmgCache + bedStickyBonus > crystalDmg + 0.3 + noise;
 
         // Bei beiden verfuegbar gewinnt die schadenstaerkere Option.
         if (wantAnchor && wantBed) {
@@ -1421,15 +1428,16 @@ public class HumanPvP extends Module {
             }
         }
 
-        for (int i = 0; i < found.size(); i++) {
-            for (int j = i + 1; j < found.size(); j++) {
-                if (dmgs.get(j) > dmgs.get(i)) {
-                    BlockPos tp = found.get(i); found.set(i, found.get(j)); found.set(j, tp);
-                    Double td = dmgs.get(i); dmgs.set(i, dmgs.get(j)); dmgs.set(j, td);
-                }
-            }
-        }
-        anchorCandidates.addAll(found);
+        // Stabile Sortierung mit deterministischem Tie-Break (BlockPos-Hash) statt manuellem Bubble-Sort
+        // ohne Tie-Break - siehe GodmodePvP fuer dieselbe Begruendung (kein Hin- und Herwechseln bei
+        // exakt gleichem Schaden).
+        List<Integer> order = new ArrayList<>();
+        for (int i = 0; i < found.size(); i++) order.add(i);
+        order.sort((a, b) -> {
+            int cmp = Double.compare(dmgs.get(b), dmgs.get(a));
+            return cmp != 0 ? cmp : Integer.compare(found.get(a).hashCode(), found.get(b).hashCode());
+        });
+        for (int i : order) anchorCandidates.add(found.get(i));
     }
 
     private boolean validExplosionSpot(BlockPos cell, boolean crystal) {
@@ -1443,6 +1451,10 @@ public class HumanPvP extends Module {
         return below.blocksMotion() && mc.level.getBlockState(cell.above()).isAir();
     }
 
+    /** Toleranz fuer den LoS-Block-Raycast - siehe GodmodePvP fuer dieselbe Begruendung. Wert bewusst
+     *  UNVERAENDERT gelassen (kein Live-Tuning-Beleg fuer einen anderen Wert), nur benannt/dokumentiert. */
+    private static final double LOS_RAYCAST_TOLERANCE = 0.6;
+
     /** Echter Block-Raycast zwischen Augenposition und Kandidaten-Mittelpunkt - siehe GodmodePvP fuer
      *  denselben Fix/dieselbe Begruendung (reine Distanz-/Blockstate-Pruefung sieht Mauern dazwischen
      *  nicht, waehlte also auch real unerreichbare Kandidaten hinter Deckung). */
@@ -1451,7 +1463,7 @@ public class HumanPvP extends Module {
         Vec3 eye = mc.player.getEyePosition();
         ClipContext ctx = new ClipContext(eye, point, ClipContext.Block.COLLIDER, ClipContext.Fluid.NONE, mc.player);
         BlockHitResult result = mc.level.clip(ctx);
-        return result.getType() == HitResult.Type.MISS || result.getLocation().distanceTo(point) < 0.6;
+        return result.getType() == HitResult.Type.MISS || result.getLocation().distanceTo(point) < LOS_RAYCAST_TOLERANCE;
     }
 
     private boolean isNearLava(BlockPos cell) {
@@ -1515,15 +1527,15 @@ public class HumanPvP extends Module {
             }
         }
 
-        for (int i = 0; i < found.size(); i++) {
-            for (int j = i + 1; j < found.size(); j++) {
-                if (dmgs.get(j) > dmgs.get(i)) {
-                    BedSpot tp = found.get(i); found.set(i, found.get(j)); found.set(j, tp);
-                    Double td = dmgs.get(i); dmgs.set(i, dmgs.get(j)); dmgs.set(j, td);
-                }
-            }
-        }
-        bedCandidates.addAll(found);
+        // Stabile Sortierung mit deterministischem Tie-Break - siehe GodmodePvP/calcBestAnchor fuer
+        // dieselbe Begruendung (kein Hin- und Herwechseln bei exakt gleichem Schaden).
+        List<Integer> order = new ArrayList<>();
+        for (int i = 0; i < found.size(); i++) order.add(i);
+        order.sort((a, b) -> {
+            int cmp = Double.compare(dmgs.get(b), dmgs.get(a));
+            return cmp != 0 ? cmp : Integer.compare(found.get(a).pos().hashCode(), found.get(b).pos().hashCode());
+        });
+        for (int i : order) bedCandidates.add(found.get(i));
     }
 
     /** Bett braucht keine feste Unterlage - nur eine ersetzbare (Luft-)Zelle, optional abseits von Lava. */
@@ -1715,18 +1727,26 @@ public class HumanPvP extends Module {
 
     /** Kreis-strafet im Nahkampf (variiert den Explosionswinkel, schwerer zu treffen) und weicht kurz
      *  zurueck, wenn gerade eine neue Explosionsquelle aufgetaucht ist - siehe GodmodePvP fuer dieselbe
-     *  Mechanik/Begruendung. Nutzt die ECHTE aktuelle Rotation (mc.player.getYRot()), die smoothLookAt()
-     *  gerade kontinuierlich Richtung Ziel dreht - keine eigene Rotationsberechnung noetig. */
+     *  Mechanik/Begruendung. Nutzt die VIRTUELLE Ziel-Rotation (effectiveAimYaw()) statt der echten
+     *  Kamera-Rotation - bei aktivem Silent-Aim (free-look) zeigt mc.player.getYRot() sonst auf die
+     *  alte/stehengebliebene echte Kamera-Rotation, waehrend smoothLookAt() nur noch die virtuelle
+     *  aimYaw kontinuierlich Richtung Ziel dreht. Ohne diesen Fix strafte der Bot relativ zur falschen
+     *  Richtung, sobald free-look aktiv war - Bewegungs- und Blickrichtung liefen auseinander. */
     private void updateCombatMovement(LivingEntity target, double dist) {
         if (dist > attackRange.get()) {
             Input.setKeyState(mc.options.keyLeft, false);
             Input.setKeyState(mc.options.keyRight, false);
             Input.setKeyState(mc.options.keyDown, false);
-            nextStrafeSwitchTick = -1;
+            nextStrafeSwitchTick = -1; // Sentinel: naechster Nahkampf-Eintritt bekommt frischen Zufalls-Versatz
             return;
         }
 
-        if (tickCounter >= nextStrafeSwitchTick) {
+        // Bei frischem Nahkampf-Eintritt (Sentinel -1) NICHT sofort auf Tick 0 flippen (waere ein exakt
+        // vorhersagbares Timing-Signal) - nur einen zufaelligen Zeitpunkt fuer den ERSTEN Wechsel
+        // vormerken und die aktuelle Strafe-Richtung vorerst behalten.
+        if (nextStrafeSwitchTick < 0) {
+            nextStrafeSwitchTick = tickCounter + rng.nextInt(15);
+        } else if (tickCounter >= nextStrafeSwitchTick) {
             strafeLeft = !strafeLeft;
             nextStrafeSwitchTick = tickCounter + 10 + rng.nextInt(15);
         }
@@ -1742,7 +1762,7 @@ public class HumanPvP extends Module {
         double tangX = strafeLeft ? -dz : dz;
         double tangZ = strafeLeft ? dx : -dx;
 
-        double yawRad = Math.toRadians(mc.player.getYRot());
+        double yawRad = Math.toRadians(effectiveAimYaw());
         double rightX = -Math.cos(yawRad), rightZ = -Math.sin(yawRad);
         double rightDot = tangX * rightX + tangZ * rightZ;
 
