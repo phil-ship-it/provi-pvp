@@ -1218,11 +1218,20 @@ public class GodmodePvP extends Module {
         // aber schon "engaged" (siehe oben, sticky bis follow-range/Zielverlust), wird auch nach einem
         // Explosions-Knockback ueber die Engage-Distanz hinaus weiterverfolgt statt die Verfolgung
         // abzubrechen - genau das war sonst der Bug: Crystal wirft den Gegner raus, Bot bleibt einfach stehen.
+        // Waehrend eines aktiven Rueckzugsschritts (explosionRetreatUntil, siehe updateCombatMovement)
+        // Baritones Verfolgung pausieren statt weiterlaufen zu lassen: Baritones FollowProcess haelt
+        // staendig den konfigurierten followRadius (3 Bloecke) zum Ziel und pathet sofort wieder NAEHER,
+        // sobald die manuelle Rueckwaerts-Taste den Abstand vergroessert - dieses Tauziehen zwischen
+        // Baritones eigener Bewegung und dem WASD-Rueckzug erzeugte spuerbar mehr serverseitige
+        // "moved wrongly"-Flags als die reine Seitwaerts-Strafe (die den Abstand kaum aendert).
         if (!engaged) {
             cancelFollow();
             activeHole = null;
             heightCalcOrigin = null;
             currentAction = "beobachten-fern";
+        } else if (tickCounter < explosionRetreatUntil) {
+            cancelFollow();
+            currentAction = "rueckzugsschritt";
         } else if (flying) {
             updateFollow(target);
         } else if (ignoreFire.get() && fireBlocksPath(self, target)) {

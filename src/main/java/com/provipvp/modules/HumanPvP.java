@@ -840,6 +840,18 @@ public class HumanPvP extends Module {
         smoothLookAt(aim);
         if (meleeStrafe.get()) updateCombatMovement(target, dist);
 
+        // Verfolgen: siehe GodmodePvP fuer dieselbe Logik/Begruendung. Waehrend eines aktiven
+        // Rueckzugsschritts pausiert, damit Baritones FollowProcess (haelt staendig followRadius zum
+        // Ziel) nicht sofort gegen die manuelle Rueckwaerts-Taste anpathet.
+        if (tickCounter < explosionRetreatUntil) {
+            cancelFollow();
+            currentAction = "rueckzugsschritt";
+        } else if (follow.get() && pursuing) {
+            updateFollow(target);
+        } else {
+            cancelFollow();
+        }
+
         if (tickCounter < engageAtTick) {
             currentAction = "reagieren";
             return;
