@@ -511,7 +511,6 @@ public class HumanPvP extends Module {
     private record BedSpot(BlockPos pos, Direction dir) {}
 
     private int lastTrapTick = -999;
-    private int nextTotemCheckTick = -999;
     private boolean drinkingFireRes;
     private int fireResStartTick = -999;
 
@@ -558,7 +557,6 @@ public class HumanPvP extends Module {
         healPotionCooldown = 0;
         healingUntilFull = false;
         lastTrapTick = -999;
-        nextTotemCheckTick = -999;
         lastPositions.clear();
 
         Modules m = Modules.get();
@@ -665,7 +663,13 @@ public class HumanPvP extends Module {
         // Nur eine echte Fremd-Container-GUI hat ein anderes containerMenu als das normale Inventar -
         // Meteor-ClickGUI/eigenes Inventar teilen sich inventoryMenu, Totem-Nachlegen darf da weiterlaufen.
         boolean foreignContainerOpen = mc.player.containerMenu != mc.player.inventoryMenu;
-        if (fastTotem.get() && tickCounter >= nextTotemCheckTick && !foreignContainerOpen) ensureOffhandTotem();
+        // Kein Verzoegerungs-Gate mehr: nach einem Totem-Pop ist die Offhand fuer die naechste(n)
+        // Angriffswelle sofort ungeschuetzt - bei zwei schnellen Treffern hintereinander (2v1, oder ein
+        // Gegner der einfach schnell genug klickt) reicht selbst 1-3 Tick Verzoegerung, um den Bot
+        // trotz Totem-Vorrat echt sterben zu lassen (im Live-Test reproduziert). GodmodePvP prueft schon
+        // jeden Tick ohne Gate - hier genauso, "menschlicher wirken" ist es nicht wert, dafuer wirklich
+        // zu sterben.
+        if (fastTotem.get() && !foreignContainerOpen) ensureOffhandTotem();
         if (!foreignContainerOpen) maintainHealPotions(self);
         maintainFireResistance();
 
@@ -940,7 +944,6 @@ public class HumanPvP extends Module {
         FindItemResult totem = InvUtils.find(Items.TOTEM_OF_UNDYING);
         if (totem.found()) {
             InvUtils.move().from(totem.slot()).toOffhand();
-            nextTotemCheckTick = tickCounter + 1 + rng.nextInt(3); // kleine Verzoegerung statt Sofort-Reflex
         }
     }
 
