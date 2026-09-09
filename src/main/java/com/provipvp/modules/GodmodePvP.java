@@ -398,6 +398,15 @@ public class GodmodePvP extends Module {
         .build()
     );
 
+    public final Setting<Integer> watchdogTicks = sgDefense.add(new IntSetting.Builder()
+        .name("watchdog-ticks")
+        .description("Nach so vielen Ticks ohne Eigenbewegung UND ohne Ziel-Schaden gilt der Bot als haengengeblieben (kompletter Reset). War fix auf 100 (5s) - gegen einen mobilen Gegner, der laengst wieder weg ist, viel zu lang.")
+        .defaultValue(30)
+        .range(10, 100)
+        .sliderRange(10, 60)
+        .build()
+    );
+
     public final Setting<Boolean> retreatThreshold = sgDefense.add(new BoolSetting.Builder()
         .name("retreat-threshold")
         .description("Bricht das Gefecht ab (Rueckzug), wenn Totems <2 UND keine Crystal/Anchor-Ressourcen mehr da sind.")
@@ -612,7 +621,10 @@ public class GodmodePvP extends Module {
     private int shieldUntil;
     private CrystalAura.SupportMode savedSupport;
     private int savedSupportDelay = -1;
+    private boolean supportSyncFailed;
     private int lastCrystalCount = -1;
+    private int lastAnchorBlockCount = -1;
+    private int lastBedBlockCount = -1;
     private boolean followActive;
     private boolean engaged; // sticky: einmal in Engage-Distanz gekommen, bleibt es auch nach Explosions-Knockback ueber diese Distanz hinaus (bis follow-range/Zielverlust) - sonst reisst eine Crystal-Explosion die Verfolgung mitten im Kampf ab.
     private UUID engagedTargetId;
@@ -696,6 +708,7 @@ public class GodmodePvP extends Module {
     @Override
     public void onActivate() {
         tickCounter = 0;
+        supportSyncFailed = false;
         auraMode = -1;
         lastErrorWarnTick = -999;
         savedPlaceDelay = -1;
@@ -732,6 +745,8 @@ public class GodmodePvP extends Module {
         blockingSwapBack = false;
         shieldUntil = 0;
         lastCrystalCount = -1;
+        lastAnchorBlockCount = -1;
+        lastBedBlockCount = -1;
         followActive = false;
         followedId = null;
         engaged = false;
@@ -1048,9 +1063,10 @@ public class GodmodePvP extends Module {
             oscillationAnchorTick = tickCounter;
         }
 
-        // Generischer Watchdog: 5s weder Eigenbewegung noch Schaden am Ziel -> kompletter Reset,
-        // damit der Bot nicht haengen bleibt bis man selbst zuschlaegt.
-        if (watchdogStuckTicks > 100) {
+        // Generischer Watchdog: konfigurierbare Anzahl Ticks ohne Eigenbewegung UND ohne Ziel-Schaden ->
+        // kompletter Reset, damit der Bot nicht haengen bleibt bis man selbst zuschlaegt. War fix auf
+        // 100 Ticks (5s) - gegen einen mobilen Gegner laengst wieder weg, viel zu lang.
+        if (watchdogStuckTicks > watchdogTicks.get()) {
             cancelFollow();
             dtapStage = 0;
             anchorCandidates.clear();
@@ -1115,12 +1131,24 @@ public class GodmodePvP extends Module {
 
         // Feindlicher Crystal frisch platziert (in 5 m)? -> kurzes Schild-Block-Fenster
         java.util.List<EndCrystal> nearCrystals = mc.level.getEntitiesOfClass(EndCrystal.class, self.getBoundingBox().inflate(5));
-        if (lastCrystalCount >= 0 && nearCrystals.size() > lastCrystalCount && !nearCrystals.isEmpty()
-            && autoShield.get() && !blocking) {
-            shieldUntil = tickCounter + 15; // Crystal zuendet praktisch sofort - kurzes, hartes Block-Fenster
+        boolean freshCrystal = lastCrystalCount >= 0 && nearCrystals.size() > lastCrystalCount && !nearCrystals.isEmpty();
+
+        // Anchor/Bett sind Bloecke, keine Entities - dieselbe Delta-Erkennung wie oben fuer Crystals,
+        // nur per Block-Scan im gleichen 5-Block-Radius statt per Entity-Liste. Ein frisch erscheinender
+        // Anchor/Bett in der Naehe ist ein ebenso starkes Vorzeichen einer unmittelbar bevorstehenden
+        // Explosion wie ein neuer Crystal - vorher gab es dafuer ueberhaupt keine reaktive Verteidigung.
+        int anchorBlocks = countNearbyBlocks(self.blockPosition(), 5, st -> st.is(Blocks.RESPAWN_ANCHOR));
+        int bedBlocks = countNearbyBlocks(self.blockPosition(), 5, st -> st.getBlock() instanceof BedBlock);
+        boolean freshAnchor = lastAnchorBlockCount >= 0 && anchorBlocks > lastAnchorBlockCount;
+        boolean freshBed = lastBedBlockCount >= 0 && bedBlocks > lastBedBlockCount;
+
+        if ((freshCrystal || freshAnchor || freshBed) && autoShield.get() && !blocking) {
+            shieldUntil = tickCounter + 15; // zuendet praktisch sofort - kurzes, hartes Block-Fenster
             startBlock();
         }
         lastCrystalCount = nearCrystals.size();
+        lastAnchorBlockCount = anchorBlocks;
+        lastBedBlockCount = bedBlocks;
 
         // Pop-Fenster: volle Aggression
         if (tickCounter < popBurstUntil) {
@@ -1264,7 +1292,9 @@ public class GodmodePvP extends Module {
 
     @Override
     public String getInfoString() {
-        return currentAction;
+        // Persistenter Warnzustand statt nur einer einzelnen Chatzeile beim Fehlschlag - bleibt
+        // sichtbar, solange syncSupport() nicht wieder erfolgreich lief (siehe dort).
+        return supportSyncFailed ? currentAction + " §c[kein Obsidian-Support!]" : currentAction;
     }
 
     /** Schild in die Haupthand (Offhand bleibt frei fuer den Totem) und blocken - reduziert Explosionsschaden. */
@@ -1547,6 +1577,16 @@ public class GodmodePvP extends Module {
             wantAnchor = !outOfGlowstone && !anchorForced && inRange && bestAnchorDmgCache > crystalDmg + 0.15 + enterMargin;
         }
 
+        // syncSupport() konnte CrystalAuras Obsidian-Auto-Unterbau nicht erzwingen -> Crystal-Modus ist
+        // ueber freier Luft (validExplosionSpot) faktisch nicht mehr voll funktionsfaehig. Anchor braucht
+        // dafuer keinen Support-Mechanismus (eigene Platzierungslogik), also aktiv bevorzugen statt sich
+        // weiter auf einen angeschlagenen Crystal-Modus zu verlassen - solange ueberhaupt ein gueltiger
+        // Anchor-Kandidat mit positivem Schaden gefunden wurde.
+        if (supportSyncFailed && hasAnchorItem && !outOfGlowstone && !anchorForced && inRange
+            && anchorCandidateIndex < anchorCandidates.size() && bestAnchorDmgCache > 0) {
+            wantAnchor = true;
+        }
+
         // Bett: gleiche Hysterese-Logik wie Anchor-Automatik (kein eigener Tie-Break-Modus - use-beds ist
         // ein simpler On/Off-Schalter, siehe Beschreibung).
         double bedEnterMargin = auraMode == 2 ? -0.3 : 0.15;
@@ -1605,7 +1645,7 @@ public class GodmodePvP extends Module {
 
         for (int dx = -1; dx <= 1; dx++) {
             for (int dz = -1; dz <= 1; dz++) {
-                for (int dy = 0; dy <= 1; dy++) {
+                for (int dy = -1; dy <= 1; dy++) {
                     Vec3 pos = new Vec3(bx + dx + 0.5, by + dy, bz + dz + 0.5);
                     BlockPos cell = new BlockPos(bx + dx, by + dy, bz + dz);
 
@@ -1641,7 +1681,7 @@ public class GodmodePvP extends Module {
 
         for (int dx = -1; dx <= 1; dx++) {
             for (int dz = -1; dz <= 1; dz++) {
-                for (int dy = 0; dy <= 1; dy++) {
+                for (int dy = -1; dy <= 1; dy++) {
                     Vec3 pos = new Vec3(bx + dx + 0.5, by + dy, bz + dz + 0.5);
                     BlockPos cell = new BlockPos(bx + dx, by + dy, bz + dz);
 
@@ -1683,7 +1723,15 @@ public class GodmodePvP extends Module {
         if (avoidLava.get() && isNearLava(cell)) return false;
 
         BlockState below = mc.level.getBlockState(cell.below());
-        if (crystal) return below.is(Blocks.OBSIDIAN) || below.is(Blocks.BEDROCK) || below.isAir();
+        if (crystal) {
+            if (below.is(Blocks.OBSIDIAN) || below.is(Blocks.BEDROCK)) return true;
+            // Freie Luft als Unterlage ist nur gueltig, wenn tatsaechlich noch Obsidian zum
+            // Unterbauen da ist - sonst waehlt bestDamageAround() eine Stelle, die CrystalAura nie
+            // wirklich bespielen kann. Das liess bestCrystalDmgCache faelschlich > 0 stehen, was
+            // explosionImminent() "true" zurueckgeben und melee-fallback komplett blockieren liess,
+            // obwohl der Bot regungslos neben einem voll treffbaren Gegner stand.
+            return below.isAir() && (InvUtils.findInHotbar(Items.OBSIDIAN).found() || InvUtils.find(Items.OBSIDIAN).found());
+        }
         return below.blocksMotion() && mc.level.getBlockState(cell.above()).isAir();
     }
 
@@ -1695,6 +1743,21 @@ public class GodmodePvP extends Module {
             if (mc.level.getBlockState(cell.relative(dir)).is(Blocks.LAVA)) return true;
         }
         return false;
+    }
+
+    /** Zaehlt Bloecke in einem Wuerfel um 'center' (Kantenlaenge 2*radius+1), die 'matcher' erfuellen -
+     *  fuer die Anchor-/Bett-Delta-Erkennung von auto-shield (Blocks statt Entities, sonst dieselbe
+     *  Idee wie die bestehende EndCrystal-Entity-Zaehlung direkt darueber). */
+    private int countNearbyBlocks(BlockPos center, int radius, java.util.function.Predicate<BlockState> matcher) {
+        int count = 0;
+        for (int dx = -radius; dx <= radius; dx++) {
+            for (int dy = -radius; dy <= radius; dy++) {
+                for (int dz = -radius; dz <= radius; dz++) {
+                    if (matcher.test(mc.level.getBlockState(center.offset(dx, dy, dz)))) count++;
+                }
+            }
+        }
+        return count;
     }
 
     private static final Direction[] BED_DIRECTIONS = { Direction.NORTH, Direction.SOUTH, Direction.EAST, Direction.WEST };
@@ -1716,7 +1779,7 @@ public class GodmodePvP extends Module {
 
         for (int dx = -1; dx <= 1; dx++) {
             for (int dz = -1; dz <= 1; dz++) {
-                for (int dy = 0; dy <= 1; dy++) {
+                for (int dy = -1; dy <= 1; dy++) {
                     BlockPos foot = new BlockPos(bx + dx, by + dy, bz + dz);
                     if (!validBedCell(foot)) continue;
 
@@ -2580,9 +2643,14 @@ public class GodmodePvP extends Module {
                 // Tick - der alte 2.0-Cap hat genau diese Faelle systematisch unterschaetzt und damit die
                 // Pearl-/Anchor-/Crystal-Vorhersage bei einem gerade weggeschleuderten Ziel voellig
                 // daneben zielen lassen (das Ziel "sah" fuer die Vorhersage viel langsamer aus als es war).
-                Vec3 vel = cur.subtract(prev);
-                if (vel.length() > 5.5) vel = vel.normalize().scale(5.5);
-                velocities.put(id, vel);
+                Vec3 rawVel = cur.subtract(prev);
+                if (rawVel.length() > 5.5) rawVel = rawVel.normalize().scale(5.5);
+                // Geglaettet (EMA) statt roh uebernommen: reines Tick-zu-Tick-Delta zappelt bei jedem
+                // Strafe-Richtungswechsel oder Sprung-Scheitelpunkt sofort komplett um, was die
+                // Vorhersage staendig kurz in die falsche Richtung schiessen liess. alpha=0.5 haelt echte
+                // Richtungswechsel innerhalb von 2-3 Ticks sichtbar, daempft aber Einzeltick-Rauschen.
+                Vec3 prevVel = velocities.getOrDefault(id, rawVel);
+                velocities.put(id, prevVel.scale(0.5).add(rawVel.scale(0.5)));
             }
         }
     }
@@ -2592,7 +2660,24 @@ public class GodmodePvP extends Module {
      *  pro Tick, damit die Vorhersage der echten Wurfparabel folgt statt geradeaus davonzulaufen - sonst zielt
      *  Crystal/Anchor-Platzierung bei einem in der Luft befindlichen Gegner systematisch daneben. */
     private Vec3 predict(LivingEntity target) {
-        return predictOverTicks(target, leadTicks.get());
+        // lead-ticks (Setting) ist die Basis-Vorlaufzeit fuer eine latenzfreie Verbindung; die
+        // tatsaechliche eigene Round-Trip-Zeit zum Server kommt real oben drauf. Vorher war der Wert
+        // fix, egal ob 5ms LAN oder 150+ms uebers Internet/durch einen Latenz-Proxy - auf Servern mit
+        // spuerbarer Latenz griff die Vorhersage dadurch systematisch zu kurz (das Ziel hatte sich
+        // bis zur tatsaechlichen Aktion laengst weiterbewegt, als die feste Tick-Zahl einkalkulierte).
+        return predictOverTicks(target, leadTicks.get() + pingTicks());
+    }
+
+    /** Eigene Client-Server-Latenz in Ticks (1 Tick = 50ms), aus Meteors Tab-Listen-Latenz-Cache -
+     *  kein Live-Wert (der Server aktualisiert ihn nur alle paar Sekunden), aber eine echte gemessene
+     *  Groesse statt eine geratene Konstante. Kein Eintrag (z.B. Sekundenbruchteile nach dem Connect)
+     *  -> 0 Bonus-Ticks, lieber ohne Ping-Zuschlag als mit einem erfundenen Wert.
+     */
+    private int pingTicks() {
+        if (mc.getConnection() == null || mc.player == null) return 0;
+        var info = mc.getConnection().getPlayerInfo(mc.player.getUUID());
+        if (info == null) return 0;
+        return Math.max(0, info.getLatency() / 50);
     }
 
     /** Wie predict(), aber mit frei waehlbarer Tick-Anzahl statt der festen 'lead-ticks'-Einstellung - fuer
@@ -2609,7 +2694,19 @@ public class GodmodePvP extends Module {
         Vec3 pos = target.position();
         Vec3 v = vel;
         for (int i = 0; i < ticks; i++) {
-            pos = pos.add(v);
+            Vec3 next = pos.add(v);
+            // Landung erkennen: sobald der simulierte Fall in einen soliden Block hineinlaeuft, dort
+            // einrasten statt endlos weiterzufallen. Ohne das faellt die Vorhersage bei einer Perlflugzeit,
+            // die laenger ist als die Fallzeit bis zur tatsaechlichen Landung, klaglos durch den Boden -
+            // genau der gemeldete Fall "Perle trifft in der Luft befindliche Gegner nicht, weil sie dahin
+            // wirft, wo sie waeren, wenn sie ewig weiterfallen wuerden" statt an die echte Landestelle.
+            if (v.y < 0) {
+                BlockPos landPos = BlockPos.containing(next.x, next.y, next.z);
+                if (mc.level.getBlockState(landPos).blocksMotion()) {
+                    return new Vec3(next.x, landPos.getY() + 1.0, next.z);
+                }
+            }
+            pos = next;
             v = new Vec3(v.x * 0.91, (v.y - 0.08) * 0.98, v.z * 0.91);
         }
         return pos;
@@ -3200,10 +3297,22 @@ public class GodmodePvP extends Module {
             if (s != null) {
                 savedSupport = s.get();
                 if (s.get() == CrystalAura.SupportMode.Disabled) s.set(CrystalAura.SupportMode.Fast);
+                supportSyncFailed = false;
+            } else {
+                // Feld existiert, aber die Meteor-Version liefert keinen Setting-Wert zurueck - genauso
+                // unzuverlaessig wie eine geworfene Exception, also denselben Fallback-Pfad nehmen.
+                supportSyncFailed = true;
             }
         } catch (Throwable t) {
             savedSupport = null;
-            error("CrystalAura-Support-Mode konnte nicht gesetzt werden (Meteor-Version geaendert?) - Obsidian-Unterbau bei freier Luft laeuft evtl. nicht automatisch.");
+            // Nicht nur einmalig chatten: solange die Sync fehlschlaegt, kann sich CrystalAura im
+            // Crystal-Modus nicht selbst mit Obsidian unterbauen - freie-Luft-Zellen (siehe
+            // validExplosionSpot) sind dann faktisch nie bespielbar. supportSyncFailed bleibt aktiv
+            // gesetzt (sichtbar im HUD via getInfoString(), siehe unten) und laesst wantAnchor()
+            // Anchor aktiv bevorzugen, solange verfuegbar - sicherer Fallback statt sich auf einen
+            // Crystal-Modus zu verlassen, der real nicht mehr voll funktioniert.
+            supportSyncFailed = true;
+            error("CrystalAura-Support-Mode konnte nicht gesetzt werden (Meteor-Version geaendert?) - Obsidian-Unterbau bei freier Luft laeuft evtl. nicht automatisch. Weiche auf Anchor-Vorzug aus, solange das so bleibt.");
         }
 
         // support-delay: der Tickabstand zwischen Obsidian-Platzierung und dem folgenden Crystal-Versuch.

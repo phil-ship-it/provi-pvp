@@ -470,6 +470,7 @@ public class HumanPvP extends Module {
     private int savedPlaceDelay = -1;
     private CrystalAura.SupportMode savedSupport;
     private int savedSupportDelay = -1;
+    private boolean supportSyncFailed;
     private boolean followActive;
     private UUID followedId;
 
@@ -521,6 +522,7 @@ public class HumanPvP extends Module {
     @Override
     public void onActivate() {
         tickCounter = 0;
+        supportSyncFailed = false;
         lastErrorWarnTick = -999;
         drinkingFireRes = false;
         fireResStartTick = -999;
@@ -754,7 +756,6 @@ public class HumanPvP extends Module {
 
         Vec3 aim = aimPoint(target);
         smoothLookAt(aim);
-        double aimError = currentAimError(aim);
 
         if (follow.get() && pursuing) {
             updateFollow(target);
@@ -781,17 +782,24 @@ public class HumanPvP extends Module {
         selectAura(target);
 
         if (auraMode == 1) {
-            runAnchorTick(target, aimError);
+            runAnchorTick(target);
             currentAction = "anchor";
         } else if (auraMode == 2) {
-            runBedTick(target, aimError);
+            runBedTick(target);
             currentAction = "bed";
         }
 
         if (shieldBreaker.get() && target instanceof Player p && p.isBlocking()) {
             breakShield(p);
             currentAction = "schild-brechen";
-        } else if (dist <= attackRange.get() && aimError <= aimTolerance.get() && self.hasLineOfSight(target)
+        } else if (dist <= attackRange.get() && currentAimError(aim) <= aimTolerance.get() && self.hasLineOfSight(target)
+            // Frisch NACH selectAura()/runAnchorTick()/runBedTick() neu berechnet statt eines am
+            // Tick-Anfang zwischengespeicherten Werts: die drei rufen ihrerseits smoothLookAt() auf
+            // einen ANDEREN Punkt (Anchor-/Bett-Platzierungsstelle) auf und ueberschreiben damit die
+            // tatsaechliche Rotation dieses Ticks. Der alte, gecachte aimError haette hier weiter "ja,
+            // aufs Ziel ausgerichtet" gesagt, obwohl der Bot gerade real zu einem Block daneben schaut -
+            // ein Melee-Schlag mit nicht passender Blickrichtung ist ein klassisches Rotation-Anti-Cheat-
+            // Flag-Muster (Grim/Vulcan).
             && self.getAttackStrengthScale(0.5f) >= 0.95f && readyToClick()) {
             attackMelee(target);
             currentAction = "schlagen";
@@ -812,7 +820,7 @@ public class HumanPvP extends Module {
 
     @Override
     public String getInfoString() {
-        return currentAction;
+        return supportSyncFailed ? currentAction + " §c[kein Obsidian-Support!]" : currentAction;
     }
 
     private long pearlCooldown(double dist) {
@@ -949,7 +957,7 @@ public class HumanPvP extends Module {
 
     // ---------- Anchor-Executor (humanisiert: sichtbare Rotation + zufaellige Wartezeiten) ----------
 
-    private void runAnchorTick(LivingEntity target, double aimError) {
+    private void runAnchorTick(LivingEntity target) {
         if (drinkingFireRes) return; // s.o. - Swap-Merkposten waehrend des Trinkens nicht anfassen
         if (anchorCooldown > 0) {
             anchorCooldown--;
@@ -1002,7 +1010,7 @@ public class HumanPvP extends Module {
                     return;
                 }
 
-                if (interactAnchor(gs, aimError)) {
+                if (interactAnchor(gs)) {
                     anchorStage = 2;
                     stageDeadline = tickCounter + 3 + rng.nextInt(5);
                 }
@@ -1027,7 +1035,7 @@ public class HumanPvP extends Module {
                 if (!fir.found()) fir = InvUtils.find(itemStack -> !itemStack.isEmpty() && !itemStack.is(Items.GLOWSTONE));
                 if (!fir.found()) return;
 
-                if (interactAnchor(fir, aimError)) {
+                if (interactAnchor(fir)) {
                     anchorStage = 3;
                     stageDeadline = tickCounter + 20;
                 }
@@ -1044,7 +1052,7 @@ public class HumanPvP extends Module {
     }
 
     /** Interagiert nur, wenn die (sichtbare, tempolimitierte) Rotation schon nah genug am Ziel ist. */
-    private boolean interactAnchor(FindItemResult item, double currentError) {
+    private boolean interactAnchor(FindItemResult item) {
         if (drinkingFireRes) return false; // s.o. - Swap-Merkposten waehrend des Trinkens nicht anfassen
         Vec3 center = Vec3.atCenterOf(anchorPos);
         smoothLookAt(center);
@@ -1067,7 +1075,7 @@ public class HumanPvP extends Module {
 
     // ---------- Bett-Executor (humanisiert: sichtbare Rotation + zufaellige Wartezeiten, kein Ladeschritt) ----------
 
-    private void runBedTick(LivingEntity target, double aimError) {
+    private void runBedTick(LivingEntity target) {
         if (bedCooldown > 0) {
             bedCooldown--;
             return;
@@ -1096,20 +1104,19 @@ public class HumanPvP extends Module {
                 if (!bed.found()) return;
                 FindItemResult foundBed = bed;
 
-                // Die Platzierungsrichtung braucht die ECHTE Spieler-Rotation (das Bett-Placement liest
-                // player.getYRot() direkt), nicht die bei free-look rein virtuelle Silent-Aim-Richtung -
-                // deshalb hier ein kurzer, praeziser synchroner Snap statt der sonst ueblichen graduellen
-                // Drehung, exakt fuer diesen einen Platzierungs-Tick.
-                double yaw = spot.dir().toYRot();
-                rotateAndRun(yaw, 55, () -> {
-                    if (BlockUtils.place(spot.pos(), foundBed, false, 50)) {
-                        bedPos = spot.pos();
-                        bedStage = 1;
-                        bedStageDeadline = tickCounter + 3 + rng.nextInt(5);
-                    } else {
-                        bedCandidateIndex++;
-                    }
-                });
+                // Die vorangehende, tempolimitierte smoothLookAt(facePoint)+Toleranz-Gate oben hat den
+                // Bot schon nah genug an spot.dir()'s exakte Kardinalrichtung herangedreht (facePoint
+                // liegt selbst exakt in dieser Richtung, keine Zwischenwinkel) - ein zusaetzlicher
+                // synchroner Praezisions-Snap direkt vor der Platzierung war unnoetig und widersprach
+                // dem eigenen Modul-Ziel (tempolimitierte Drehung statt Snap ueberall). Platzierung
+                // nutzt jetzt einfach die bereits erreichte, tolerierte Rotation.
+                if (BlockUtils.place(spot.pos(), foundBed, false, 50)) {
+                    bedPos = spot.pos();
+                    bedStage = 1;
+                    bedStageDeadline = tickCounter + 3 + rng.nextInt(5);
+                } else {
+                    bedCandidateIndex++;
+                }
             }
             default -> {
                 if (!(mc.level.getBlockState(bedPos).getBlock() instanceof BedBlock)) {
@@ -1206,6 +1213,15 @@ public class HumanPvP extends Module {
                 && bestAnchorDmgCache >= crystalDmg + noise;
         } else {
             wantAnchor = hasAnchorItem && inRange && bestAnchorDmgCache > crystalDmg + 0.3 + noise;
+        }
+
+        // syncSupport() konnte CrystalAuras Obsidian-Auto-Unterbau nicht erzwingen -> Crystal-Modus ist
+        // ueber freier Luft (validExplosionSpot) faktisch nicht mehr voll funktionsfaehig. Anchor braucht
+        // dafuer keinen Support-Mechanismus, also aktiv bevorzugen statt sich weiter auf einen
+        // angeschlagenen Crystal-Modus zu verlassen (siehe GodmodePvP fuer denselben Fix).
+        if (supportSyncFailed && hasAnchorItem && inRange
+            && anchorCandidateIndex < anchorCandidates.size() && bestAnchorDmgCache > 0) {
+            wantAnchor = true;
         }
 
         boolean wantBed = hasBedItem && inRange && bedCandidateIndex < bedCandidates.size()
@@ -1944,10 +1960,14 @@ public class HumanPvP extends Module {
             if (s != null) {
                 savedSupport = s.get();
                 if (s.get() == CrystalAura.SupportMode.Disabled) s.set(CrystalAura.SupportMode.Fast);
+                supportSyncFailed = false;
+            } else {
+                supportSyncFailed = true;
             }
         } catch (Throwable t) {
             savedSupport = null;
-            error("CrystalAura-Support-Mode konnte nicht gesetzt werden (Meteor-Version geaendert?) - Obsidian-Unterbau bei freier Luft laeuft evtl. nicht automatisch.");
+            supportSyncFailed = true;
+            error("CrystalAura-Support-Mode konnte nicht gesetzt werden (Meteor-Version geaendert?) - Obsidian-Unterbau bei freier Luft laeuft evtl. nicht automatisch. Weiche auf Anchor-Vorzug aus, solange das so bleibt.");
         }
 
         // support-delay: Tickabstand zwischen Obsidian-Platzierung und dem folgenden Crystal-Versuch. Bei 0
