@@ -464,10 +464,20 @@ public class HumanPvP extends Module {
     private int tickCounter;
     private int lastErrorWarnTick = -999;
     private int lastPearlTick = -999;
-    // Siehe GodmodePvP fuer die volle Erklaerung: Meteors Rotations-Queue fuehrt bei mehreren im selben
-    // Tick angemeldeten Rotationen nur die ERSTE mit der tatsaechlich gesetzten Blickrichtung aus - jede
-    // weitere bekommt beim Ausfuehren ihres Callbacks schon wieder die alte Rotation zurueckgesetzt.
-    private boolean rotationQueuedThisTick;
+    // Zaehlt, wie viele Rotation+Aktion-Paare (rotateAndRun) diesen Tick schon eingereiht wurden -
+    // siehe GodmodePvP fuer die volle Erklaerung (Meteors Rotations-Klasse unterstuetzt nativ mehrere
+    // ausgerichtete Aktionen pro Tick ueber clientSide=true fuer jede Nicht-Erst-Aktion; das fruehere
+    // starre 1-Aktion-Mutex verhinderte unnoetig, dass z.B. ein Perlwurf und ein Heiltrank-Wurf im
+    // selben Tick feuern konnten).
+    private int rotationsThisTick;
+
+    // Prioritaeten fuer rotateAndRun() - siehe GodmodePvP fuer dieselbe Begruendung. HumanPvPs Anchor-/
+    // Bett-Ausfuehrung nutzt bewusst KEINE rotateAndRun()-Warteschlange (smoothLookAt() rampt die
+    // Rotation stattdessen ueber mehrere Ticks menschlich hoch), daher gibt es hier keine eigene
+    // Anchor-/Bett-/Crystal-Prioritaet.
+    private static final int PRIORITY_PEARL = 70;
+    private static final int PRIORITY_MISC = 60;
+    private static final int PRIORITY_LOOK = 0;
     private boolean pendingFreeLook;
     private double pendingFreeLookYaw, pendingFreeLookPitch;
     private int sprintResetCooldown;
@@ -685,7 +695,7 @@ public class HumanPvP extends Module {
     private void doTick() {
         Player self = mc.player;
         currentAction = "-";
-        rotationQueuedThisTick = false;
+        rotationsThisTick = 0;
         pendingFreeLook = false;
         boolean guiOpen = mc.gui.screen() != null;
         // Nur eine echte Fremd-Container-GUI hat ein anderes containerMenu als das normale Inventar -
@@ -899,14 +909,11 @@ public class HumanPvP extends Module {
 
         if (currentAction.equals("-")) currentAction = auraMode == 0 ? "crystal" : "zielen";
 
-        // Cosmetic Ziel-Verfolgung (free-look) nur anwenden, wenn diesen Tick noch keine echte
-        // Kampfaktion (Perlwurf, Anchor-Interaktion, ...) den gemeinsamen Rotations-Slot belegt hat -
-        // sonst wuerde diese rein optische Drehung lautlos vor der eigentlichen Aktion in Meteors
-        // Rotations-Queue landen und deren Callback mit der alten, zurueckgesetzten Blickrichtung
-        // ausfuehren (siehe rotateAndRun-Dokumentation).
-        if (pendingFreeLook && !rotationQueuedThisTick) {
-            rotationQueuedThisTick = true;
-            Rotations.rotate(pendingFreeLookYaw, pendingFreeLookPitch);
+        // Cosmetic Ziel-Verfolgung: laeuft IMMER am Tick-Ende mit der niedrigsten Prioritaet - siehe
+        // GodmodePvP fuer dieselbe Begruendung (verdraengt nie eine echte Aktion, landet aber
+        // zuverlaessig als letzter Eintrag in Rotations' lastRotation-Haltefeld).
+        if (pendingFreeLook) {
+            rotateAndRun(pendingFreeLookYaw, pendingFreeLookPitch, PRIORITY_LOOK, null);
         }
     }
 
@@ -1181,8 +1188,6 @@ public class HumanPvP extends Module {
                 Vec3 facePoint = self.getEyePosition().add(spot.dir().getStepX() * 10.0, -2.0, spot.dir().getStepZ() * 10.0);
                 smoothLookAt(facePoint);
                 if (currentAimError(facePoint) > aimTolerance.get()) return; // erst ausrichten
-
-                if (rotationQueuedThisTick) return; // Rotations-Slot diesen Tick schon belegt - naechster Tick
 
                 FindItemResult bed = InvHelper.find(HumanPvP::isBed);
                 if (!bed.found()) return;
@@ -1558,13 +1563,16 @@ public class HumanPvP extends Module {
         return stack.getItem() instanceof BedItem;
     }
 
-    /** @return true, wenn eingereiht wurde (Rotations-Slot diesen Tick noch frei war). Siehe GodmodePvP
-     *  fuer die volle Erklaerung, warum das notwendig ist. */
-    private boolean rotateAndRun(double yaw, double pitch, Runnable callback) {
-        if (rotationQueuedThisTick) return false;
-        rotationQueuedThisTick = true;
-        Rotations.rotate(yaw, pitch, callback);
+    /** Reiht eine Rotation+Aktion ein - siehe GodmodePvP fuer die volle Erklaerung (Mehrfachaktionen
+     *  pro Tick statt des frueheren starren 1-Aktion-Mutex). Gibt immer true zurueck. */
+    private boolean rotateAndRun(double yaw, double pitch, int priority, Runnable callback) {
+        Rotations.rotate(yaw, pitch, priority, rotationsThisTick > 0, callback);
+        rotationsThisTick++;
         return true;
+    }
+
+    private boolean rotateAndRun(double yaw, double pitch, Runnable callback) {
+        return rotateAndRun(yaw, pitch, PRIORITY_MISC, callback);
     }
 
     /** Haelt Fire Resistance permanent aktiv, solange man sich im Nether befindet - macht Lava-Kontakt,
@@ -1815,12 +1823,12 @@ public class HumanPvP extends Module {
         }
 
         if (pearl.isOffhand()) {
-            if (rotateAndRun(yaw, pitch, () -> mc.gameMode.useItem(mc.player, InteractionHand.OFF_HAND))) {
+            if (rotateAndRun(yaw, pitch, PRIORITY_PEARL, () -> mc.gameMode.useItem(mc.player, InteractionHand.OFF_HAND))) {
                 lastPearlTick = tickCounter;
             }
         } else {
             boolean swapped = InvUtils.swap(pearl.slot(), true);
-            if (rotateAndRun(yaw, pitch, () -> {
+            if (rotateAndRun(yaw, pitch, PRIORITY_PEARL, () -> {
                 mc.gameMode.useItem(mc.player, InteractionHand.MAIN_HAND);
                 if (swapped) InvUtils.swapBack();
             })) {
@@ -1838,12 +1846,12 @@ public class HumanPvP extends Module {
         if (!pearl.found()) return;
 
         if (pearl.isOffhand()) {
-            if (rotateAndRun(mc.player.getYRot(), 80, () -> mc.gameMode.useItem(mc.player, InteractionHand.OFF_HAND))) {
+            if (rotateAndRun(mc.player.getYRot(), 80, PRIORITY_PEARL, () -> mc.gameMode.useItem(mc.player, InteractionHand.OFF_HAND))) {
                 lastPearlTick = tickCounter;
             }
         } else {
             boolean swapped = InvUtils.swap(pearl.slot(), true);
-            if (rotateAndRun(mc.player.getYRot(), 80, () -> {
+            if (rotateAndRun(mc.player.getYRot(), 80, PRIORITY_PEARL, () -> {
                 mc.gameMode.useItem(mc.player, InteractionHand.MAIN_HAND);
                 if (swapped) InvUtils.swapBack();
             })) {

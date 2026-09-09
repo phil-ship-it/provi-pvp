@@ -650,14 +650,27 @@ public class GodmodePvP extends Module {
     private BlockPos activeHole;
     private BlockPos heightCalcOrigin;
     private int buildCoverCooldown;
-    // Meteors Rotations-Queue fuehrt bei MEHREREN im selben Tick angemeldeten Rotationen nur die ERSTE mit
-    // der tatsaechlich gesetzten Blickrichtung aus - jede weitere bekommt beim Ausfuehren ihres Callbacks
-    // schon wieder die alte, zurueckgesetzte Rotation (siehe Rotations.onSendMovementPacketsPost: nur
-    // Index 0 durchlaeuft setClientRotation() VOR seinem Callback, alle weiteren senden zwar ihr Paket,
-    // aber mit der Spielerrotation von VOR der Aktion). Ohne diese Sperre feuerte z.B. ein Perlwurf
-    // gleichzeitig mit einer Anchor-/Bett-Interaktion im selben Tick - eine der beiden landete dann mit
-    // komplett falscher Blickrichtung (wild verirrte Perlen, "haengende" nie gezuendete Anchors/Betten).
-    private boolean rotationQueuedThisTick;
+    // Zaehlt, wie viele Rotation+Aktion-Paare (rotateAndRun) diesen Tick schon eingereiht wurden.
+    // Meteors Rotations-Klasse unterstuetzt nativ MEHRERE ausgerichtete Aktionen pro Tick (siehe
+    // Rotations.onSendMovementPacketsPost): der ERSTE Eintrag laeuft ueber den normalen Bewegungspaket-
+    // Pfad (echte Rotation wird gesetzt), JEDER WEITERE bekommt bei clientSide=true ebenfalls kurzzeitig
+    // die echte Rotation gesetzt - genau fuer die Dauer seines eigenen Callbacks, danach zurueckgesetzt.
+    // Frueher war das komplett gesperrt (ein starres 1-Aktion-Mutex) - das verhinderte z.B., dass ein
+    // Perlwurf UND eine Anchor-/Bett-Interaktion im selben Tick feuern konnten, obwohl beide fachlich
+    // unabhaengig sind und das Framework das technisch bereits unterstuetzt (siehe rotateAndRun()).
+    private int rotationsThisTick;
+
+    // Prioritaeten fuer rotateAndRun(): bei einer echten Kollision (mehrere Aktionen wollen im selben
+    // Tick den primaeren Bewegungspaket-Rotationspfad, Index 0) gewinnt die hoehere Prioritaet - siehe
+    // Rotations.rotate(), das die Warteschlange danach sortiert. PRIORITY_LOOK ist bewusst die
+    // niedrigste: die rein kosmetische Ziel-Verfolgung am Tick-Ende soll NIE eine echte Aktion
+    // verdraengen, landet aber als letzter Eintrag zuverlaessig in Rotations' lastRotation-Haltefeld.
+    private static final int PRIORITY_CRYSTAL = 100;
+    private static final int PRIORITY_ANCHOR = 90;
+    private static final int PRIORITY_BED = 80;
+    private static final int PRIORITY_PEARL = 70;
+    private static final int PRIORITY_MISC = 60;
+    private static final int PRIORITY_LOOK = 0;
     private int lastFireworkTick = -999;
     private int secondEnemyWarnCooldown;
     private boolean lowOnTotems;
@@ -938,7 +951,7 @@ public class GodmodePvP extends Module {
         // blockiert - ohne diesen Reset bleibt "W" clientseitig fuer immer gedrueckt (auch Freecam
         // sieht diesen rohen Tastenzustand und laeuft dann von selbst vorwaerts).
         Input.setKeyState(mc.options.keyUp, false);
-        rotationQueuedThisTick = false;
+        rotationsThisTick = 0;
         pendingFreeLook = false;
 
         boolean guiOpen = mc.gui.screen() != null;
@@ -972,14 +985,13 @@ public class GodmodePvP extends Module {
         trackPop(self);
         trackTotemEffect(target);
 
-        // Cosmetic Ziel-Verfolgung (free-look) nur anwenden, wenn diesen Tick noch keine echte
-        // Kampfaktion (Perlwurf, Anchor/Bett-Interaktion, Crystal-Platzierung, ...) den gemeinsamen
-        // Rotations-Slot belegt hat - sonst wuerde diese rein optische Drehung lautlos vor der
-        // eigentlichen Aktion in Meteors Rotations-Queue landen und deren Callback mit der alten,
-        // zurueckgesetzten Blickrichtung ausfuehren (siehe rotateAndRun-Dokumentation).
-        if (pendingFreeLook && !rotationQueuedThisTick) {
-            rotationQueuedThisTick = true;
-            Rotations.rotate(pendingFreeLookYaw, pendingFreeLookPitch);
+        // Cosmetic Ziel-Verfolgung (free-look): laeuft IMMER am Tick-Ende, mit der niedrigsten
+        // Prioritaet - draengt also nie eine echte Kampfaktion aus dem primaeren Rotations-Slot, landet
+        // aber als letzter Eintrag zuverlaessig in Rotations' lastRotation-Haltefeld (siehe
+        // rotateAndRun-Dokumentation: verhindert, dass die gehaltene Blickrichtung nach einem Multi-
+        // Aktions-Tick auf eine zufaellige, frueher im Tick gefeuerte Nebenaktion "haengen bleibt").
+        if (pendingFreeLook) {
+            rotateAndRun(pendingFreeLookYaw, pendingFreeLookPitch, PRIORITY_LOOK, null);
         }
     }
 
@@ -1444,13 +1456,27 @@ public class GodmodePvP extends Module {
         FindItemResult anchor = InvHelper.find(Items.RESPAWN_ANCHOR);
         if (!anchor.found()) return;
 
-        if (BlockUtils.place(spot, anchor, true, 50)) {
-            anchorPlaceFails = 0;
-            anchorPlaceCooldown = delay(6); // kurze Pause, damit maintainNearbyAnchors Zeit zum Laden hat
-            lastAnchorProgressTick = tickCounter;
-        } else {
-            anchorCandidateIndex++;
-        }
+        // Ueber unsere eigene rotateAndRun()-Warteschlange statt BlockUtils.place()'s eigenem
+        // rotate=true - so kann die Erstladung (Glowstone) direkt im Erfolgsfall-Callback nachgeschoben
+        // werden und feuert dank Mehrfachaktionen-pro-Tick (siehe rotateAndRun-Dokumentation) noch im
+        // SELBEN Tick, statt bis zum naechsten Tick zu warten: maintainNearbyAnchors() scannt VOR
+        // diesem Aufruf im selben Tick und sieht den frisch platzierten Anchor daher noch nicht -
+        // ohne dieses Nachschieben blieb ein frisch platzierter Anchor bis zum naechsten Tick ungeladen.
+        Vec3 center = Vec3.atCenterOf(spot);
+        rotateAndRun(Rotations.getYaw(center), Rotations.getPitch(center), PRIORITY_ANCHOR, () -> {
+            if (BlockUtils.place(spot, anchor, false, 50)) {
+                anchorPlaceFails = 0;
+                anchorPlaceCooldown = delay(6); // kurze Pause, damit maintainNearbyAnchors weitere Ladungen/Zuendung uebernimmt
+                lastAnchorProgressTick = tickCounter;
+
+                FindItemResult gs = InvHelper.find(Items.GLOWSTONE);
+                if (gs.found() && interactAnchorAt(spot, gs)) {
+                    anchorsChargedByUs.add(spot);
+                }
+            } else {
+                anchorCandidateIndex++;
+            }
+        });
     }
 
     private BlockPos nextAnchorCandidate() {
@@ -1569,7 +1595,7 @@ public class GodmodePvP extends Module {
     private boolean interactAnchorAt(BlockPos pos, FindItemResult item) {
         if (drinkingFireRes) return false; // s.o. - Swap-Merkposten waehrend des Trinkens nicht anfassen
         Vec3 center = Vec3.atCenterOf(pos);
-        return rotateAndRun(Rotations.getYaw(center), Rotations.getPitch(center), () -> {
+        return rotateAndRun(Rotations.getYaw(center), Rotations.getPitch(center), PRIORITY_ANCHOR, () -> {
             boolean swapped = InvUtils.swap(item.slot(), true);
             BlockUtils.interact(new BlockHitResult(center, BlockUtils.getDirection(pos), pos, true), InteractionHand.MAIN_HAND, true);
             if (swapped) InvUtils.swapBack();
@@ -2023,7 +2049,6 @@ public class GodmodePvP extends Module {
         }
         bedUnreachableTicks = 0;
 
-        if (rotationQueuedThisTick) return; // Rotations-Slot diesen Tick schon belegt - naechster Tick
 
         FindItemResult foundBed = InvHelper.find(GodmodePvP::isBed);
         if (!foundBed.found()) return;
@@ -2033,7 +2058,7 @@ public class GodmodePvP extends Module {
         // Kopfteils richtet sich nach der horizontalen Blickrichtung zum Platzierungszeitpunkt, nicht nach
         // der angeklickten Blockseite. dir.toYRot() ist exakt die Umkehrung von Direction.fromYRot().
         double yaw = spot.dir().toYRot();
-        rotateAndRun(yaw, 55, () -> {
+        rotateAndRun(yaw, 55, PRIORITY_BED, () -> {
             if (BlockUtils.place(spot.pos(), bed, false, 50)) {
                 bedPlaceFails = 0;
                 bedPlaceCooldown = delay(4); // kurze Pause, damit maintainNearbyBeds Zeit zum Zuenden hat
@@ -2090,7 +2115,7 @@ public class GodmodePvP extends Module {
     private boolean interactBedAt(BlockPos pos) {
         if (drinkingFireRes) return false; // s.o. - Swap-Merkposten waehrend des Trinkens nicht anfassen
         Vec3 center = Vec3.atCenterOf(pos);
-        return rotateAndRun(Rotations.getYaw(center), Rotations.getPitch(center), () ->
+        return rotateAndRun(Rotations.getYaw(center), Rotations.getPitch(center), PRIORITY_BED, () ->
             BlockUtils.interact(new BlockHitResult(center, BlockUtils.getDirection(pos), pos, true), InteractionHand.MAIN_HAND, true)
         );
     }
@@ -2106,16 +2131,23 @@ public class GodmodePvP extends Module {
         return instantMode.get() ? 0 : ticks;
     }
 
-    /** Reiht eine Rotation+Aktion nur ein, wenn dieser Tick noch kein Rotations-Slot vergeben ist (siehe
-     *  Feld-Kommentar zu rotationQueuedThisTick). Gibt false zurueck, wenn abgelehnt - der Aufrufer MUSS
-     *  in dem Fall alle eigenen Zustandsaenderungen (Cooldowns, Verbrauchszaehler) unterlassen, damit der
-     *  naechste Tick sauber erneut versuchen kann, statt die Aktion als "erledigt" zu verbuchen, obwohl
-     *  sie nie mit korrekter Blickrichtung ausgefuehrt wurde. */
-    private boolean rotateAndRun(double yaw, double pitch, Runnable callback) {
-        if (rotationQueuedThisTick) return false;
-        rotationQueuedThisTick = true;
-        Rotations.rotate(yaw, pitch, callback);
+    /** Reiht eine Rotation+Aktion ein. Anders als vorher (ein starrer 1-Aktion-pro-Tick-Mutex, der
+     *  jeden weiteren rotateAndRun()-Aufruf im selben Tick komplett auf den naechsten Tick verschob)
+     *  koennen jetzt mehrere UNABHAENGIGE Aktionen pro Tick korrekt ausgerichtet feuern - Meteors
+     *  Rotations-Klasse unterstuetzt das nativ: der ERSTE Eintrag eines Ticks laeuft ueber den
+     *  normalen Bewegungspaket-Pfad (echte Rotation wird gesetzt), JEDER WEITERE bekommt mit
+     *  clientSide=true ebenfalls kurzzeitig die echte Rotation gesetzt - exakt fuer die Dauer seines
+     *  eigenen Callbacks (siehe Rotations.onSendMovementPacketsPost), danach zurueckgesetzt. Gibt
+     *  jetzt immer true zurueck - bestehende Aufrufer, die frueher auf false pruefen mussten,
+     *  funktionieren unveraendert weiter (der Erfolgsfall greift jetzt einfach immer). */
+    private boolean rotateAndRun(double yaw, double pitch, int priority, Runnable callback) {
+        Rotations.rotate(yaw, pitch, priority, rotationsThisTick > 0, callback);
+        rotationsThisTick++;
         return true;
+    }
+
+    private boolean rotateAndRun(double yaw, double pitch, Runnable callback) {
+        return rotateAndRun(yaw, pitch, PRIORITY_MISC, callback);
     }
 
     private static boolean isHealingSplash(ItemStack stack) {
@@ -2343,7 +2375,7 @@ public class GodmodePvP extends Module {
     private boolean placeCrystal(BlockPos floor, FindItemResult item) {
         if (drinkingFireRes) return false; // s.o. - Swap-Merkposten waehrend des Trinkens nicht anfassen
         Vec3 center = Vec3.atCenterOf(floor);
-        return rotateAndRun(Rotations.getYaw(center), Rotations.getPitch(center), () -> {
+        return rotateAndRun(Rotations.getYaw(center), Rotations.getPitch(center), PRIORITY_CRYSTAL, () -> {
             boolean swapped = InvUtils.swap(item.slot(), true);
             BlockUtils.interact(new BlockHitResult(center, BlockUtils.getDirection(floor), floor, true), InteractionHand.MAIN_HAND, true);
             if (swapped) InvUtils.swapBack();
@@ -2359,7 +2391,7 @@ public class GodmodePvP extends Module {
     /** @return true, wenn die Rotation+Attacke tatsaechlich eingereiht wurde (Rotations-Slot frei war). */
     private boolean attackCrystal(EndCrystal ec) {
         Vec3 center = ec.getBoundingBox().getCenter();
-        return rotateAndRun(Rotations.getYaw(center), Rotations.getPitch(center), () -> {
+        return rotateAndRun(Rotations.getYaw(center), Rotations.getPitch(center), PRIORITY_CRYSTAL, () -> {
             mc.gameMode.attack(mc.player, ec);
             mc.player.swing(InteractionHand.MAIN_HAND);
         });
@@ -3107,12 +3139,12 @@ public class GodmodePvP extends Module {
         }
 
         if (pearl.isOffhand()) {
-            if (rotateAndRun(yaw, pitch, () -> mc.gameMode.useItem(mc.player, InteractionHand.OFF_HAND))) {
+            if (rotateAndRun(yaw, pitch, PRIORITY_PEARL, () -> mc.gameMode.useItem(mc.player, InteractionHand.OFF_HAND))) {
                 lastPearlTick = tickCounter;
             }
         } else {
             boolean swapped = InvUtils.swap(pearl.slot(), true);
-            if (rotateAndRun(yaw, pitch, () -> {
+            if (rotateAndRun(yaw, pitch, PRIORITY_PEARL, () -> {
                 mc.gameMode.useItem(mc.player, InteractionHand.MAIN_HAND);
                 if (swapped) InvUtils.swapBack();
             })) {
@@ -3130,12 +3162,12 @@ public class GodmodePvP extends Module {
         if (!pearl.found()) return;
 
         if (pearl.isOffhand()) {
-            if (rotateAndRun(mc.player.getYRot(), 80, () -> mc.gameMode.useItem(mc.player, InteractionHand.OFF_HAND))) {
+            if (rotateAndRun(mc.player.getYRot(), 80, PRIORITY_PEARL, () -> mc.gameMode.useItem(mc.player, InteractionHand.OFF_HAND))) {
                 lastPearlTick = tickCounter;
             }
         } else {
             boolean swapped = InvUtils.swap(pearl.slot(), true);
-            if (rotateAndRun(mc.player.getYRot(), 80, () -> {
+            if (rotateAndRun(mc.player.getYRot(), 80, PRIORITY_PEARL, () -> {
                 mc.gameMode.useItem(mc.player, InteractionHand.MAIN_HAND);
                 if (swapped) InvUtils.swapBack();
             })) {
