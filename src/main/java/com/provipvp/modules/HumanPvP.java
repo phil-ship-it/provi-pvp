@@ -43,7 +43,9 @@ import net.minecraft.world.level.block.BedBlock;
 import net.minecraft.world.level.block.Blocks;
 import net.minecraft.world.level.block.state.BlockState;
 import net.minecraft.world.level.Level;
+import net.minecraft.world.level.ClipContext;
 import net.minecraft.world.phys.BlockHitResult;
+import net.minecraft.world.phys.HitResult;
 import net.minecraft.world.phys.Vec3;
 
 import java.util.ArrayList;
@@ -209,6 +211,13 @@ public class HumanPvP extends Module {
     public final Setting<Boolean> shieldBreaker = sgCombat.add(new BoolSetting.Builder()
         .name("shield-breaker")
         .description("Wechselt zur Axt gegen blockende Gegner.")
+        .defaultValue(true)
+        .build()
+    );
+
+    public final Setting<Boolean> meleeStrafe = sgCombat.add(new BoolSetting.Builder()
+        .name("melee-strafe")
+        .description("Kreis-strafet im Nahkampf (variiert den Explosionswinkel, schwerer zu treffen) und weicht kurz zurueck, wenn gerade eine neue Explosionsquelle (Crystal/Anchor/Bett) in der Naehe auftaucht - siehe GodmodePvP fuer dieselbe Mechanik.")
         .defaultValue(true)
         .build()
     );
@@ -448,6 +457,7 @@ public class HumanPvP extends Module {
     // ---------- State ----------
     private final Random rng = new Random();
     private final Map<UUID, Vec3> lastPositions = new HashMap<>();
+    private double targetSpeed;
     private int tickCounter;
     private int lastErrorWarnTick = -999;
     private int lastPearlTick = -999;
@@ -467,6 +477,11 @@ public class HumanPvP extends Module {
     private boolean blockingSwapBack;
     private int shieldUntil;
     private int lastCrystalCount = -1;
+    private int lastAnchorBlockCount = -1;
+    private int lastBedBlockCount = -1;
+    private int explosionRetreatUntil;
+    private boolean strafeLeft;
+    private int nextStrafeSwitchTick = -1;
     private int savedPlaceDelay = -1;
     private CrystalAura.SupportMode savedSupport;
     private int savedSupportDelay = -1;
@@ -475,6 +490,8 @@ public class HumanPvP extends Module {
     private UUID followedId;
 
     private UUID engagedId;
+    private int lastRetargetCheck;
+    private int secondEnemyCooldown;
     private int engageAtTick;
     private int nextClickTick = -1;
     private boolean pursuing; // sticky: einmal in Engage-Distanz gekommen, bleibt es auch nach Explosions-Knockback ueber diese Distanz hinaus (bis follow-range/Zielverlust) - sonst reisst eine Crystal-Explosion die Verfolgung mitten im Kampf ab.
@@ -534,9 +551,15 @@ public class HumanPvP extends Module {
         blockingSwapBack = false;
         shieldUntil = 0;
         lastCrystalCount = -1;
+        lastAnchorBlockCount = -1;
+        lastBedBlockCount = -1;
+        explosionRetreatUntil = 0;
+        nextStrafeSwitchTick = -1;
         followActive = false;
         followedId = null;
         engagedId = null;
+        lastRetargetCheck = 0;
+        secondEnemyCooldown = 0;
         engageAtTick = 0;
         nextClickTick = -1;
         auraMode = -1;
@@ -696,6 +719,34 @@ public class HumanPvP extends Module {
             return;
         }
 
+        // Periodische Neubewertung statt stur am einmal gewaehlten Ziel festzuhalten - smartTargeting
+        // wirkte bisher nur bei der ERSTEN Zielwahl (siehe GodmodePvP fuer dieselbe Ergaenzung/Begruendung).
+        if (smartTargeting.get() && target instanceof Player && tickCounter - lastRetargetCheck > 40) {
+            lastRetargetCheck = tickCounter;
+            Player alt = findPlayerTarget(self);
+            if (alt != null && alt.isAlive() && !alt.getUUID().equals(target.getUUID())) {
+                target = alt;
+            }
+        }
+
+        // Echte 2v1-Erkennung: ein zweiter, nicht-anvisierter Spieler nah dran UND nicht auf voller
+        // Gesundheit - dieselbe gestufte Reaktion wie oben (Escape-Pearl wenn bereit, sonst kurzer
+        // Rueckzugsimpuls), statt einfach normal weiterzukaempfen und auf den zweiten Treffer zu warten.
+        if (secondEnemyCooldown > 0) {
+            secondEnemyCooldown--;
+        } else {
+            for (Player p : mc.level.players()) {
+                if (p == self || p == target || !p.isAlive() || p.isSpectator()) continue;
+                if (p.isCreative() && !(p instanceof FakePlayerEntity)) continue;
+                if (self.distanceToSqr(p) > 12.0 * 12.0) continue;
+
+                secondEnemyCooldown = 100;
+                if (self.getHealth() <= 14.0f) {
+                    explosionRetreatUntil = Math.max(explosionRetreatUntil, tickCounter + 15);
+                }
+                break;
+            }
+        }
         if (!target.getUUID().equals(engagedId)) {
             engagedId = target.getUUID();
             int span = Math.max(1, reactionMaxTicks.get() - reactionMinTicks.get() + 1);
@@ -736,32 +787,58 @@ public class HumanPvP extends Module {
         }
         manageSprintForKnockback(dist);
 
-        if (escapePearl.get() && self.getHealth() <= 8.0f && dist <= 6.0
-            && tickCounter - lastPearlTick > 30
-            && (InvUtils.findInHotbar(Items.ENDER_PEARL).found() || InvUtils.find(Items.ENDER_PEARL).found())) {
-            throwPearl(target, true);
-            currentAction = "escape-pearl";
+        // Gestufte Notfall-Eskalation statt eines Einzel-Triggers:
+        // (a) mittlere Gefahr (HP <=14, Gegner nah) - physisch Abstand halten statt weiter reinzulaufen.
+        // (b) kritisches HP + Perle bereit - Escape-Pearl (bestehend).
+        // (c) kritisches HP, aber KEINE Perle verfuegbar/auf Cooldown - Schild+Rueckzug als Fallback,
+        //     statt schutzlos weiterzukaempfen bis irgendwann doch eine Perle da ist.
+        boolean pearlReady = tickCounter - lastPearlTick > 30
+            && (InvUtils.findInHotbar(Items.ENDER_PEARL).found() || InvUtils.find(Items.ENDER_PEARL).found());
+        if (escapePearl.get() && self.getHealth() <= 8.0f && dist <= 6.0) {
+            if (pearlReady) {
+                throwPearl(target, true);
+                currentAction = "escape-pearl";
+                return;
+            }
+            if (autoShield.get() && !blocking) {
+                shieldUntil = tickCounter + 20;
+                startBlock();
+            }
+            explosionRetreatUntil = tickCounter + 20;
+            currentAction = "notfall-schild-rueckzug";
             return;
         }
+        if (self.getHealth() <= 14.0f && dist <= 4.0) {
+            // Stufe (a): noch nicht kritisch, aber genug Gefahr, um lieber kurz Abstand zu halten statt
+            // den naechsten Treffer aktiv zu suchen - updateCombatMovement() (unten) nutzt dasselbe
+            // explosionRetreatUntil-Fenster fuer den physischen Rueckzugsschritt.
+            explosionRetreatUntil = Math.max(explosionRetreatUntil, tickCounter + 6);
+        }
 
-        // Feindlicher Crystal frisch platziert (in 5 m)? -> kurz blocken
+        // Feindlicher Crystal frisch platziert (in 5 m)? -> kurz blocken. Anchor/Bett sind Bloecke statt
+        // Entities, gleiche Delta-Idee per Block-Scan (siehe GodmodePvP fuer dieselbe Erweiterung).
         java.util.List<net.minecraft.world.entity.boss.enderdragon.EndCrystal> nearCrystals =
             mc.level.getEntitiesOfClass(net.minecraft.world.entity.boss.enderdragon.EndCrystal.class, self.getBoundingBox().inflate(5));
-        if (lastCrystalCount >= 0 && nearCrystals.size() > lastCrystalCount && !nearCrystals.isEmpty()
-            && autoShield.get() && !blocking) {
-            shieldUntil = tickCounter + 15; // Crystal zuendet praktisch sofort - kurzes, hartes Block-Fenster
-            startBlock();
+        boolean freshCrystal = lastCrystalCount >= 0 && nearCrystals.size() > lastCrystalCount && !nearCrystals.isEmpty();
+        int anchorBlocks = countNearbyBlocks(self.blockPosition(), 5, st -> st.is(Blocks.RESPAWN_ANCHOR));
+        int bedBlocks = countNearbyBlocks(self.blockPosition(), 5, st -> st.getBlock() instanceof BedBlock);
+        boolean freshAnchor = lastAnchorBlockCount >= 0 && anchorBlocks > lastAnchorBlockCount;
+        boolean freshBed = lastBedBlockCount >= 0 && bedBlocks > lastBedBlockCount;
+
+        if (freshCrystal || freshAnchor || freshBed) {
+            explosionRetreatUntil = tickCounter + 12; // fuer updateCombatMovement() unten - physischer Rueckzug
+            if (autoShield.get() && !blocking) {
+                shieldUntil = tickCounter + 15; // Crystal zuendet praktisch sofort - kurzes, hartes Block-Fenster
+                startBlock();
+            }
         }
         lastCrystalCount = nearCrystals.size();
+        lastAnchorBlockCount = anchorBlocks;
+        lastBedBlockCount = bedBlocks;
 
         Vec3 aim = aimPoint(target);
         smoothLookAt(aim);
-
-        if (follow.get() && pursuing) {
-            updateFollow(target);
-        } else {
-            cancelFollow();
-        }
+        if (meleeStrafe.get()) updateCombatMovement(target, dist);
 
         if (tickCounter < engageAtTick) {
             currentAction = "reagieren";
@@ -1179,7 +1256,7 @@ public class HumanPvP extends Module {
         bestAnchorDmgCache = 0;
         if (hasAnchorItem && anchorCandidateIndex < anchorCandidates.size()) {
             BlockPos best = anchorCandidates.get(anchorCandidateIndex);
-            bestAnchorDmgCache = DamageUtils.anchorDamage(target, Vec3.atCenterOf(best));
+            bestAnchorDmgCache = totemAdjustedDamage(target, DamageUtils.anchorDamage(target, Vec3.atCenterOf(best)));
         }
 
         if (hasBedItem) {
@@ -1196,12 +1273,16 @@ public class HumanPvP extends Module {
         bestBedDmgCache = 0;
         if (hasBedItem && bedCandidateIndex < bedCandidates.size()) {
             BedSpot best = bedCandidates.get(bedCandidateIndex);
-            bestBedDmgCache = DamageUtils.bedDamage(target, Vec3.atCenterOf(best.pos()));
+            bestBedDmgCache = totemAdjustedDamage(target, DamageUtils.bedDamage(target, Vec3.atCenterOf(best.pos())));
         }
 
         if (ca == null) return;
 
-        boolean inRange = mc.player.distanceToSqr(target) < 5.5 * 5.5;
+        // Basisdistanz + Puffer statt fixer Konstante, skaliert mit Nahkampf-Reichweite und tatsaechlicher
+        // Zielgeschwindigkeit (targetSpeed, siehe updateTracking) - ein schnell bewegtes Ziel ist bei
+        // gleicher Distanz "weiter weg" bis zur naechsten Neubewertung als ein stehendes.
+        double inRangeDist = attackRange.get() + 1.9 + targetSpeed * 4;
+        boolean inRange = mc.player.distanceToSqr(target) < inRangeDist * inRangeDist;
 
         // Kleines Rauschen auf der Vergleichsschwelle - vermeidet ein starres, immer-gleiches
         // Umschalt-Verhalten bei exakt derselben Schadensdifferenz (wirkt sonst wie ein Taschenrechner).
@@ -1232,8 +1313,11 @@ public class HumanPvP extends Module {
             if (bestBedDmgCache > bestAnchorDmgCache) wantAnchor = false; else wantBed = false;
         }
 
-        // Deutlich groessere Umschalt-Traegheit als V1 - ein Mensch wechselt nicht alle paar Ticks die Taktik.
-        if (tickCounter - lastAuraSwitch < 25) return;
+        // Deutlich groessere Umschalt-Traegheit als V1 (Basiswert), aber wie in GodmodePvP verkuerzt,
+        // wenn sich das Ziel gerade tatsaechlich schnell bewegt - sonst bleibt bei schneller
+        // Distanzaenderung 1+ Sekunde lang der objektiv schlechtere Modus aktiv.
+        int hysteresis = (int) Math.max(10, 25 - targetSpeed * 8);
+        if (tickCounter - lastAuraSwitch < hysteresis) return;
 
         if (wantAnchor && auraMode != 1) {
             if (ca.isActive()) ca.toggle();
@@ -1248,6 +1332,22 @@ public class HumanPvP extends Module {
             auraMode = 0;
             lastAuraSwitch = tickCounter;
         }
+    }
+
+    /** Prueft, ob das Ziel gerade einen Totem in der Offhand bereit haelt - siehe GodmodePvP fuer die
+     *  volle Begruendung des Abschlags unten. */
+    private boolean targetHasTotemReady(LivingEntity target) {
+        return target.getOffhandItem().is(Items.TOTEM_OF_UNDYING);
+    }
+
+    /** Kein hartes Gate (0) - eine Explosion gegen einen Totem-Traeger ist immer noch besser als gar
+     *  keine (zehrt seinen Totem-Vorrat auf), aber sie "lohnt" sich nicht wie ein echter, unverteidigter
+     *  Treffer, solange sie nicht toedlich ist. */
+    private double totemAdjustedDamage(LivingEntity target, double dmg) {
+        if (dmg <= 0) return dmg;
+        if (dmg >= target.getHealth()) return dmg;
+        if (!targetHasTotemReady(target)) return dmg;
+        return dmg * 0.3;
     }
 
     private double bestDamageAround(LivingEntity target, Vec3 center, boolean crystal) {
@@ -1273,6 +1373,7 @@ public class HumanPvP extends Module {
                     double dmg = crystal
                         ? DamageUtils.crystalDamage(target, pos)
                         : DamageUtils.anchorDamage(target, pos);
+                    dmg = totemAdjustedDamage(target, dmg);
                     if (dmg > best) best = dmg;
                 }
             }
@@ -1328,10 +1429,22 @@ public class HumanPvP extends Module {
         if (mc.level == null) return false;
         if (!mc.level.getBlockState(cell).isAir()) return false;
         if (avoidLava.get() && isNearLava(cell)) return false;
+        if (!hasRaycastLineOfSight(Vec3.atCenterOf(cell))) return false;
 
         BlockState below = mc.level.getBlockState(cell.below());
         if (crystal) return below.is(Blocks.OBSIDIAN) || below.is(Blocks.BEDROCK) || below.isAir();
         return below.blocksMotion() && mc.level.getBlockState(cell.above()).isAir();
+    }
+
+    /** Echter Block-Raycast zwischen Augenposition und Kandidaten-Mittelpunkt - siehe GodmodePvP fuer
+     *  denselben Fix/dieselbe Begruendung (reine Distanz-/Blockstate-Pruefung sieht Mauern dazwischen
+     *  nicht, waehlte also auch real unerreichbare Kandidaten hinter Deckung). */
+    private boolean hasRaycastLineOfSight(Vec3 point) {
+        if (mc.level == null || mc.player == null) return true;
+        Vec3 eye = mc.player.getEyePosition();
+        ClipContext ctx = new ClipContext(eye, point, ClipContext.Block.COLLIDER, ClipContext.Fluid.NONE, mc.player);
+        BlockHitResult result = mc.level.clip(ctx);
+        return result.getType() == HitResult.Type.MISS || result.getLocation().distanceTo(point) < 0.6;
     }
 
     private boolean isNearLava(BlockPos cell) {
@@ -1340,6 +1453,21 @@ public class HumanPvP extends Module {
             if (mc.level.getBlockState(cell.relative(dir)).is(Blocks.LAVA)) return true;
         }
         return false;
+    }
+
+    /** Zaehlt Bloecke in einem Wuerfel um 'center', die 'matcher' erfuellen - fuer die Anchor-/Bett-
+     *  Delta-Erkennung von auto-shield/explosionRetreatUntil (Blocks statt Entities, siehe GodmodePvP
+     *  fuer dieselbe Methode/Begruendung). */
+    private int countNearbyBlocks(BlockPos center, int radius, java.util.function.Predicate<BlockState> matcher) {
+        int count = 0;
+        for (int dx = -radius; dx <= radius; dx++) {
+            for (int dy = -radius; dy <= radius; dy++) {
+                for (int dz = -radius; dz <= radius; dz++) {
+                    if (matcher.test(mc.level.getBlockState(center.offset(dx, dy, dz)))) count++;
+                }
+            }
+        }
+        return count;
     }
 
     /** Alle gueltigen Bett-Plaetze um das Ziel, sortiert nach Schaden (absteigend). Ein Bett braucht anders
@@ -1395,6 +1523,7 @@ public class HumanPvP extends Module {
     private boolean validBedCell(BlockPos cell) {
         if (mc.level == null) return false;
         if (!mc.level.getBlockState(cell).isAir()) return false;
+        if (!hasRaycastLineOfSight(Vec3.atCenterOf(cell))) return false;
         return !(avoidLava.get() && isNearLava(cell));
     }
 
@@ -1462,7 +1591,11 @@ public class HumanPvP extends Module {
 
     private void updateTracking(LivingEntity target) {
         UUID id = target.getUUID();
-        lastPositions.put(id, target.position());
+        Vec3 cur = target.position();
+        Vec3 prev = lastPositions.put(id, cur);
+        // Nur fuer die adaptive inRange-/Umschalt-Traegheit unten (selectAura) - keine volle Vorhersage
+        // wie GodmodePvP, hier reicht ein grober Tempo-Skalar.
+        if (prev != null) targetSpeed = cur.distanceTo(prev);
     }
 
     // ---------- Zielauswahl ----------
@@ -1482,6 +1615,14 @@ public class HumanPvP extends Module {
             }
         }
 
+        Player alt = findPlayerTarget(self);
+        return alt;
+    }
+
+    /** Reine Neubewertung ohne Sticky-Bias zum aktuellen Ziel - im Gegensatz zu findTarget() (das ein
+     *  bereits verfolgtes Ziel bevorzugt behaelt) fuer die periodische Re-Targeting-Pruefung in doTick(),
+     *  die genau diese Bevorzugung NICHT haben darf, um ueberhaupt einen Wechsel erkennen zu koennen. */
+    private Player findPlayerTarget(Player self) {
         // Echte Spieler haben immer Vorrang vor einem Trainings-Dummy (FakePlayerEntity) - der zaehlt nur
         // als Ziel, wenn wirklich kein echter Gegner in Reichweite ist.
         double followRangeSq = followRange.get() * (double) followRange.get();
@@ -1564,6 +1705,44 @@ public class HumanPvP extends Module {
         }
         Input.setKeyState(mc.options.keySprint, true);
         mc.player.setSprinting(true);
+    }
+
+    /** Kreis-strafet im Nahkampf (variiert den Explosionswinkel, schwerer zu treffen) und weicht kurz
+     *  zurueck, wenn gerade eine neue Explosionsquelle aufgetaucht ist - siehe GodmodePvP fuer dieselbe
+     *  Mechanik/Begruendung. Nutzt die ECHTE aktuelle Rotation (mc.player.getYRot()), die smoothLookAt()
+     *  gerade kontinuierlich Richtung Ziel dreht - keine eigene Rotationsberechnung noetig. */
+    private void updateCombatMovement(LivingEntity target, double dist) {
+        if (dist > attackRange.get()) {
+            Input.setKeyState(mc.options.keyLeft, false);
+            Input.setKeyState(mc.options.keyRight, false);
+            Input.setKeyState(mc.options.keyDown, false);
+            nextStrafeSwitchTick = -1;
+            return;
+        }
+
+        if (tickCounter >= nextStrafeSwitchTick) {
+            strafeLeft = !strafeLeft;
+            nextStrafeSwitchTick = tickCounter + 10 + rng.nextInt(15);
+        }
+
+        Vec3 center = target.getBoundingBox().getCenter();
+        double dx = center.x - mc.player.getX();
+        double dz = center.z - mc.player.getZ();
+        double horiz = Math.sqrt(dx * dx + dz * dz);
+        if (horiz < 1e-4) return;
+        dx /= horiz;
+        dz /= horiz;
+
+        double tangX = strafeLeft ? -dz : dz;
+        double tangZ = strafeLeft ? dx : -dx;
+
+        double yawRad = Math.toRadians(mc.player.getYRot());
+        double rightX = -Math.cos(yawRad), rightZ = -Math.sin(yawRad);
+        double rightDot = tangX * rightX + tangZ * rightZ;
+
+        Input.setKeyState(mc.options.keyRight, rightDot >= 0);
+        Input.setKeyState(mc.options.keyLeft, rightDot < 0);
+        Input.setKeyState(mc.options.keyDown, tickCounter < explosionRetreatUntil);
     }
 
     private void attackMelee(LivingEntity target) {

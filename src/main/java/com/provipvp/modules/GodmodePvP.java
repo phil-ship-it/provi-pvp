@@ -49,8 +49,10 @@ import net.minecraft.world.level.block.BedBlock;
 import net.minecraft.world.level.block.Blocks;
 import net.minecraft.world.level.block.state.BlockState;
 import net.minecraft.world.level.Level;
+import net.minecraft.world.level.ClipContext;
 import net.minecraft.world.phys.AABB;
 import net.minecraft.world.phys.BlockHitResult;
+import net.minecraft.world.phys.HitResult;
 import net.minecraft.world.phys.Vec3;
 
 import java.util.HashMap;
@@ -625,9 +627,11 @@ public class GodmodePvP extends Module {
     private int lastCrystalCount = -1;
     private int lastAnchorBlockCount = -1;
     private int lastBedBlockCount = -1;
+    private int explosionRetreatUntil;
     private boolean followActive;
     private boolean engaged; // sticky: einmal in Engage-Distanz gekommen, bleibt es auch nach Explosions-Knockback ueber diese Distanz hinaus (bis follow-range/Zielverlust) - sonst reisst eine Crystal-Explosion die Verfolgung mitten im Kampf ab.
     private UUID engagedTargetId;
+    private int lastRetargetCheck;
     private UUID followedId;
     private Vec3 lastSelfPos;
     private int obstacleStuckTicks;
@@ -747,10 +751,12 @@ public class GodmodePvP extends Module {
         lastCrystalCount = -1;
         lastAnchorBlockCount = -1;
         lastBedBlockCount = -1;
+        explosionRetreatUntil = 0;
         followActive = false;
         followedId = null;
         engaged = false;
         engagedTargetId = null;
+        lastRetargetCheck = 0;
         lastSelfPos = null;
         obstacleStuckTicks = 0;
         lastTargetHpForStuck = -1;
@@ -967,6 +973,20 @@ public class GodmodePvP extends Module {
         checkSecondEnemy(self, target);
         updateElytraFlight();
 
+        // Periodische Neubewertung statt stur am einmal gewaehlten Ziel festzuhalten - smartTargeting
+        // wirkte bisher nur bei der ERSTEN Zielwahl. Wenn inzwischen z.B. ein zweiter Spieler beim
+        // aktuellen Ziel aufgetaucht ist (macht einen anderen Kandidaten zum sichereren Wechsel) oder
+        // das Ziel selbst Rueckendeckung verloren hat, kann pickSmartTarget() das erst hier erkennen.
+        // 40-Tick-Gate verhindert Zielflackern bei knappen Score-Unterschieden. MUSS vor der dist-
+        // Berechnung unten laufen, sonst wuerde dist noch gegen das alte Ziel gemessen.
+        if (smartTargeting.get() && target instanceof Player && tickCounter - lastRetargetCheck > 40) {
+            lastRetargetCheck = tickCounter;
+            Player alt = findPlayerTarget(self);
+            if (alt != null && alt.isAlive() && !alt.getUUID().equals(target.getUUID())) {
+                target = alt;
+            }
+        }
+
         double dist = Math.sqrt(self.distanceToSqr(target));
         boolean flying = mc.player.isFallFlying();
         if (!target.getUUID().equals(engagedTargetId)) {
@@ -1088,11 +1108,23 @@ public class GodmodePvP extends Module {
         }
 
         // Notfall-Flucht: kritisches HP -> Perle weg statt sinnlos weiterzukaempfen, egal wie weit der Gegner ist
-        if (escapePearl.get() && self.getHealth() <= 6.0f
-            && tickCounter - lastPearlTick > delay(20)
-            && (InvUtils.findInHotbar(Items.ENDER_PEARL).found() || InvUtils.find(Items.ENDER_PEARL).found())) {
-            throwPearl(target, true);
-            currentAction = "escape-pearl";
+        boolean pearlReady = tickCounter - lastPearlTick > delay(20)
+            && (InvUtils.findInHotbar(Items.ENDER_PEARL).found() || InvUtils.find(Items.ENDER_PEARL).found());
+        if (escapePearl.get() && self.getHealth() <= 6.0f) {
+            if (pearlReady) {
+                throwPearl(target, true);
+                currentAction = "escape-pearl";
+                return;
+            }
+            // Gestufter Fallback statt schutzlos weiterzukaempfen: keine Perle da/auf Cooldown -> Schild
+            // hoch und physisch zurueckweichen (dieselbe explosionRetreatUntil-Bewegung wie beim
+            // Explosions-Rueckzug), bis wieder eine Perle bereit ist oder sich die Lage entspannt.
+            if (autoShield.get() && !blocking) {
+                shieldUntil = tickCounter + 20;
+                startBlock();
+            }
+            explosionRetreatUntil = tickCounter + 20;
+            currentAction = "notfall-schild-rueckzug";
             return;
         }
 
@@ -1142,9 +1174,15 @@ public class GodmodePvP extends Module {
         boolean freshAnchor = lastAnchorBlockCount >= 0 && anchorBlocks > lastAnchorBlockCount;
         boolean freshBed = lastBedBlockCount >= 0 && bedBlocks > lastBedBlockCount;
 
-        if ((freshCrystal || freshAnchor || freshBed) && autoShield.get() && !blocking) {
-            shieldUntil = tickCounter + 15; // zuendet praktisch sofort - kurzes, hartes Block-Fenster
-            startBlock();
+        if (freshCrystal || freshAnchor || freshBed) {
+            // Kurzes Rueckzugs-Fenster fuer updateCombatMovement() (siehe dort) - unabhaengig vom
+            // Schild-Setting, das ist eine reine Bewegungsentscheidung: physisch Abstand zur frisch
+            // erschienenen Explosionsquelle gewinnen, nicht nur wegblocken.
+            explosionRetreatUntil = tickCounter + 12;
+            if (autoShield.get() && !blocking) {
+                shieldUntil = tickCounter + 15; // zuendet praktisch sofort - kurzes, hartes Block-Fenster
+                startBlock();
+            }
         }
         lastCrystalCount = nearCrystals.size();
         lastAnchorBlockCount = anchorBlocks;
@@ -1530,7 +1568,7 @@ public class GodmodePvP extends Module {
         bestAnchorDmgCache = 0;
         if (hasAnchorItem && anchorCandidateIndex < anchorCandidates.size()) {
             BlockPos best = anchorCandidates.get(anchorCandidateIndex);
-            bestAnchorDmgCache = DamageUtils.anchorDamage(target, Vec3.atCenterOf(best));
+            bestAnchorDmgCache = totemAdjustedDamage(target, DamageUtils.anchorDamage(target, Vec3.atCenterOf(best)));
         }
 
         if (hasBedItem) {
@@ -1547,7 +1585,7 @@ public class GodmodePvP extends Module {
         bestBedDmgCache = 0;
         if (hasBedItem && bedCandidateIndex < bedCandidates.size()) {
             BedSpot best = bedCandidates.get(bedCandidateIndex);
-            bestBedDmgCache = DamageUtils.bedDamage(target, Vec3.atCenterOf(best.pos()));
+            bestBedDmgCache = totemAdjustedDamage(target, DamageUtils.bedDamage(target, Vec3.atCenterOf(best.pos())));
         }
 
         if (ca == null) return;
@@ -1599,9 +1637,18 @@ public class GodmodePvP extends Module {
             if (bestBedDmgCache > bestAnchorDmgCache) wantAnchor = false; else wantBed = false;
         }
 
-        // Deutlich seltener umschalten (0.5s statt 0.15s) - genug Zeit, damit eine begonnene
-        // Platzierung/Ladung auch tatsaechlich fertig wird, statt staendig unterbrochen zu werden.
-        if (tickCounter - lastAuraSwitch < 10) return;
+        // Deutlich seltener umschalten als der Rohwert - genug Zeit, damit eine begonnene Platzierung/
+        // Ladung auch tatsaechlich fertig wird, statt staendig unterbrochen zu werden. Skaliert mit der
+        // Zielgeschwindigkeit statt eines fixen Werts: ein schnell bewegtes Ziel veraltet die Anchor-/
+        // Bett-/Crystal-Bewertung viel schneller als ein stehendes, verdient also eine kuerzere Sperre.
+        // Waehrend eines aktiven Kombo-Fensters (popBurstUntil, siehe trackPop) komplett umgangen - beim
+        // Nachschlag auf einen frisch erkannten Totem-Pop zaehlt jeder Tick, nicht erst der naechste
+        // freie Umschalt-Slot.
+        if (tickCounter >= popBurstUntil) {
+            double targetSpeed = velocities.getOrDefault(target.getUUID(), Vec3.ZERO).length();
+            int hysteresis = (int) Math.max(3, 10 - targetSpeed * 4);
+            if (tickCounter - lastAuraSwitch < hysteresis) return;
+        }
 
         if (wantAnchor && auraMode != 1) {
             if (ca.isActive()) ca.toggle();
@@ -1636,6 +1683,27 @@ public class GodmodePvP extends Module {
         return false;
     }
 
+    /** Prueft, ob das Ziel gerade einen Totem in der Offhand bereit haelt. */
+    private boolean targetHasTotemReady(LivingEntity target) {
+        return target.getOffhandItem().is(Items.TOTEM_OF_UNDYING);
+    }
+
+    /** Bewertet eine nicht-toedliche Explosion gegen einen Totem-bereiten Gegner niedriger, statt sie
+     *  wie jede andere Explosion voll zu werten - sonst "lohnt" sich jede Zuendung gegen einen Dauer-
+     *  Nachschub-Gegner gleich viel wie ein echter Treffer, was Crystals/Anchors/Betten sinnlos
+     *  verballert, ohne den Kampf fortzubewegen (der Gegner poppt einfach den naechsten Totem). Kein
+     *  hartes Gate (0) - eine Explosion gegen einen Totem-Traeger ist immer noch besser als gar keine:
+     *  sie zehrt seinen Totem-Vorrat auf UND ist ueberhaupt erst die Voraussetzung fuer das Kombo-Fenster
+     *  (popBurstUntil, siehe trackPop) - waehrend eines laufenden Kombo-Fensters zaehlt der volle Wert.
+     */
+    private double totemAdjustedDamage(LivingEntity target, double dmg) {
+        if (dmg <= 0) return dmg;
+        if (dmg >= target.getHealth()) return dmg; // toedlich -> Totem-Frage irrelevant
+        if (tickCounter < popBurstUntil) return dmg; // schon im Kombo-Fenster -> das IST der Nachschlag
+        if (!targetHasTotemReady(target)) return dmg;
+        return dmg * 0.3;
+    }
+
     private double bestDamageAround(LivingEntity target, Vec3 center, boolean crystal) {
         int bx = (int) Math.floor(center.x);
         int by = (int) Math.floor(center.y);
@@ -1660,6 +1728,7 @@ public class GodmodePvP extends Module {
                     double dmg = crystal
                         ? DamageUtils.crystalDamage(target, pos)
                         : DamageUtils.anchorDamage(target, pos);
+                    dmg = totemAdjustedDamage(target, dmg);
                     if (dmg > best) best = dmg;
                 }
             }
@@ -1721,6 +1790,7 @@ public class GodmodePvP extends Module {
         if (mc.level == null) return false;
         if (!mc.level.getBlockState(cell).isAir()) return false;
         if (avoidLava.get() && isNearLava(cell)) return false;
+        if (!hasRaycastLineOfSight(Vec3.atCenterOf(cell))) return false;
 
         BlockState below = mc.level.getBlockState(cell.below());
         if (crystal) {
@@ -1820,7 +1890,22 @@ public class GodmodePvP extends Module {
     private boolean validBedCell(BlockPos cell) {
         if (mc.level == null) return false;
         if (!mc.level.getBlockState(cell).isAir()) return false;
+        if (!hasRaycastLineOfSight(Vec3.atCenterOf(cell))) return false;
         return !(avoidLava.get() && isNearLava(cell));
+    }
+
+    /** Echter Block-Raycast (nicht nur Distanz/Blockstate) zwischen Augenposition und einem Kandidaten-
+     *  Mittelpunkt - ohne das wurden auch Zellen "gueltig", die real durch eine Wand/Deckung hindurch
+     *  gar nicht treffbar sind (reine Distanz-/Blockstate-Pruefung sieht Mauern dazwischen nicht). MISS
+     *  = freie Sicht; ein Treffer nahe genug am Zielpunkt selbst (z.B. die Zielzelle grenzt direkt an
+     *  eine Wand) zaehlt noch als "erreicht", nicht als blockiert.
+     */
+    private boolean hasRaycastLineOfSight(Vec3 point) {
+        if (mc.level == null || mc.player == null) return true;
+        Vec3 eye = mc.player.getEyePosition();
+        ClipContext ctx = new ClipContext(eye, point, ClipContext.Block.COLLIDER, ClipContext.Fluid.NONE, mc.player);
+        BlockHitResult result = mc.level.clip(ctx);
+        return result.getType() == HitResult.Type.MISS || result.getLocation().distanceTo(point) < 0.6;
     }
 
     /** Erste Himmelsrichtung, in der neben dem Fussteil noch eine zweite freie Zelle fuer das Kopfteil
@@ -2336,6 +2421,7 @@ public class GodmodePvP extends Module {
         if (dist > 3.6) {
             Input.setKeyState(mc.options.keyLeft, false);
             Input.setKeyState(mc.options.keyRight, false);
+            Input.setKeyState(mc.options.keyDown, false);
             nextStrafeSwitchTick = -1; // frisches, zufaelliges Intervall beim naechsten Nahkampf-Eintritt
             return;
         }
@@ -2377,6 +2463,12 @@ public class GodmodePvP extends Module {
 
         Input.setKeyState(mc.options.keyRight, rightDot >= 0);
         Input.setKeyState(mc.options.keyLeft, rightDot < 0);
+
+        // Physischer Rueckzug statt nur seitlichem Kreisen, wenn gerade ein neuer Crystal/Anchor/Bett
+        // in der Naehe aufgetaucht ist (siehe explosionRetreatUntil, gesetzt direkt neben auto-shield).
+        // Rotation zeigt hier bereits exakt auf 'center' (siehe oben) - "rueckwaerts" IST also "vom Ziel
+        // weg", keine eigene Richtungsberechnung noetig.
+        Input.setKeyState(mc.options.keyDown, tickCounter < explosionRetreatUntil);
     }
 
     /** Warnt und macht kurz vorsichtiger, wenn waehrend des Kampfes ein zweiter Spieler in der Naehe auftaucht. */
@@ -2395,6 +2487,19 @@ public class GodmodePvP extends Module {
             if (d <= 12.0) {
                 ChatUtils.info("Zweiter Spieler in der Naehe: %s (%.0fm) - Vorsicht!", p.getName().getString(), d);
                 secondEnemyWarnCooldown = 100;
+                // Echte 2v1-Situation UND nicht auf voller Gesundheit: mehr als nur ein kurzes
+                // Schild-Fenster - aktiv Distanz gewinnen (Escape-Pearl wenn bereit, sonst Schild+
+                // Rueckzug), statt einfach normal weiterzukaempfen und auf den zweiten Treffer zu warten.
+                if (self.getHealth() <= 14.0f) {
+                    boolean pearlReady = tickCounter - lastPearlTick > delay(20)
+                        && (InvUtils.findInHotbar(Items.ENDER_PEARL).found() || InvUtils.find(Items.ENDER_PEARL).found());
+                    if (escapePearl.get() && pearlReady) {
+                        throwPearl(currentTarget, true);
+                        currentAction = "2v1-flucht";
+                        return;
+                    }
+                    explosionRetreatUntil = tickCounter + 15;
+                }
                 if (autoShield.get() && !blocking) {
                     shieldUntil = tickCounter + 10;
                     startBlock();
