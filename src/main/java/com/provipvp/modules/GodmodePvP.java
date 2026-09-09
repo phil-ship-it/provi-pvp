@@ -779,6 +779,7 @@ public class GodmodePvP extends Module {
         lastTargetDamageTick = -999;
         hadTotemEffects.clear();
         sprintResetCooldown = 0;
+        anchorsChargedByUs.clear();
 
         Modules m = Modules.get();
 
@@ -789,6 +790,12 @@ public class GodmodePvP extends Module {
                 ca.placeDelay.set(0);
             }
             syncSupport(ca);
+        } else {
+            // CrystalAura nicht geladen/verfuegbar - denselben Fallback-Pfad wie ein fehlgeschlagener
+            // Reflection-Zugriff in syncSupport() nehmen: Obsidian-Unterbau ueber freier Luft kann so
+            // nicht garantiert werden, also Anchor aktiv bevorzugen statt sich stillschweigend auf einen
+            // Crystal-Modus zu verlassen, der in dieser Session gar nicht existiert.
+            supportSyncFailed = true;
         }
 
         // Baritone: aggressive Verfolgung - Klippen runter, Luecken/Gaps ueberspringen, notfalls mit Bruecken-Sprung
@@ -883,6 +890,7 @@ public class GodmodePvP extends Module {
         warnedOutOfCrystals = false;
         warnedOutOfAnchorSupply = false;
         warnedOutOfMisc.clear();
+        anchorsChargedByUs.clear();
 
         info("ProviPvP aus.");
     }
@@ -3162,12 +3170,23 @@ public class GodmodePvP extends Module {
             else lastSelfPopTick = tickCounter; // wir selbst wurden hart getroffen (typischerweise Crystal/Anchor)
         }
 
-        // Combo-Fenster: nach jedem spuerbaren Treffer sofort auf die jeweils andere Aura-Art pruefen,
-        // statt die normale Umschalt-Sperre abzuwarten - Anchor+Crystal Doppel-Schaden ausnutzen.
+        // Combo-Fenster: nach jedem spuerbaren Treffer sofort auf JEDE andere Explosions-Art pruefen
+        // (nicht nur Anchor), statt die normale Umschalt-Sperre abzuwarten - Anchor+Crystal+Bett
+        // Doppel-Schaden ausnutzen. Beide Kandidaten-Caches invalidieren, sonst bliebe z.B. nach einem
+        // Anchor-Treffer die Bett-Bewertung auf einem veralteten Stand haengen, obwohl der Kommentar
+        // "jeweils andere Aura-Art" beide Alternativen meint, nicht nur Anchor.
         if (entity != mc.player && drop >= 3.0f && entity.isAlive()) {
-            lastAuraSwitch = -999;
-            anchorCandidateIndex = anchorCandidates.size();
+            triggerComboRecheck();
         }
+    }
+
+    /** Zwingt selectAura() beim naechsten Aufruf zu einer sofortigen Neubewertung ALLER
+     *  Explosions-Alternativen (Anchor- und Bett-Kandidatenliste), statt auf die normale
+     *  Umschalt-Hysterese/Cache-Gueltigkeit zu warten - siehe trackPop() fuer den Ausloeser. */
+    private void triggerComboRecheck() {
+        lastAuraSwitch = -999;
+        anchorCandidateIndex = anchorCandidates.size();
+        bedCandidateIndex = bedCandidates.size();
     }
 
     /** Praezise Totem-Erkennung ueber die drei Effekte, die ein Totem-Pop garantiert vergibt
