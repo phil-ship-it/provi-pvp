@@ -1,5 +1,8 @@
 package com.provipvp.modules;
 
+import com.provipvp.util.InvHelper;
+import com.provipvp.util.PvpMath;
+
 import baritone.api.BaritoneAPI;
 import meteordevelopment.meteorclient.MeteorClient;
 import meteordevelopment.meteorclient.events.game.GameLeftEvent;
@@ -780,7 +783,7 @@ public class HumanPvP extends Module {
         boolean fallingDanger = !self.onGround() && self.fallDistance > 3.0f && self.getDeltaMovement().y < 0.05;
         if (knockbackPearl.get() && (launchedByHit || fallingDanger)
             && tickCounter - lastPearlTick > 15
-            && (InvUtils.findInHotbar(Items.ENDER_PEARL).found() || InvUtils.find(Items.ENDER_PEARL).found())) {
+            && (InvHelper.has(Items.ENDER_PEARL))) {
             throwPearlDown();
             currentAction = launchedByHit ? "pearl-knockback" : "pearl-fallschutz";
             return;
@@ -793,7 +796,7 @@ public class HumanPvP extends Module {
         // (c) kritisches HP, aber KEINE Perle verfuegbar/auf Cooldown - Schild+Rueckzug als Fallback,
         //     statt schutzlos weiterzukaempfen bis irgendwann doch eine Perle da ist.
         boolean pearlReady = tickCounter - lastPearlTick > 30
-            && (InvUtils.findInHotbar(Items.ENDER_PEARL).found() || InvUtils.find(Items.ENDER_PEARL).found());
+            && (InvHelper.has(Items.ENDER_PEARL));
         if (escapePearl.get() && self.getHealth() <= 8.0f && dist <= 6.0) {
             if (pearlReady) {
                 throwPearl(target, true);
@@ -949,10 +952,7 @@ public class HumanPvP extends Module {
     }
 
     private static float wrapDelta(float delta) {
-        delta %= 360f;
-        if (delta >= 180f) delta -= 360f;
-        if (delta < -180f) delta += 360f;
-        return delta;
+        return PvpMath.wrapDelta(delta);
     }
 
     /** Ease-out statt linearer Marschgeschwindigkeit + hartem Stopp bei Erreichen: die Drehung wird
@@ -1004,7 +1004,7 @@ public class HumanPvP extends Module {
     }
 
     private static float clampAbs(float v, float max) {
-        return Math.max(-max, Math.min(max, v));
+        return PvpMath.clampAbs(v, max);
     }
 
     private double currentAimError(Vec3 point) {
@@ -1019,8 +1019,7 @@ public class HumanPvP extends Module {
     /** Schild in die Haupthand (Offhand bleibt frei fuer den Totem) und blocken - reduziert Explosionsschaden. */
     private void startBlock() {
         if (drinkingFireRes) return; // Feuerresistenz-Trank haelt gerade den gemeinsamen Swap-Merkposten - nicht ueberschreiben
-        FindItemResult shield = InvUtils.findInHotbar(Items.SHIELD);
-        if (!shield.found()) shield = InvUtils.find(Items.SHIELD);
+        FindItemResult shield = InvHelper.find(Items.SHIELD);
         if (!shield.found()) return;
 
         blockingSwapBack = InvUtils.swap(shield.slot(), true);
@@ -1066,8 +1065,7 @@ public class HumanPvP extends Module {
                 smoothLookAt(Vec3.atCenterOf(spot));
                 if (currentAimError(Vec3.atCenterOf(spot)) > aimTolerance.get()) return; // erst ausrichten
 
-                FindItemResult anchor = InvUtils.findInHotbar(Items.RESPAWN_ANCHOR);
-                if (!anchor.found()) anchor = InvUtils.find(Items.RESPAWN_ANCHOR);
+                FindItemResult anchor = InvHelper.find(Items.RESPAWN_ANCHOR);
                 if (!anchor.found()) return;
 
                 boolean swapped = InvUtils.swap(anchor.slot(), true);
@@ -1090,8 +1088,7 @@ public class HumanPvP extends Module {
                 }
                 if (tickCounter < stageDeadline) return;
 
-                FindItemResult gs = InvUtils.findInHotbar(Items.GLOWSTONE);
-                if (!gs.found()) gs = InvUtils.find(Items.GLOWSTONE);
+                FindItemResult gs = InvHelper.find(Items.GLOWSTONE);
                 if (!gs.found()) {
                     anchorStage = 0;
                     anchorCandidates.clear();
@@ -1120,8 +1117,7 @@ public class HumanPvP extends Module {
                     return;
                 }
 
-                FindItemResult fir = InvUtils.findInHotbar(itemStack -> !itemStack.isEmpty() && !itemStack.is(Items.GLOWSTONE));
-                if (!fir.found()) fir = InvUtils.find(itemStack -> !itemStack.isEmpty() && !itemStack.is(Items.GLOWSTONE));
+                FindItemResult fir = InvHelper.find(itemStack -> !itemStack.isEmpty() && !itemStack.is(Items.GLOWSTONE));
                 if (!fir.found()) return;
 
                 if (interactAnchor(fir)) {
@@ -1188,8 +1184,7 @@ public class HumanPvP extends Module {
 
                 if (rotationQueuedThisTick) return; // Rotations-Slot diesen Tick schon belegt - naechster Tick
 
-                FindItemResult bed = InvUtils.findInHotbar(HumanPvP::isBed);
-                if (!bed.found()) bed = InvUtils.find(HumanPvP::isBed);
+                FindItemResult bed = InvHelper.find(HumanPvP::isBed);
                 if (!bed.found()) return;
                 FindItemResult foundBed = bed;
 
@@ -1594,8 +1589,7 @@ public class HumanPvP extends Module {
             PotionContents contents = stack.get(DataComponents.POTION_CONTENTS);
             return contents != null && (contents.is(Potions.FIRE_RESISTANCE) || contents.is(Potions.LONG_FIRE_RESISTANCE));
         };
-        FindItemResult found = InvUtils.findInHotbar(isFireRes);
-        if (!found.found()) found = InvUtils.find(isFireRes);
+        FindItemResult found = InvHelper.find(isFireRes);
         return found;
     }
 
@@ -1785,8 +1779,7 @@ public class HumanPvP extends Module {
 
     private void throwPearl(LivingEntity aimAt, boolean away) {
         if (drinkingFireRes) return; // s.o. - Swap-Merkposten waehrend des Trinkens nicht anfassen
-        FindItemResult pearl = InvUtils.findInHotbar(Items.ENDER_PEARL);
-        if (!pearl.found()) pearl = InvUtils.find(Items.ENDER_PEARL);
+        FindItemResult pearl = InvHelper.find(Items.ENDER_PEARL);
         if (!pearl.found()) return;
 
         double yaw, pitch;
@@ -1795,7 +1788,7 @@ public class HumanPvP extends Module {
             pitch = -35; // steilerer Bogen als vorher (-20 war zu flach)
         } else {
             yaw = Rotations.getYaw(aimAt);
-            pitch = solvePearlPitch(mc.player.getEyePosition().subtract(0, 0.1, 0), yaw, aimAt.getBoundingBox().getCenter());
+            pitch = PvpMath.solvePearlPitch(mc.player.getEyePosition().subtract(0, 0.1, 0), yaw, aimAt.getBoundingBox().getCenter(), null);
             // Ziel physisch ausserhalb der Perlen-Reichweite (z.B. gerade sehr hoch explosionsgeschleudert)
             // - lieber die Perle sparen als sie sicher danebenzuwerfen.
             if (Double.isNaN(pitch)) return;
@@ -1818,83 +1811,10 @@ public class HumanPvP extends Module {
         }
     }
 
-    /** Simple "look directly at the target" pitch works fine up close, but a thrown Ender Pearl is a real
-     *  projectile (power 1.5, gravity 0.03/tick, 0.99 air drag - see Meteor's own ProjectileEntitySimulator/
-     *  Minecraft's ThrowableItemProjectile) - aimed dead-on at longer range it visibly falls short since
-     *  gravity has more time to pull it down over the longer flight. Solves for the pitch that actually
-     *  lands at the target's height by simulating Minecraft's own pearl physics and bisecting on it,
-     *  instead of guessing a fixed arc offset. Falls back to the direct look-pitch if nothing in the
-     *  bounded search range lands close (never happens in practice within pearl-gapclose's own range caps,
-     *  purely a safety net). */
-    private double solvePearlPitch(Vec3 from, double yaw, Vec3 to) {
-        double dx = to.x - from.x, dz = to.z - from.z;
-        double distXZ = Math.sqrt(dx * dx + dz * dz);
-        double dy = to.y - from.y;
-        double directPitch = Math.toDegrees(-Math.atan2(dy, distXZ));
-        if (distXZ < 0.5) return directPitch; // praktisch am eigenen Fuss - keine Ballistik noetig
-
-        // Pitch ist auf [-90,90] begrenzt - ohne diese Klammer suchte die Bisektion bei sehr steilen
-        // Wuerfen (Ziel hoch UND nah) in physisch unmoeglichem Terrain jenseits von -90 Grad und
-        // lieferte einen sinnlosen, viel zu flachen Pitch - die Perle landete weit vor dem Ziel.
-        double lo = Math.max(-89, directPitch - 40);
-        double hi = directPitch;
-
-        for (int i = 0; i < 40; i++) {
-            double mid = (lo + hi) / 2;
-            double heightAtDist = simulatePearlHeightAt(yaw, mid, distXZ);
-            // NaN (Distanz nie erreicht, zu steil nach oben verschossen) zaehlt wie "deutlich zu hoch" -
-            // also wie beim Ueberschiessen weniger Korrektur nach oben nehmen.
-            boolean overshootsHeight = Double.isNaN(heightAtDist) || heightAtDist > dy;
-            if (overshootsHeight) lo = mid; else hi = mid;
-        }
-        double finalPitch = (lo + hi) / 2;
-        double landedHeight = simulatePearlHeightAt(yaw, finalPitch, distXZ);
-        if (Double.isNaN(landedHeight) || landedHeight < dy - 0.5) return Double.NaN;
-        return finalPitch;
-    }
-
-    /** Simuliert einen Perlenwurf mit gegebenem Yaw/Pitch nach Minecrafts eigener Projektil-Physik
-     *  (Richtungsvektor wie ThrowableProjectile#shootFromRotation, dann pro Tick: vy -= 0.03, v *= 0.99,
-     *  pos += v) und liefert die Hoehe relativ zum Startpunkt, sobald die Perle horizontal targetDistXZ
-     *  erreicht hat (zwischen den beiden umgebenden Ticks linear interpoliert). NaN, wenn sie die Distanz
-     *  innerhalb von 300 Ticks (15s, weit jenseits jeder echten Wurfdistanz) nie erreicht. */
-    private double simulatePearlHeightAt(double yaw, double pitch, double targetDistXZ) {
-        double yawRad = Math.toRadians(yaw), pitchRad = Math.toRadians(pitch);
-        double vx = -Math.sin(yawRad) * Math.cos(pitchRad);
-        double vy = -Math.sin(pitchRad);
-        double vz = Math.cos(yawRad) * Math.cos(pitchRad);
-        double len = Math.sqrt(vx * vx + vy * vy + vz * vz);
-        vx = vx / len * 1.5;
-        vy = vy / len * 1.5;
-        vz = vz / len * 1.5;
-
-        double x = 0, y = 0, z = 0;
-        for (int tick = 0; tick < 300; tick++) {
-            double prevDistXZ = Math.sqrt(x * x + z * z);
-            double prevY = y;
-
-            vy -= 0.03;
-            vx *= 0.99;
-            vy *= 0.99;
-            vz *= 0.99;
-            x += vx;
-            y += vy;
-            z += vz;
-
-            double distXZ = Math.sqrt(x * x + z * z);
-            if (distXZ >= targetDistXZ) {
-                double frac = distXZ > prevDistXZ ? (targetDistXZ - prevDistXZ) / (distXZ - prevDistXZ) : 1.0;
-                return prevY + (y - prevY) * frac;
-            }
-        }
-        return Double.NaN;
-    }
-
     /** Perle senkrecht nach unten - teleportiert bei Landung, kein unkontrolliertes Fallen nach Knockback. */
     private void throwPearlDown() {
         if (drinkingFireRes) return; // s.o. - Swap-Merkposten waehrend des Trinkens nicht anfassen
-        FindItemResult pearl = InvUtils.findInHotbar(Items.ENDER_PEARL);
-        if (!pearl.found()) pearl = InvUtils.find(Items.ENDER_PEARL);
+        FindItemResult pearl = InvHelper.find(Items.ENDER_PEARL);
         if (!pearl.found()) return;
 
         if (pearl.isOffhand()) {
@@ -1959,8 +1879,7 @@ public class HumanPvP extends Module {
         if (!mc.level.getBlockState(feet).isAir()) return;
         if (!mc.level.getBlockState(feet.below()).blocksMotion()) return;
 
-        FindItemResult web = InvUtils.findInHotbar(Items.COBWEB);
-        if (!web.found()) web = InvUtils.find(Items.COBWEB);
+        FindItemResult web = InvHelper.find(Items.COBWEB);
         if (web.found() && BlockUtils.place(feet, web, true, 50)) lastTrapTick = tickCounter;
     }
 
@@ -2035,8 +1954,7 @@ public class HumanPvP extends Module {
         if (!healPotions.get() || blocking || drinkingFireRes || healPotionCooldown > 0) return;
         if (!healingUntilFull) return;
 
-        FindItemResult potion = InvUtils.findInHotbar(HumanPvP::isHealingSplash);
-        if (!potion.found()) potion = InvUtils.find(HumanPvP::isHealingSplash);
+        FindItemResult potion = InvHelper.find(HumanPvP::isHealingSplash);
         if (!potion.found()) return;
 
         boolean thrown;

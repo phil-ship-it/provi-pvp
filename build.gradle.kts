@@ -32,6 +32,15 @@ dependencies {
 
     // Baritone API (vendored jar - kein oeffentliches Maven-Artefakt fuer diesen 26.2-Fork verfuegbar)
     compileOnly(files("libs/baritone-api.jar"))
+
+    // Test - nur fuer reine, zustandslose Logik ohne laufenden Minecraft-Client (siehe util/PvpMath)
+    testImplementation(platform(libs.junit.bom))
+    testImplementation(libs.junit.jupiter)
+    testRuntimeOnly("org.junit.platform:junit-platform-launcher")
+}
+
+tasks.test {
+    useJUnitPlatform()
 }
 
 

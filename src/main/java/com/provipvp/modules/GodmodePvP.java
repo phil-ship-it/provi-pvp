@@ -1,5 +1,8 @@
 package com.provipvp.modules;
 
+import com.provipvp.util.InvHelper;
+import com.provipvp.util.PvpMath;
+
 import baritone.api.BaritoneAPI;
 import meteordevelopment.meteorclient.MeteorClient;
 import meteordevelopment.meteorclient.events.game.GameLeftEvent;
@@ -931,6 +934,50 @@ public class GodmodePvP extends Module {
         pendingFreeLook = false;
 
         boolean guiOpen = mc.gui.screen() != null;
+        handleInventory(self, guiOpen);
+
+        if (blocking) {
+            if (tickCounter < shieldUntil) {
+                mc.gameMode.useItem(mc.player, InteractionHand.MAIN_HAND);
+                currentAction = "schild-block";
+                return;
+            }
+            stopBlock();
+        }
+
+        LivingEntity target = handleTargeting(self);
+        if (target == null) return; // currentAction wurde bereits auf "beobachten" gesetzt
+
+        double dist = Math.sqrt(self.distanceToSqr(target));
+        boolean flying = mc.player.isFallFlying();
+
+        if (handleDefense(self, target, dist)) return;
+
+        handleOffense(self, target, dist, flying, guiOpen);
+
+        if (currentAction.equals("-")) {
+            currentAction = auraMode == 0 ? "crystal" : "zielen";
+        }
+        updatePeekStance();
+
+        trackPop(target);
+        trackPop(self);
+        trackTotemEffect(target);
+
+        // Cosmetic Ziel-Verfolgung (free-look) nur anwenden, wenn diesen Tick noch keine echte
+        // Kampfaktion (Perlwurf, Anchor/Bett-Interaktion, Crystal-Platzierung, ...) den gemeinsamen
+        // Rotations-Slot belegt hat - sonst wuerde diese rein optische Drehung lautlos vor der
+        // eigentlichen Aktion in Meteors Rotations-Queue landen und deren Callback mit der alten,
+        // zurueckgesetzten Blickrichtung ausfuehren (siehe rotateAndRun-Dokumentation).
+        if (pendingFreeLook && !rotationQueuedThisTick) {
+            rotationQueuedThisTick = true;
+            Rotations.rotate(pendingFreeLookYaw, pendingFreeLookPitch);
+        }
+    }
+
+    /** Totem/Heiltraenke/Feuerresistenz-Pflege und periodischer Inventar-Nachschub - unabhaengig
+     *  vom aktuellen Ziel, laeuft jeden Tick zuerst. */
+    private void handleInventory(Player self, boolean guiOpen) {
         // Nur eine ECHTE Fremd-Container-GUI (Kiste, Ambos, Shulker, ...) hat ein anderes containerMenu
         // als das Standard-Spieler-Inventar - Slot-Indizes waeren dann falsch gemappt und koennten
         // Items in der falschen GUI verschieben. Das Meteor-ClickGUI und das eigene Inventar (E) teilen
@@ -942,16 +989,12 @@ public class GodmodePvP extends Module {
         if (!guiOpen) {
             if (invManager.get() && tickCounter % 20 == 0) inventoryTick(self);
         }
+    }
 
-        if (blocking) {
-            if (tickCounter < shieldUntil) {
-                mc.gameMode.useItem(mc.player, InteractionHand.MAIN_HAND);
-                currentAction = "schild-block";
-                return;
-            }
-            stopBlock();
-        }
-
+    /** Zielwahl/-verfolgung: findet das Ziel (oder raeumt bei Zielverlust auf), wertet periodisch
+     *  ein besseres Ziel neu, pflegt engaged/engagedTargetId und die kontinuierliche Blickrichtung.
+     *  @return das (ggf. neu gewaehlte) Ziel, oder null wenn keins gefunden wurde. */
+    private LivingEntity handleTargeting(Player self) {
         LivingEntity target = findTarget(self);
 
         // Ziel weg -> Baritone stoppen
@@ -966,7 +1009,7 @@ public class GodmodePvP extends Module {
             mc.player.setShiftKeyDown(false);
             Input.setKeyState(mc.options.keyJump, false);
             currentAction = "beobachten";
-            return;
+            return null;
         }
 
         updateTracking(target);
@@ -1010,6 +1053,14 @@ public class GodmodePvP extends Module {
             }
         }
 
+        return target;
+    }
+
+    /** Reaktive Verteidigung: Stuck-/Rubberband-Erkennung, Knockback-/Notfall-/Flucht-Perlen und
+     *  Rueckzugs-Schwellen. Laeuft NACH der Zielwahl (braucht target/dist), vor jeder Offensiv-Aktion.
+     *  @return true, wenn diesen Tick bereits eine Verteidigungsreaktion den gemeinsamen
+     *  Aktions-/Rotations-Slot belegt hat und der restliche Tick (Angriff/Platzierung) ausfallen muss. */
+    private boolean handleDefense(Player self, LivingEntity target, double dist) {
         // Stuck-Erkennung: eigene Position + Ziel-HP beobachten
         double selfMoved = lastSelfPos == null ? 999 : self.position().distanceTo(lastSelfPos);
         lastSelfPos = self.position();
@@ -1042,10 +1093,10 @@ public class GodmodePvP extends Module {
         boolean fallingDanger = !self.onGround() && self.fallDistance > 3.0f && self.getDeltaMovement().y < 0.05;
         if (knockbackPearl.get() && (launchedByHit || fallingDanger)
             && tickCounter - lastPearlTick > delay(15)
-            && (InvUtils.findInHotbar(Items.ENDER_PEARL).found() || InvUtils.find(Items.ENDER_PEARL).found())) {
+            && InvHelper.has(Items.ENDER_PEARL)) {
             throwPearlDown();
             currentAction = launchedByHit ? "pearl-knockback" : "pearl-fallschutz";
-            return;
+            return true;
         }
 
         boolean blockedByObstacle = dist <= 6.0 && !self.hasLineOfSight(target);
@@ -1058,7 +1109,7 @@ public class GodmodePvP extends Module {
         // Kein Sichtkontakt trotz Naehe (Hindernis im Weg): so gut wie sofort reagieren,
         // klappt das nicht, zum Gegner perlen statt festzustehen.
         if (obstacleStuckTicks > 8 && pearlThrow.get() && tickCounter - lastPearlTick > delay(20)
-            && (InvUtils.findInHotbar(Items.ENDER_PEARL).found() || InvUtils.find(Items.ENDER_PEARL).found())) {
+            && InvHelper.has(Items.ENDER_PEARL)) {
             throwPearl(target, false);
             currentAction = "pearl-obstacle";
             obstacleStuckTicks = 0;
@@ -1075,7 +1126,7 @@ public class GodmodePvP extends Module {
         if (oscillationAnchorPos == null || tickCounter - oscillationAnchorTick > 30) {
             if (oscillationAnchorPos != null && self.position().distanceTo(oscillationAnchorPos) < 1.5
                 && pearlThrow.get() && tickCounter - lastPearlTick > delay(20)
-                && (InvUtils.findInHotbar(Items.ENDER_PEARL).found() || InvUtils.find(Items.ENDER_PEARL).found())) {
+                && InvHelper.has(Items.ENDER_PEARL)) {
                 throwPearl(target, false);
                 currentAction = "pearl-oszillation";
             }
@@ -1101,20 +1152,19 @@ public class GodmodePvP extends Module {
         // zaehlt bewusst NICHT als Kaefig - da kann man jederzeit selbst wieder raus.
         if (countBoxedSides(self) >= 3 && mc.level.getBlockState(self.blockPosition().above(2)).blocksMotion()
             && escapePearl.get() && tickCounter - lastPearlTick > delay(15)
-            && (InvUtils.findInHotbar(Items.ENDER_PEARL).found() || InvUtils.find(Items.ENDER_PEARL).found())) {
+            && InvHelper.has(Items.ENDER_PEARL)) {
             throwPearl(target, true);
             currentAction = "escape-cage";
-            return;
+            return true;
         }
 
         // Notfall-Flucht: kritisches HP -> Perle weg statt sinnlos weiterzukaempfen, egal wie weit der Gegner ist
-        boolean pearlReady = tickCounter - lastPearlTick > delay(20)
-            && (InvUtils.findInHotbar(Items.ENDER_PEARL).found() || InvUtils.find(Items.ENDER_PEARL).found());
+        boolean pearlReady = tickCounter - lastPearlTick > delay(20) && InvHelper.has(Items.ENDER_PEARL);
         if (escapePearl.get() && self.getHealth() <= 6.0f) {
             if (pearlReady) {
                 throwPearl(target, true);
                 currentAction = "escape-pearl";
-                return;
+                return true;
             }
             // Gestufter Fallback statt schutzlos weiterzukaempfen: keine Perle da/auf Cooldown -> Schild
             // hoch und physisch zurueckweichen (dieselbe explosionRetreatUntil-Bewegung wie beim
@@ -1125,7 +1175,7 @@ public class GodmodePvP extends Module {
             }
             explosionRetreatUntil = tickCounter + 20;
             currentAction = "notfall-schild-rueckzug";
-            return;
+            return true;
         }
 
         // Rueckzugs-Schwelle: Totems knapp UND keine Explosiv-Ressourcen mehr -> Gefecht abbrechen statt
@@ -1133,11 +1183,11 @@ public class GodmodePvP extends Module {
         if (retreatThreshold.get() && lowOnTotems && warnedOutOfCrystals && warnedOutOfAnchorSupply) {
             cancelFollow();
             if (dist <= 10.0 && tickCounter - lastPearlTick > delay(30)
-                && (InvUtils.findInHotbar(Items.ENDER_PEARL).found() || InvUtils.find(Items.ENDER_PEARL).found())) {
+                && InvHelper.has(Items.ENDER_PEARL)) {
                 throwPearl(target, true);
             }
             currentAction = "rueckzug";
-            return;
+            return true;
         }
 
         // Verlorener Trade: wir selbst wurden gerade hart getroffen (typischerweise Crystal/Anchor-Pop),
@@ -1145,13 +1195,20 @@ public class GodmodePvP extends Module {
         // (Platzierung blockiert/unerreichbar, Schild, o.ae.) - abhauen statt einen Verlust-Trade fortzusetzen.
         if (retreatOnLosingTrade.get() && tickCounter - lastSelfPopTick < 60
             && tickCounter - lastTargetDamageTick > 60 && tickCounter - lastPearlTick > delay(30)
-            && (InvUtils.findInHotbar(Items.ENDER_PEARL).found() || InvUtils.find(Items.ENDER_PEARL).found())) {
+            && InvHelper.has(Items.ENDER_PEARL)) {
             throwPearl(target, true);
             currentAction = "pearl-verlorener-trade";
             lastSelfPopTick = -999;
-            return;
+            return true;
         }
 
+        return false;
+    }
+
+    /** Offensive Kampf-Logik: Nahkampf-Bewegung/-Schlaege, Perlen-Gapclose, Verfolgung, D-Tap,
+     *  Anchor/Bett-Wartung und Aura-Platzierung (Crystal/Anchor/Bett). Laeuft nur, wenn
+     *  {@link #handleDefense} diesen Tick nicht bereits selbst abgeschlossen hat. */
+    private void handleOffense(Player self, LivingEntity target, double dist, boolean flying, boolean guiOpen) {
         handleTrap(target);
         if (meleeStrafe.get() && !flying) updateCombatMovement(target, dist);
         manageSprintForKnockback(dist);
@@ -1316,25 +1373,6 @@ public class GodmodePvP extends Module {
             attackMelee(target);
             currentAction = "nahkampf-fallback";
         }
-
-        if (currentAction.equals("-")) {
-            currentAction = auraMode == 0 ? "crystal" : "zielen";
-        }
-        updatePeekStance();
-
-        trackPop(target);
-        trackPop(self);
-        trackTotemEffect(target);
-
-        // Cosmetic Ziel-Verfolgung (free-look) nur anwenden, wenn diesen Tick noch keine echte
-        // Kampfaktion (Perlwurf, Anchor/Bett-Interaktion, Crystal-Platzierung, ...) den gemeinsamen
-        // Rotations-Slot belegt hat - sonst wuerde diese rein optische Drehung lautlos vor der
-        // eigentlichen Aktion in Meteors Rotations-Queue landen und deren Callback mit der alten,
-        // zurueckgesetzten Blickrichtung ausfuehren (siehe rotateAndRun-Dokumentation).
-        if (pendingFreeLook && !rotationQueuedThisTick) {
-            rotationQueuedThisTick = true;
-            Rotations.rotate(pendingFreeLookYaw, pendingFreeLookPitch);
-        }
     }
 
     @Override
@@ -1347,8 +1385,7 @@ public class GodmodePvP extends Module {
     /** Schild in die Haupthand (Offhand bleibt frei fuer den Totem) und blocken - reduziert Explosionsschaden. */
     private void startBlock() {
         if (drinkingFireRes) return; // Feuerresistenz-Trank haelt gerade den gemeinsamen Swap-Merkposten - nicht ueberschreiben
-        FindItemResult shield = InvUtils.findInHotbar(Items.SHIELD);
-        if (!shield.found()) shield = InvUtils.find(Items.SHIELD);
+        FindItemResult shield = InvHelper.find(Items.SHIELD);
         if (!shield.found()) return;
 
         blockingSwapBack = InvUtils.swap(shield.slot(), true);
@@ -1395,8 +1432,7 @@ public class GodmodePvP extends Module {
         }
         anchorUnreachableTicks = 0;
 
-        FindItemResult anchor = InvUtils.findInHotbar(Items.RESPAWN_ANCHOR);
-        if (!anchor.found()) anchor = InvUtils.find(Items.RESPAWN_ANCHOR);
+        FindItemResult anchor = InvHelper.find(Items.RESPAWN_ANCHOR);
         if (!anchor.found()) return;
 
         if (BlockUtils.place(spot, anchor, true, 50)) {
@@ -1446,8 +1482,7 @@ public class GodmodePvP extends Module {
 
                     int charges = st.getValue(net.minecraft.world.level.block.state.properties.BlockStateProperties.RESPAWN_ANCHOR_CHARGES);
                     if (charges > 0) {
-                        FindItemResult fir = InvUtils.findInHotbar(itemStack -> !itemStack.isEmpty() && !itemStack.is(Items.GLOWSTONE));
-                        if (!fir.found()) fir = InvUtils.find(itemStack -> !itemStack.isEmpty() && !itemStack.is(Items.GLOWSTONE));
+                        FindItemResult fir = InvHelper.find(itemStack -> !itemStack.isEmpty() && !itemStack.is(Items.GLOWSTONE));
                         if (!fir.found()) continue;
                         if (interactAnchorAt(pos, fir)) {
                             anchorMaintCooldown = delay(3);
@@ -1462,8 +1497,7 @@ public class GodmodePvP extends Module {
                         // Glowstone rein - aus dem gewollten 1-Glowstone-Blitz-Anchor wurde eine volle 4er-Ladung.
                         if (anchorsChargedByUs.contains(pos)) continue;
 
-                        FindItemResult gs = InvUtils.findInHotbar(Items.GLOWSTONE);
-                        if (!gs.found()) gs = InvUtils.find(Items.GLOWSTONE);
+                        FindItemResult gs = InvHelper.find(Items.GLOWSTONE);
                         if (!gs.found()) {
                             outOfGlowstone = true;
                             continue;
@@ -1509,8 +1543,7 @@ public class GodmodePvP extends Module {
         double d = Math.sqrt(mc.player.distanceToSqr(Vec3.atCenterOf(gap)));
         if (d > 4.2) return false;
 
-        FindItemResult anchor = InvUtils.findInHotbar(Items.RESPAWN_ANCHOR);
-        if (!anchor.found()) anchor = InvUtils.find(Items.RESPAWN_ANCHOR);
+        FindItemResult anchor = InvHelper.find(Items.RESPAWN_ANCHOR);
         if (!anchor.found()) return false;
         if (totalItem(Items.GLOWSTONE) <= 0) return false;
 
@@ -1809,7 +1842,7 @@ public class GodmodePvP extends Module {
             // wirklich bespielen kann. Das liess bestCrystalDmgCache faelschlich > 0 stehen, was
             // explosionImminent() "true" zurueckgeben und melee-fallback komplett blockieren liess,
             // obwohl der Bot regungslos neben einem voll treffbaren Gegner stand.
-            return below.isAir() && (InvUtils.findInHotbar(Items.OBSIDIAN).found() || InvUtils.find(Items.OBSIDIAN).found());
+            return below.isAir() && (InvHelper.has(Items.OBSIDIAN));
         }
         return below.blocksMotion() && mc.level.getBlockState(cell.above()).isAir();
     }
@@ -1971,8 +2004,7 @@ public class GodmodePvP extends Module {
 
         if (rotationQueuedThisTick) return; // Rotations-Slot diesen Tick schon belegt - naechster Tick
 
-        FindItemResult foundBed = InvUtils.findInHotbar(GodmodePvP::isBed);
-        if (!foundBed.found()) foundBed = InvUtils.find(GodmodePvP::isBed);
+        FindItemResult foundBed = InvHelper.find(GodmodePvP::isBed);
         if (!foundBed.found()) return;
         FindItemResult bed = foundBed;
 
@@ -2111,8 +2143,7 @@ public class GodmodePvP extends Module {
         if (!healPotions.get() || blocking || drinkingFireRes || healPotionCooldown > 0) return;
         if (!healingUntilFull) return;
 
-        FindItemResult potion = InvUtils.findInHotbar(GodmodePvP::isHealingSplash);
-        if (!potion.found()) potion = InvUtils.find(GodmodePvP::isHealingSplash);
+        FindItemResult potion = InvHelper.find(GodmodePvP::isHealingSplash);
         if (!potion.found()) return;
 
         boolean thrown;
@@ -2167,8 +2198,7 @@ public class GodmodePvP extends Module {
             PotionContents contents = stack.get(DataComponents.POTION_CONTENTS);
             return contents != null && (contents.is(Potions.FIRE_RESISTANCE) || contents.is(Potions.LONG_FIRE_RESISTANCE));
         };
-        FindItemResult found = InvUtils.findInHotbar(isFireRes);
-        if (!found.found()) found = InvUtils.find(isFireRes);
+        FindItemResult found = InvHelper.find(isFireRes);
         return found;
     }
 
@@ -2180,8 +2210,7 @@ public class GodmodePvP extends Module {
         if (floor == null) return;
 
         if (mc.level.getBlockState(floor).isAir()) {
-            FindItemResult obsidian = InvUtils.findInHotbar(Items.OBSIDIAN);
-            if (!obsidian.found()) obsidian = InvUtils.find(Items.OBSIDIAN);
+            FindItemResult obsidian = InvHelper.find(Items.OBSIDIAN);
             if (!obsidian.found()) return;
             if (!BlockUtils.place(floor, obsidian, true, 50)) return;
         }
@@ -2239,8 +2268,7 @@ public class GodmodePvP extends Module {
                 if (tickCounter - dtapStageTick > 15) { dtapStage = 0; return; } // Fenster verpasst
                 if (!mc.level.getBlockState(dtapSpot.above()).isAir()) { dtapStage = 0; return; } // besetzt
 
-                FindItemResult crystal = InvUtils.findInHotbar(Items.END_CRYSTAL);
-                if (!crystal.found()) crystal = InvUtils.find(Items.END_CRYSTAL);
+                FindItemResult crystal = InvHelper.find(Items.END_CRYSTAL);
                 if (!crystal.found()) { dtapStage = 0; return; }
 
                 if (placeCrystal(dtapSpot, crystal)) {
@@ -2267,8 +2295,7 @@ public class GodmodePvP extends Module {
                     return;
                 }
 
-                FindItemResult crystal = InvUtils.findInHotbar(Items.END_CRYSTAL);
-                if (!crystal.found()) crystal = InvUtils.find(Items.END_CRYSTAL);
+                FindItemResult crystal = InvHelper.find(Items.END_CRYSTAL);
                 if (!crystal.found()) { dtapStage = 0; return; }
 
                 if (placeCrystal(dtapSpot, crystal)) {
@@ -2501,7 +2528,7 @@ public class GodmodePvP extends Module {
                 // Rueckzug), statt einfach normal weiterzukaempfen und auf den zweiten Treffer zu warten.
                 if (self.getHealth() <= 14.0f) {
                     boolean pearlReady = tickCounter - lastPearlTick > delay(20)
-                        && (InvUtils.findInHotbar(Items.ENDER_PEARL).found() || InvUtils.find(Items.ENDER_PEARL).found());
+                        && (InvHelper.has(Items.ENDER_PEARL));
                     if (escapePearl.get() && pearlReady) {
                         throwPearl(currentTarget, true);
                         currentAction = "2v1-flucht";
@@ -2527,8 +2554,7 @@ public class GodmodePvP extends Module {
         double speed = Math.sqrt(vel.x * vel.x + vel.z * vel.z);
         if (speed >= 0.6 || tickCounter - lastFireworkTick <= 20) return;
 
-        FindItemResult firework = InvUtils.findInHotbar(Items.FIREWORK_ROCKET);
-        if (!firework.found()) firework = InvUtils.find(Items.FIREWORK_ROCKET);
+        FindItemResult firework = InvHelper.find(Items.FIREWORK_ROCKET);
         if (!firework.found()) return;
 
         boolean swapped = InvUtils.swap(firework.slot(), true);
@@ -2659,8 +2685,7 @@ public class GodmodePvP extends Module {
      *  weder Nahkampf noch Explosionen mehr landen (genau das erzeugte den "steht nur noch da"-Bug: der
      *  einzige offene Nachbarblock lag zufaellig zwischen Bot und Gegner). */
     private void buildOwnCover(Player self, LivingEntity target) {
-        FindItemResult obsidian = InvUtils.findInHotbar(Items.OBSIDIAN);
-        if (!obsidian.found()) obsidian = InvUtils.find(Items.OBSIDIAN);
+        FindItemResult obsidian = InvHelper.find(Items.OBSIDIAN);
         if (!obsidian.found()) return;
 
         Vec3 toTarget = target.position().subtract(self.position());
@@ -2992,8 +3017,7 @@ public class GodmodePvP extends Module {
 
     private void throwPearl(LivingEntity aimAt, boolean away) {
         if (drinkingFireRes) return; // s.o. - Swap-Merkposten waehrend des Trinkens nicht anfassen
-        FindItemResult pearl = InvUtils.findInHotbar(Items.ENDER_PEARL);
-        if (!pearl.found()) pearl = InvUtils.find(Items.ENDER_PEARL);
+        FindItemResult pearl = InvHelper.find(Items.ENDER_PEARL);
         if (!pearl.found()) return;
 
         double yaw, pitch;
@@ -3017,11 +3041,11 @@ public class GodmodePvP extends Module {
             Vec3 aimPoint = aimAt.getBoundingBox().getCenter();
             double[] arrivalTicks = {0};
             yaw = Rotations.getYaw(aimPoint);
-            pitch = solvePearlPitch(from, yaw, aimPoint, arrivalTicks);
+            pitch = PvpMath.solvePearlPitch(from, yaw, aimPoint, arrivalTicks);
             for (int i = 0; i < 2 && !Double.isNaN(pitch); i++) {
                 aimPoint = predictOverTicks(aimAt, (int) Math.round(arrivalTicks[0])).add(centerOffset);
                 yaw = Rotations.getYaw(aimPoint);
-                pitch = solvePearlPitch(from, yaw, aimPoint, arrivalTicks);
+                pitch = PvpMath.solvePearlPitch(from, yaw, aimPoint, arrivalTicks);
             }
             // Ziel physisch ausserhalb der Perlen-Reichweite (z.B. gerade sehr hoch explosionsgeschleudert,
             // steiler Wurf noetig als selbst ein Pitch von -90 hergibt) - lieber die Perle sparen als sie
@@ -3048,92 +3072,10 @@ public class GodmodePvP extends Module {
         }
     }
 
-    /** Simple "look directly at the target" pitch works fine up close, but a thrown Ender Pearl is a real
-     *  projectile (power 1.5, gravity 0.03/tick, 0.99 air drag - see Meteor's own ProjectileEntitySimulator/
-     *  Minecraft's ThrowableItemProjectile) - aimed dead-on at longer range it visibly falls short since
-     *  gravity has more time to pull it down over the longer flight. Solves for the pitch that actually
-     *  lands at the target's height by simulating Minecraft's own pearl physics and bisecting on it,
-     *  instead of guessing a fixed arc offset. Falls back to the direct look-pitch if nothing in the
-     *  bounded search range lands close (never happens in practice within pearl-gapclose's own range caps,
-     *  purely a safety net). */
-    private double solvePearlPitch(Vec3 from, double yaw, Vec3 to, double[] arrivalTicksOut) {
-        double dx = to.x - from.x, dz = to.z - from.z;
-        double distXZ = Math.sqrt(dx * dx + dz * dz);
-        double dy = to.y - from.y;
-        double directPitch = Math.toDegrees(-Math.atan2(dy, distXZ));
-        if (distXZ < 0.5) { // praktisch am eigenen Fuss - keine Ballistik noetig
-            if (arrivalTicksOut != null) arrivalTicksOut[0] = 0;
-            return directPitch;
-        }
-
-        // Pitch ist auf [-90,90] begrenzt - ohne diese Klammer suchte die Bisektion bei sehr steilen
-        // Wuerfen (Ziel hoch UND nah, z.B. gerade explosionsgeschleudert) in physisch unmoeglichem
-        // Terrain jenseits von -90 Grad und lieferte einen voellig sinnlosen, viel zu flachen Pitch -
-        // die Perle landete dann weit vor dem Ziel statt in dessen Naehe.
-        double lo = Math.max(-89, directPitch - 40);
-        double hi = directPitch;
-
-        for (int i = 0; i < 40; i++) {
-            double mid = (lo + hi) / 2;
-            double heightAtDist = simulatePearlHeightAt(yaw, mid, distXZ, null);
-            // NaN (Distanz nie erreicht, zu steil nach oben verschossen) zaehlt wie "deutlich zu hoch" -
-            // also wie beim Ueberschiessen weniger Korrektur nach oben nehmen.
-            boolean overshootsHeight = Double.isNaN(heightAtDist) || heightAtDist > dy;
-            if (overshootsHeight) lo = mid; else hi = mid;
-        }
-        double finalPitch = (lo + hi) / 2;
-        double landedHeight = simulatePearlHeightAt(yaw, finalPitch, distXZ, arrivalTicksOut);
-        // Selbst der steilst erlaubte Wurf (Pitch nahe -90) erreicht die Zielhoehe nicht - das Ziel ist
-        // bei dieser Distanz schlicht ausserhalb der physischen Reichweite einer Perle (z.B. gerade sehr
-        // hoch explosionsgeschleudert, aber noch zu nah, um genug Anlauf fuer die Hoehe zu nehmen).
-        if (Double.isNaN(landedHeight) || landedHeight < dy - 0.5) return Double.NaN;
-        return finalPitch;
-    }
-
-    /** Simuliert einen Perlenwurf mit gegebenem Yaw/Pitch nach Minecrafts eigener Projektil-Physik
-     *  (Richtungsvektor wie ThrowableProjectile#shootFromRotation, dann pro Tick: vy -= 0.03, v *= 0.99,
-     *  pos += v) und liefert die Hoehe relativ zum Startpunkt, sobald die Perle horizontal targetDistXZ
-     *  erreicht hat (zwischen den beiden umgebenden Ticks linear interpoliert). NaN, wenn sie die Distanz
-     *  innerhalb von 300 Ticks (15s, weit jenseits jeder echten Wurfdistanz) nie erreicht. */
-    private double simulatePearlHeightAt(double yaw, double pitch, double targetDistXZ, double[] arrivalTicksOut) {
-        double yawRad = Math.toRadians(yaw), pitchRad = Math.toRadians(pitch);
-        double vx = -Math.sin(yawRad) * Math.cos(pitchRad);
-        double vy = -Math.sin(pitchRad);
-        double vz = Math.cos(yawRad) * Math.cos(pitchRad);
-        double len = Math.sqrt(vx * vx + vy * vy + vz * vz);
-        vx = vx / len * 1.5;
-        vy = vy / len * 1.5;
-        vz = vz / len * 1.5;
-
-        double x = 0, y = 0, z = 0;
-        for (int tick = 0; tick < 300; tick++) {
-            double prevDistXZ = Math.sqrt(x * x + z * z);
-            double prevY = y;
-
-            vy -= 0.03;
-            vx *= 0.99;
-            vy *= 0.99;
-            vz *= 0.99;
-            x += vx;
-            y += vy;
-            z += vz;
-
-            double distXZ = Math.sqrt(x * x + z * z);
-            if (distXZ >= targetDistXZ) {
-                double frac = distXZ > prevDistXZ ? (targetDistXZ - prevDistXZ) / (distXZ - prevDistXZ) : 1.0;
-                if (arrivalTicksOut != null) arrivalTicksOut[0] = tick + frac;
-                return prevY + (y - prevY) * frac;
-            }
-        }
-        if (arrivalTicksOut != null) arrivalTicksOut[0] = 300;
-        return Double.NaN;
-    }
-
     /** Perle senkrecht nach unten - teleportiert bei Landung, kein unkontrolliertes Fallen nach Knockback. */
     private void throwPearlDown() {
         if (drinkingFireRes) return; // s.o. - Swap-Merkposten waehrend des Trinkens nicht anfassen
-        FindItemResult pearl = InvUtils.findInHotbar(Items.ENDER_PEARL);
-        if (!pearl.found()) pearl = InvUtils.find(Items.ENDER_PEARL);
+        FindItemResult pearl = InvHelper.find(Items.ENDER_PEARL);
         if (!pearl.found()) return;
 
         if (pearl.isOffhand()) {
@@ -3193,8 +3135,7 @@ public class GodmodePvP extends Module {
         if (!mc.level.getBlockState(feet).isAir()) return;
         if (!mc.level.getBlockState(feet.below()).blocksMotion()) return;
 
-        FindItemResult web = InvUtils.findInHotbar(Items.COBWEB);
-        if (!web.found()) web = InvUtils.find(Items.COBWEB);
+        FindItemResult web = InvHelper.find(Items.COBWEB);
         if (web.found()) BlockUtils.place(feet, web, true, 50);
     }
 
