@@ -181,6 +181,15 @@ public class HumanPvP extends Module {
         .build()
     );
 
+    public final Setting<Double> bedMinDamage = sgCombat.add(new DoubleSetting.Builder()
+        .name("bed-min-damage")
+        .description("Mindestschaden, den eine Bett-Explosion beim Ziel anrichten muss, damit Bett-Modus ueberhaupt in Frage kommt - siehe GodmodePvP fuer dieselbe Begruendung (verifizierter Mechanik-Abgleich: Meteor BedAura 'min-damage', CandyCat BedAura 'minDmg').")
+        .defaultValue(4.0)
+        .range(0.5, 10.0)
+        .sliderRange(0.5, 10.0)
+        .build()
+    );
+
     public final Setting<Integer> minSupportDelay = sgCombat.add(new IntSetting.Builder()
         .name("min-support-delay")
         .description("Mindest-Tickabstand zwischen Obsidian-Unterbau und dem folgenden Crystal-Platzieren (CrystalAuras 'support-delay'). Beide Aktionen nutzen Minecrafts eigenes sequenznummer-basiertes Block-Vorhersage-System (seit 1.19) - schickt man beide zu dicht hintereinander raus, bevor die erste Sequenz vom Server bestaetigt ist, kann die Vorhersage durcheinanderkommen. Auf Servern mit spuerbarer Latenz oder Versions-Uebersetzung (z.B. ViaVersion) braucht es mehr Puffer als den Meteor-Standard.")
@@ -1328,7 +1337,7 @@ public class HumanPvP extends Module {
         }
 
         boolean wantBed = hasBedItem && inRange && bedCandidateIndex < bedCandidates.size()
-            && bestBedDmgCache + bedStickyBonus > crystalDmg + 0.3 + noise;
+            && bestBedDmgCache >= bedMinDamage.get() && bestBedDmgCache + bedStickyBonus > crystalDmg + 0.3 + noise;
 
         // Bei beiden verfuegbar gewinnt die schadenstaerkere Option.
         if (wantAnchor && wantBed) {

@@ -190,6 +190,15 @@ public class GodmodePvP extends Module {
         .build()
     );
 
+    public final Setting<Double> bedMinDamage = sgCombat.add(new DoubleSetting.Builder()
+        .name("bed-min-damage")
+        .description("Mindestschaden, den eine Bett-Explosion beim Ziel anrichten muss, damit Bett-Modus ueberhaupt in Frage kommt - unabhaengig vom Vergleich zu Crystal/Anchor. Verhindert ein Bett fuer eine fast wirkungslose Explosion (z.B. Ziel steht nur am Rand des Blast-Radius) zu verbrauchen. Realer, verifizierter Mechanik-Abgleich (Meteor BedAura 'min-damage', CandyCat BedAura 'minDmg').")
+        .defaultValue(4.0)
+        .range(0.5, 10.0)
+        .sliderRange(0.5, 10.0)
+        .build()
+    );
+
     public final Setting<Boolean> preHit = sgCombat.add(new BoolSetting.Builder()
         .name("pre-hit")
         .description("Schlaegt den Gegner vor der Explosion fuer mehr Schaden. Off by default - Vanillas Angriffs-Cooldown (~0.5-0.6s je nach Waffe) ist gegen ein Anchor/Crystal-Sperrfeuer reine Zeitverschwendung; ohne diesen Extra-Hit koennen Anchor und Crystal so schnell hintereinander gezuendet werden, wie der Server sie verarbeitet.")
@@ -1721,7 +1730,7 @@ public class GodmodePvP extends Module {
         // ein simpler On/Off-Schalter, siehe Beschreibung).
         double bedEnterMargin = auraMode == 2 ? -0.3 : 0.15;
         boolean wantBed = hasBedItem && inRange && bedCandidateIndex < bedCandidates.size()
-            && bestBedDmgCache > crystalDmg + 0.15 + bedEnterMargin;
+            && bestBedDmgCache >= bedMinDamage.get() && bestBedDmgCache > crystalDmg + 0.15 + bedEnterMargin;
 
         // Wenn beide verfuegbar waeren, gewinnt die schadenstaerkere Option - Anchor braucht nur 1
         // Glowstone und ist meist die effizientere Standardwahl bei echtem Gleichstand.
