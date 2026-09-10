@@ -1994,15 +1994,24 @@ public class HumanPvP extends Module {
         if (!healPotions.get() || blocking || drinkingFireRes || healPotionCooldown > 0) return;
         if (!healingUntilFull) return;
 
+        // Blind steil nach unten werfen (fixer Pitch 80) nahm an, dass immer fester Boden in Wurfnaehe
+        // ist - siehe GodmodePvP.findNearbySplashTarget fuer die volle Begruendung. Zielt jetzt auf die
+        // naechste feste Blockflaeche in Wurfreichweite; kein Ziel gefunden -> lieber gar nicht werfen.
+        Vec3 splashTarget = findNearbySplashTarget(self);
+        if (splashTarget == null) return;
+
         FindItemResult potion = InvHelper.find(HumanPvP::isHealingSplash);
         if (!potion.found()) return;
 
+        double throwYaw = Rotations.getYaw(splashTarget);
+        double throwPitch = Rotations.getPitch(splashTarget);
+
         boolean thrown;
         if (potion.isOffhand()) {
-            thrown = rotateAndRun(self.getYRot(), 80, () -> mc.gameMode.useItem(mc.player, InteractionHand.OFF_HAND));
+            thrown = rotateAndRun(throwYaw, throwPitch, () -> mc.gameMode.useItem(mc.player, InteractionHand.OFF_HAND));
         } else {
             boolean swapped = InvUtils.swap(potion.slot(), true);
-            thrown = rotateAndRun(self.getYRot(), 80, () -> {
+            thrown = rotateAndRun(throwYaw, throwPitch, () -> {
                 mc.gameMode.useItem(mc.player, InteractionHand.MAIN_HAND);
                 if (swapped) InvUtils.swapBack();
             });
@@ -2013,6 +2022,30 @@ public class HumanPvP extends Module {
         healPotionCooldown = healCooldown.get();
         // hpAtHealWindowStart bewusst NICHT hier zuruecksetzen - healingUntilFull haelt den Heil-Modus
         // ueber mehrere Traenke hinweg aktiv, bis maxHealth-0.5 erreicht ist (siehe oben).
+    }
+
+    /** Siehe GodmodePvP.findNearbySplashTarget fuer die volle Begruendung: naechste feste Blockflaeche
+     *  in Splash-Wurfreichweite (4 Bloecke), Boden bevorzugt, sonst Wand/Decke - null, wenn nirgends
+     *  etwas in Reichweite ist. */
+    private Vec3 findNearbySplashTarget(Player self) {
+        Vec3 eye = self.getEyePosition();
+        Direction[] dirs = { Direction.DOWN, Direction.NORTH, Direction.SOUTH, Direction.EAST, Direction.WEST, Direction.UP };
+
+        Vec3 best = null;
+        double bestDist = Double.MAX_VALUE;
+        for (Direction dir : dirs) {
+            Vec3 probe = eye.add(dir.getStepX() * 4.0, dir.getStepY() * 4.0, dir.getStepZ() * 4.0);
+            ClipContext ctx = new ClipContext(eye, probe, ClipContext.Block.COLLIDER, ClipContext.Fluid.NONE, self);
+            BlockHitResult result = mc.level.clip(ctx);
+            if (result.getType() == HitResult.Type.MISS) continue;
+
+            double d = eye.distanceTo(result.getLocation());
+            if (d < bestDist) {
+                bestDist = d;
+                best = result.getLocation();
+            }
+        }
+        return best;
     }
 
     private int findMainSlotWith(net.minecraft.world.item.Item item) {

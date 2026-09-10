@@ -2227,25 +2227,67 @@ public class GodmodePvP extends Module {
         if (!healPotions.get() || blocking || drinkingFireRes || healPotionCooldown > 0) return;
         if (!healingUntilFull) return;
 
+        // Blind steil nach unten werfen (fixer Pitch 80) nahm an, dass immer fester Boden in Wurfnaehe
+        // ist - stimmt nicht mehr, sobald der Bot gerade per Explosion/Knockback in der Luft haengt,
+        // an einer Grubenkante steht oder ueber offenem Wasser/Void schwebt: der Trank faellt dann
+        // weit, bevor er ueberhaupt etwas trifft, und die Selbstheilung (Splash-Radius ~4 Bloecke um
+        // den Einschlagpunkt) verpufft komplett. Zielt jetzt stattdessen auf die naechste feste
+        // Blockflaeche in Wurfreichweite (Boden bevorzugt, sonst Wand/Decke) - garantiert einen nahen
+        // Einschlag unabhaengig von der Ausrichtung. Kein Ziel in Reichweite -> lieber gar nicht
+        // werfen (naechster Tick versucht es erneut) als den Trank zu verschwenden.
+        Vec3 splashTarget = findNearbySplashTarget(self);
+        if (splashTarget == null) return;
+
         FindItemResult potion = InvHelper.find(GodmodePvP::isHealingSplash);
         if (!potion.found()) return;
 
+        double throwYaw = Rotations.getYaw(splashTarget);
+        double throwPitch = Rotations.getPitch(splashTarget);
+
         boolean thrown;
         if (potion.isOffhand()) {
-            thrown = rotateAndRun(self.getYRot(), 80, () -> mc.gameMode.useItem(mc.player, InteractionHand.OFF_HAND));
+            thrown = rotateAndRun(throwYaw, throwPitch, () -> mc.gameMode.useItem(mc.player, InteractionHand.OFF_HAND));
         } else {
             boolean swapped = InvUtils.swap(potion.slot(), true);
-            thrown = rotateAndRun(self.getYRot(), 80, () -> {
+            thrown = rotateAndRun(throwYaw, throwPitch, () -> {
                 mc.gameMode.useItem(mc.player, InteractionHand.MAIN_HAND);
                 if (swapped) InvUtils.swapBack();
             });
             if (!thrown && swapped) InvUtils.swapBack(); // Rotations-Slot belegt - Swap sofort rueckgaengig, kein Trank geworfen
         }
-        if (!thrown) return; // naechster Tick erneut versuchen - Cooldown/Fenster/Heil-Modus bleiben unveraendert
 
         healPotionCooldown = healCooldown.get();
         // hpAtHealWindowStart bewusst NICHT hier zuruecksetzen - healingUntilFull haelt den Heil-Modus
         // ueber mehrere Traenke hinweg aktiv, bis maxHealth-0.5 erreicht ist (siehe oben).
+    }
+
+    /** Sucht die naechste feste Blockflaeche in Splash-Wurfreichweite (4 Bloecke - der wirksame Radius
+     *  einer Splash-Explosion) fuer die Selbstheilung: Boden zuerst (Normalfall), dann die 4
+     *  Himmelsrichtungen, zuletzt die Decke - deckt auch Sonderfaelle ab (an einer Wand haengend,
+     *  gerade per Explosion seitlich geschleudert, unter einem Ueberhang). Liefert den echten
+     *  Block-Raycast-Treffer der naechstgelegenen Richtung, oder null, wenn in KEINER Richtung
+     *  innerhalb der Reichweite etwas Festes liegt (z.B. mitten ueber offenem Wasser/Void/hoch in der
+     *  Luft) - dann lieber gar nicht werfen, als den Trank fuer eine Explosion zu verschwenden, deren
+     *  Radius den Werfer gar nicht mehr erreicht. */
+    private Vec3 findNearbySplashTarget(Player self) {
+        Vec3 eye = self.getEyePosition();
+        Direction[] dirs = { Direction.DOWN, Direction.NORTH, Direction.SOUTH, Direction.EAST, Direction.WEST, Direction.UP };
+
+        Vec3 best = null;
+        double bestDist = Double.MAX_VALUE;
+        for (Direction dir : dirs) {
+            Vec3 probe = eye.add(dir.getStepX() * 4.0, dir.getStepY() * 4.0, dir.getStepZ() * 4.0);
+            ClipContext ctx = new ClipContext(eye, probe, ClipContext.Block.COLLIDER, ClipContext.Fluid.NONE, self);
+            BlockHitResult result = mc.level.clip(ctx);
+            if (result.getType() == HitResult.Type.MISS) continue;
+
+            double d = eye.distanceTo(result.getLocation());
+            if (d < bestDist) {
+                bestDist = d;
+                best = result.getLocation();
+            }
+        }
+        return best;
     }
 
     /** Haelt Fire Resistance permanent aktiv, solange man sich im Nether befindet - macht Lava-Kontakt,
