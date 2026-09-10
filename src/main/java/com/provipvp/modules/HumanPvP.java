@@ -909,10 +909,13 @@ public class HumanPvP extends Module {
 
         if (currentAction.equals("-")) currentAction = auraMode == 0 ? "crystal" : "zielen";
 
-        // Cosmetic Ziel-Verfolgung: laeuft IMMER am Tick-Ende mit der niedrigsten Prioritaet - siehe
-        // GodmodePvP fuer dieselbe Begruendung (verdraengt nie eine echte Aktion, landet aber
-        // zuverlaessig als letzter Eintrag in Rotations' lastRotation-Haltefeld).
-        if (pendingFreeLook) {
+        // Cosmetic Ziel-Verfolgung: laeuft am Tick-Ende mit der niedrigsten Prioritaet - ABER NUR, wenn
+        // diesen Tick noch keine echte Aktion (Perle, Nahkampf, Anchor/Bett) die Rotation schon
+        // beansprucht hat. Siehe GodmodePvP.doTick() fuer die volle Begruendung: Rotations.rotate()
+        // haengt einen unbedingten Tail-Flush sonst als ZWEITES, separates Rotations-Paket direkt hinter
+        // das der echten Aktion (z.B. Perlwurf) - Ursache der gemeldeten "Perlen landen immer am Kopf
+        // des Gegners statt in der berechneten Flugbahn".
+        if (pendingFreeLook && rotationsThisTick == 0) {
             rotateAndRun(pendingFreeLookYaw, pendingFreeLookPitch, PRIORITY_LOOK, null);
         }
     }

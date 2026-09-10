@@ -985,12 +985,22 @@ public class GodmodePvP extends Module {
         trackPop(self);
         trackTotemEffect(target);
 
-        // Cosmetic Ziel-Verfolgung (free-look): laeuft IMMER am Tick-Ende, mit der niedrigsten
-        // Prioritaet - draengt also nie eine echte Kampfaktion aus dem primaeren Rotations-Slot, landet
-        // aber als letzter Eintrag zuverlaessig in Rotations' lastRotation-Haltefeld (siehe
-        // rotateAndRun-Dokumentation: verhindert, dass die gehaltene Blickrichtung nach einem Multi-
-        // Aktions-Tick auf eine zufaellige, frueher im Tick gefeuerte Nebenaktion "haengen bleibt").
-        if (pendingFreeLook) {
+        // Cosmetic Ziel-Verfolgung (free-look): laeuft am Tick-Ende, mit der niedrigsten Prioritaet -
+        // ABER NUR, wenn diesen Tick noch KEINE echte Aktion (Perle, Nahkampf, Crystal/Anchor/Bett) die
+        // Rotation schon beansprucht hat (rotationsThisTick > 0). Vorher lief dieser Tail-Flush IMMER,
+        // unabhaengig davon - Rotations.rotate() haengt ihn dann als ZWEITE, separate
+        // ServerboundMovePlayerPacket.Rot-Nachricht direkt HINTER die der echten Aktion (siehe
+        // Rotations.onSendMovementPacketsPost: die Callback-Aktion feuert mit der ERSTEN/hoechst-
+        // priorisierten Rotation, aber danach schickt die for-Schleife trotzdem noch eine zweite
+        // Rotation fuer jeden weiteren Eintrag raus). Das war die Ursache der gemeldeten "Perlen landen
+        // immer am Kopf des Gegners statt in der berechneten Flugbahn": das kontinuierliche Ziel-Tracking
+        // (trackTarget, aktiv sobald dist > 3.6 - also in praktisch jedem Perlen-Gapclose-Fall) setzte
+        // pendingFreeLook auf die direkte Blickrichtung zum Ziel, und dieser Tail-Flush schickte sie als
+        // zusaetzliches Rotations-Paket direkt nach dem Perlwurf-Paket raus. Wenn diesen Tick schon eine
+        // echte Aktion lief, ist der Tail-Flush ohnehin ueberfluessig (naechster Tick berechnet
+        // pendingFreeLook frisch neu) - jetzt wird er dann komplett uebersprungen statt nur mit
+        // niedrigerer Prioritaet trotzdem ein zweites Rotations-Paket zu senden.
+        if (pendingFreeLook && rotationsThisTick == 0) {
             rotateAndRun(pendingFreeLookYaw, pendingFreeLookPitch, PRIORITY_LOOK, null);
         }
     }
