@@ -722,7 +722,7 @@ public class GodmodePvP extends Module {
     private int dtapCooldown;
 
     public GodmodePvP() {
-        super(Categories.Combat, "godmode-pvp", "ProviPvP v4: Kampf-KI mit eigenem Blitz-Anchor (1 Glowstone), Verfolgung ohne Limit. Befehl: .pvp");
+        super(com.provipvp.ProviPvPAddon.CATEGORY, "godmode-pvp", "ProviPvP v4: Kampf-KI mit eigenem Blitz-Anchor (1 Glowstone), Verfolgung ohne Limit. Befehl: .pvp");
     }
 
     @Override
@@ -1944,13 +1944,21 @@ public class GodmodePvP extends Module {
 
                     Direction dir = findFreeBedDirection(foot);
                     if (dir == null) continue;
+                    BlockPos head = foot.relative(dir);
 
                     Vec3 pos = Vec3.atCenterOf(foot);
                     if (hitsFriendBed(pos)) continue;
 
-                    AABB cellBox = new AABB(foot);
-                    if (target.getBoundingBox().intersects(cellBox)) continue;
-                    if (mc.player.getBoundingBox().intersects(cellBox)) continue;
+                    AABB footBox = new AABB(foot);
+                    AABB headBox = new AABB(head);
+                    // Beide Zellen pruefen (nicht nur das Fussteil) - das Kopfteil liegt oft direkt dort,
+                    // wo Ziel oder wir selbst gerade stehen (Nahkampf-Distanz), und ein durch eine Entity
+                    // blockiertes Kopfteil laesst den Server die Platzierung ablehnen, waehrend der Client
+                    // das Bett trotzdem schon als verbraucht behandelt hat (Referenz: BlackOut BedAura+
+                    // prueft explizit `pos.offset(dir)` zusaetzlich zum Fussteil - Ursache des gemeldeten
+                    // "Betten droppen dauernd").
+                    if (target.getBoundingBox().intersects(footBox) || target.getBoundingBox().intersects(headBox)) continue;
+                    if (mc.player.getBoundingBox().intersects(footBox) || mc.player.getBoundingBox().intersects(headBox)) continue;
 
                     double selfDmg = DamageUtils.bedDamage(mc.player, pos);
                     if (selfDmg > maxSelfDamage.get()) continue;
@@ -1975,10 +1983,16 @@ public class GodmodePvP extends Module {
         for (int i : order) bedCandidates.add(found.get(i));
     }
 
-    /** Bett braucht keine feste Unterlage - nur eine ersetzbare (Luft-)Zelle, optional abseits von Lava. */
+    /** Bett braucht keine feste Unterlage (Java Edition erlaubt frei schwebende Betten) - aber die
+     *  Platzierung selbst laeuft ueber einen rechtsklickbaren Nachbarblock (BlockUtils.place() faellt
+     *  sonst auf einen "klickt sich selbst an"-Nottrick zurueck, der bei Betten am Server unzuverlaessig
+     *  angenommen/abgelehnt wird - genau das liess das Item ohne sichtbaren Blockaufbau aus dem Inventar
+     *  verschwinden bzw. droppen). Deshalb: mindestens EIN echter, klickbarer Nachbarblock muss existieren.
+     */
     private boolean validBedCell(BlockPos cell) {
         if (mc.level == null) return false;
         if (!mc.level.getBlockState(cell).isAir()) return false;
+        if (BlockUtils.getPlaceSide(cell) == null) return false;
         if (!hasRaycastLineOfSight(Vec3.atCenterOf(cell))) return false;
         return !(avoidLava.get() && isNearLava(cell));
     }

@@ -546,7 +546,7 @@ public class HumanPvP extends Module {
     private int fireResStartTick = -999;
 
     public HumanPvP() {
-        super(Categories.Combat, "human-pvp", "ProviPvP V2: menschlich wirkender Kampf-Bot (Reaktionszeit, sichtbare Rotation, Klick-Jitter). Kein Unerkennbarkeits-Versprechen. Befehl: .hpvp");
+        super(com.provipvp.ProviPvPAddon.CATEGORY, "human-pvp", "ProviPvP V2: menschlich wirkender Kampf-Bot (Reaktionszeit, sichtbare Rotation, Klick-Jitter). Kein Unerkennbarkeits-Versprechen. Befehl: .hpvp");
     }
 
     @Override
@@ -1515,10 +1515,15 @@ public class HumanPvP extends Module {
 
                     Direction dir = findFreeBedDirection(foot);
                     if (dir == null) continue;
+                    BlockPos head = foot.relative(dir);
 
                     Vec3 pos = Vec3.atCenterOf(foot);
-                    if (target.getBoundingBox().intersects(new net.minecraft.world.phys.AABB(foot))) continue;
-                    if (mc.player.getBoundingBox().intersects(new net.minecraft.world.phys.AABB(foot))) continue;
+                    net.minecraft.world.phys.AABB footBox = new net.minecraft.world.phys.AABB(foot);
+                    net.minecraft.world.phys.AABB headBox = new net.minecraft.world.phys.AABB(head);
+                    // Beide Zellen pruefen (nicht nur das Fussteil) - siehe GodmodePvP.calcBestBed fuer
+                    // die volle Begruendung (Referenz: BlackOut BedAura+ prueft `pos.offset(dir)` mit).
+                    if (target.getBoundingBox().intersects(footBox) || target.getBoundingBox().intersects(headBox)) continue;
+                    if (mc.player.getBoundingBox().intersects(footBox) || mc.player.getBoundingBox().intersects(headBox)) continue;
 
                     double selfDmg = DamageUtils.bedDamage(mc.player, pos);
                     if (selfDmg > maxSelfDamage.get()) continue;
@@ -1543,10 +1548,14 @@ public class HumanPvP extends Module {
         for (int i : order) bedCandidates.add(found.get(i));
     }
 
-    /** Bett braucht keine feste Unterlage - nur eine ersetzbare (Luft-)Zelle, optional abseits von Lava. */
+    /** Bett braucht keine feste Unterlage - aber die Platzierung selbst laeuft ueber einen
+     *  rechtsklickbaren Nachbarblock (siehe GodmodePvP.validBedCell fuer die volle Begruendung -
+     *  ohne echten Nachbarn faellt BlockUtils.place() auf einen unzuverlaessigen Fallback zurueck,
+     *  der Betten aus dem Inventar verschwinden/droppen liess statt sie sichtbar zu platzieren). */
     private boolean validBedCell(BlockPos cell) {
         if (mc.level == null) return false;
         if (!mc.level.getBlockState(cell).isAir()) return false;
+        if (BlockUtils.getPlaceSide(cell) == null) return false;
         if (!hasRaycastLineOfSight(Vec3.atCenterOf(cell))) return false;
         return !(avoidLava.get() && isNearLava(cell));
     }
