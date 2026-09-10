@@ -1744,12 +1744,19 @@ public class GodmodePvP extends Module {
         }
     }
 
-    /** Nur schlagen, wenn wir aktiv im Anchor- oder Crystal-Angriff auf dieses Ziel stecken - kein Hieb ins Blaue.
-     *  Absichtlich NICHT an den genauen Anchor-Stage/Schadens-Zeitpunkt gekoppelt: sonst blockiert eine haengende
-     *  Anchor-Platzierung (z.B. Ziel gewebt + gleiche Hoehe + Kandidaten unerreichbar) jeden Nahkampf komplett,
-     *  obwohl der Gegner voll treffbar daeme. */
+    /** Nur schlagen, wenn wir aktiv im Anchor-, Bett- oder Crystal-Angriff auf dieses Ziel stecken - kein
+     *  Hieb ins Blaue. Absichtlich NICHT an den genauen Anchor-/Bett-Stage (Platzierung/Ladung/Zuendung im
+     *  Detail) gekoppelt - das waere zu zerbrechlich. Aber "gerade in diesem Aura-Modus" ALLEIN reicht
+     *  ebenfalls nicht: Anchor/Bett blieb dann auch OHNE JEDEN gueltigen Kandidaten (z.B. Ziel gerade
+     *  ueber Wasser/Void gewebt, alle Kandidaten durch Entities/Lava/fehlende Sicht ausgeschlossen)
+     *  fuer explosionImminent()==true haengen, was melee-fallback (erfordert !explosionImminent)
+     *  komplett und dauerhaft blockierte, obwohl der Gegner voll treffbar direkt daneben stand - genau
+     *  der Bug, den der bestCrystalDmgCache-Check unten fuer den Crystal-Fall schon damals loeste, hier
+     *  aber nie mit ausgerollt wurde. bestAnchorDmgCache/bestBedDmgCache > 0 heisst: der letzte Scan
+     *  (selectAura(), laeuft davor im selben Tick) hat wirklich einen machbaren Kandidaten gefunden. */
     private boolean explosionImminent(LivingEntity target) {
-        if (auraMode == 1 || auraMode == 2) return true;
+        if (auraMode == 1) return bestAnchorDmgCache > 0;
+        if (auraMode == 2) return bestBedDmgCache > 0;
         if (auraMode == 0) {
             // ca.isActive() allein reicht nicht - das Modul kann eingeschaltet sein, aber ohne Obsidian fuer den
             // Support-Unterbau (oder ohne jeden gueltigen Platzierungs-Kandidaten) faktisch nie explodieren.
@@ -3144,6 +3151,13 @@ public class GodmodePvP extends Module {
                 yaw = Rotations.getYaw(aimPoint);
                 pitch = PvpMath.solvePearlPitch(from, yaw, aimPoint, arrivalTicks);
             }
+            // Hinweis nach Live-Untersuchung (yaw/pitch/Rotation bei Wurf-Ausfuehrung ueber mehrere
+            // Wuerfe hinweg geprueft - Berechnung und tatsaechlich gesetzte Rotation stimmten JEDES Mal
+            // exakt ueberein, auch beim allerersten Wurf einer frischen Session): Minecraft wirft
+            // EnderPearlItem serverseitig mit shootFromRotation(..., inaccuracy=1.0F) - genau wie
+            // Schneebaelle/Eier/Traenke hat JEDER Perlwurf eine vom Server angewandte Zufallsstreuung,
+            // unabhaengig vom Client-Aim. Ein gelegentlich daneben landender Wurf trotz korrekt
+            // berechnetem yaw/pitch ist dieser eingebaute Vanilla-Streufaktor, kein Bug hier.
             // Ziel physisch ausserhalb der Perlen-Reichweite (z.B. gerade sehr hoch explosionsgeschleudert,
             // steiler Wurf noetig als selbst ein Pitch von -90 hergibt) - lieber die Perle sparen als sie
             // sicher danebenzuwerfen. Naechster Tick probiert es mit der dann aktuellen Position erneut.
