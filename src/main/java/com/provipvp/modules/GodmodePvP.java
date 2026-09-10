@@ -1209,9 +1209,14 @@ public class GodmodePvP extends Module {
             return true;
         }
 
-        // Rueckzugs-Schwelle: Totems knapp UND keine Explosiv-Ressourcen mehr -> Gefecht abbrechen statt
-        // aussichtslos im reinen Nahkampf weiterzumachen.
-        if (retreatThreshold.get() && lowOnTotems && warnedOutOfCrystals && warnedOutOfAnchorSupply) {
+        // Rueckzugs-Schwelle: Totems knapp UND keine Explosiv-Ressourcen mehr (Crystal, Anchor UND Bett)
+        // -> Gefecht abbrechen statt aussichtslos im reinen Nahkampf weiterzumachen. Bett muss hier
+        // eigens gegengeprueft werden - sonst haelt sich der Bot faelschlich fuer "ohne jede Explosiv-
+        // Option", obwohl mit aktiviertem use-beds (z.B. im Nether ohne Anchor-Support) noch ein
+        // voll funktionsfaehiger dritter Explosionsweg zur Verfuegung steht, und bricht das Gefecht
+        // dauerhaft ab statt ihn zu nutzen.
+        boolean hasBedSupply = useBeds.get() && totalItem(GodmodePvP::isBed) > 0;
+        if (retreatThreshold.get() && lowOnTotems && warnedOutOfCrystals && warnedOutOfAnchorSupply && !hasBedSupply) {
             cancelFollow();
             if (dist <= 10.0 && tickCounter - lastPearlTick > delay(30)
                 && InvHelper.has(Items.ENDER_PEARL)) {
