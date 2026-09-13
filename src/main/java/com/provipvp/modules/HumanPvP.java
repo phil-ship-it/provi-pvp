@@ -190,6 +190,15 @@ public class HumanPvP extends Module {
         .build()
     );
 
+    public final Setting<Double> bedMaxSelfDamage = sgCombat.add(new DoubleSetting.Builder()
+        .name("bed-max-self-damage")
+        .description("Eigener Eigenschaden-Deckel NUR fuer Bett-Explosionen - siehe GodmodePvP fuer die volle Begruendung (eine Bett-Explosion macht im Nahbereich ein Vielfaches eines Crystals, ein auf Crystal getrimmter Deckel legt Bed Aura sonst komplett stumm). Selbstmord-Schutz greift zusaetzlich immer.")
+        .defaultValue(16.0)
+        .range(2.0, 36.0)
+        .sliderRange(2.0, 36.0)
+        .build()
+    );
+
     public final Setting<Integer> minSupportDelay = sgCombat.add(new IntSetting.Builder()
         .name("min-support-delay")
         .description("Mindest-Tickabstand zwischen Obsidian-Unterbau und dem folgenden Crystal-Platzieren (CrystalAuras 'support-delay'). Beide Aktionen nutzen Minecrafts eigenes sequenznummer-basiertes Block-Vorhersage-System (seit 1.19) - schickt man beide zu dicht hintereinander raus, bevor die erste Sequenz vom Server bestaetigt ist, kann die Vorhersage durcheinanderkommen. Auf Servern mit spuerbarer Latenz oder Versions-Uebersetzung (z.B. ViaVersion) braucht es mehr Puffer als den Meteor-Standard.")
@@ -542,6 +551,10 @@ public class HumanPvP extends Module {
     private int bedCandidateIndex;
     private BlockPos bedCalcOrigin;
     private double bestBedDmgCache;
+    /** Roher (NICHT totem-abgeschlagener) Bett-Schaden - siehe GodmodePvP fuer die volle Begruendung:
+     *  die absolute bed-min-damage-Schwelle muss gegen den Rohwert pruefen, sonst legt der
+     *  0.3-Totem-Abschlag Bed Aura gegen jeden totem-tragenden Gegner praktisch komplett still. */
+    private double bestBedRawDmgCache;
 
     private float hpAtHealWindowStart = -999;
     private int healWindowStartTick = -999;
@@ -599,6 +612,7 @@ public class HumanPvP extends Module {
         bedCandidateIndex = 0;
         bedCalcOrigin = null;
         bestBedDmgCache = 0;
+        bestBedRawDmgCache = 0;
         hpAtHealWindowStart = -999;
         healWindowStartTick = -999;
         healPotionCooldown = 0;
@@ -1295,9 +1309,11 @@ public class HumanPvP extends Module {
         }
 
         bestBedDmgCache = 0;
+        bestBedRawDmgCache = 0;
         if (hasBedItem && bedCandidateIndex < bedCandidates.size()) {
             BedSpot best = bedCandidates.get(bedCandidateIndex);
-            bestBedDmgCache = totemAdjustedDamage(target, DamageUtils.bedDamage(target, Vec3.atCenterOf(best.pos())));
+            bestBedRawDmgCache = DamageUtils.bedDamage(target, Vec3.atCenterOf(best.pos()));
+            bestBedDmgCache = totemAdjustedDamage(target, bestBedRawDmgCache);
         }
 
         if (ca == null) return;
@@ -1337,7 +1353,7 @@ public class HumanPvP extends Module {
         }
 
         boolean wantBed = hasBedItem && inRange && bedCandidateIndex < bedCandidates.size()
-            && bestBedDmgCache >= bedMinDamage.get() && bestBedDmgCache + bedStickyBonus > crystalDmg + 0.3 + noise;
+            && bestBedRawDmgCache >= bedMinDamage.get() && bestBedDmgCache + bedStickyBonus > crystalDmg + 0.3 + noise;
 
         // Bei beiden verfuegbar gewinnt die schadenstaerkere Option.
         if (wantAnchor && wantBed) {
@@ -1506,8 +1522,13 @@ public class HumanPvP extends Module {
         return count;
     }
 
-    /** Alle gueltigen Bett-Plaetze um das Ziel, sortiert nach Schaden (absteigend). Ein Bett braucht anders
-     *  als Crystal/Anchor KEINE feste Unterlage - wirkt aber nur ausserhalb der Overworld (Nether/End). */
+    /** Reichweite, in der eine Bett-Platzierung real ausgefuehrt werden kann - siehe GodmodePvP. */
+    private static final double BED_PLACE_REACH = 4.2;
+
+    /** Alle gueltigen Bett-Plaetze um das Ziel, sortiert nach NETTO-Vorteil (Zielschaden minus
+     *  Eigenschaden). Suchradius horizontal +-2 und Reichweiten-Filter - siehe GodmodePvP.calcBestBed
+     *  fuer die volle, live gemessene Begruendung (mit +-1 lagen im Nahkampf ALLE Kandidatenzellen auch
+     *  im eigenen Explosionsradius, der Eigenschaden-Deckel verwarf dadurch restlos alle). */
     private void calcBestBed(LivingEntity target, Vec3 center) {
         bedCandidates.clear();
         bedCandidateIndex = 0;
@@ -1517,19 +1538,21 @@ public class HumanPvP extends Module {
         int bz = (int) Math.floor(center.z);
 
         List<BedSpot> found = new ArrayList<>();
-        List<Double> dmgs = new ArrayList<>();
+        List<Double> scores = new ArrayList<>();
 
-        for (int dx = -1; dx <= 1; dx++) {
-            for (int dz = -1; dz <= 1; dz++) {
-                for (int dy = 0; dy <= 1; dy++) {
+        for (int dx = -2; dx <= 2; dx++) {
+            for (int dz = -2; dz <= 2; dz++) {
+                for (int dy = -1; dy <= 1; dy++) {
                     BlockPos foot = new BlockPos(bx + dx, by + dy, bz + dz);
                     if (!validBedCell(foot)) continue;
+
+                    Vec3 pos = Vec3.atCenterOf(foot);
+                    if (mc.player.distanceToSqr(pos) > BED_PLACE_REACH * BED_PLACE_REACH) continue;
 
                     Direction dir = findFreeBedDirection(foot);
                     if (dir == null) continue;
                     BlockPos head = foot.relative(dir);
 
-                    Vec3 pos = Vec3.atCenterOf(foot);
                     net.minecraft.world.phys.AABB footBox = new net.minecraft.world.phys.AABB(foot);
                     net.minecraft.world.phys.AABB headBox = new net.minecraft.world.phys.AABB(head);
                     // Beide Zellen pruefen (nicht nur das Fussteil) - siehe GodmodePvP.calcBestBed fuer
@@ -1538,13 +1561,13 @@ public class HumanPvP extends Module {
                     if (mc.player.getBoundingBox().intersects(footBox) || mc.player.getBoundingBox().intersects(headBox)) continue;
 
                     double selfDmg = DamageUtils.bedDamage(mc.player, pos);
-                    if (selfDmg > maxSelfDamage.get()) continue;
+                    if (!bedSelfDamageAcceptable(selfDmg)) continue;
 
                     double dmg = DamageUtils.bedDamage(target, pos);
                     if (dmg <= 0) continue;
 
                     found.add(new BedSpot(foot, dir));
-                    dmgs.add(dmg);
+                    scores.add(dmg - selfDmg);
                 }
             }
         }
@@ -1554,7 +1577,7 @@ public class HumanPvP extends Module {
         List<Integer> order = new ArrayList<>();
         for (int i = 0; i < found.size(); i++) order.add(i);
         order.sort((a, b) -> {
-            int cmp = Double.compare(dmgs.get(b), dmgs.get(a));
+            int cmp = Double.compare(scores.get(b), scores.get(a));
             return cmp != 0 ? cmp : Integer.compare(found.get(a).pos().hashCode(), found.get(b).pos().hashCode());
         });
         for (int i : order) bedCandidates.add(found.get(i));
@@ -1578,6 +1601,13 @@ public class HumanPvP extends Module {
             if (validBedCell(foot.relative(dir))) return dir;
         }
         return null;
+    }
+
+    /** Eigenschaden-Freigabe fuer Bett-Explosionen inkl. Selbstmord-Schutz - siehe GodmodePvP. */
+    private boolean bedSelfDamageAcceptable(double selfDmg) {
+        if (selfDmg > bedMaxSelfDamage.get()) return false;
+        double effectiveHp = mc.player.getHealth() + mc.player.getAbsorptionAmount();
+        return selfDmg < effectiveHp - 1.0;
     }
 
     private static boolean isBed(ItemStack stack) {

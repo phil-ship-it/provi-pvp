@@ -199,6 +199,15 @@ public class GodmodePvP extends Module {
         .build()
     );
 
+    public final Setting<Double> bedMaxSelfDamage = sgCombat.add(new DoubleSetting.Builder()
+        .name("bed-max-self-damage")
+        .description("Eigener Eigenschaden-Deckel NUR fuer Bett-Explosionen. Muss getrennt vom allgemeinen max-self-damage einstellbar sein (Meteors eigenes BedAura-Modul hat aus demselben Grund einen eigenen Wert): eine Bett-Explosion macht im Nahbereich ein Vielfaches eines Crystals (live gemessen ~50 Rohschaden), also verwirft ein auf Crystal getrimmter 12er-Deckel restlos JEDEN erreichbaren Bett-Platz - Bed Aura feuert dann faktisch nie. Bett-PvP ist bewusst ein Trade: man nimmt Schaden in Kauf und faengt ihn mit Totem + Heiltrank ab. Zusaetzlich greift immer ein harter Selbstmord-Schutz (nie ein Platz, der die eigenen aktuellen HP toeten wuerde).")
+        .defaultValue(16.0)
+        .range(2.0, 36.0)
+        .sliderRange(2.0, 36.0)
+        .build()
+    );
+
     public final Setting<Boolean> preHit = sgCombat.add(new BoolSetting.Builder()
         .name("pre-hit")
         .description("Schlaegt den Gegner vor der Explosion fuer mehr Schaden. Off by default - Vanillas Angriffs-Cooldown (~0.5-0.6s je nach Waffe) ist gegen ein Anchor/Crystal-Sperrfeuer reine Zeitverschwendung; ohne diesen Extra-Hit koennen Anchor und Crystal so schnell hintereinander gezuendet werden, wie der Server sie verarbeitet.")
@@ -710,6 +719,14 @@ public class GodmodePvP extends Module {
     private final java.util.List<BedSpot> bedCandidates = new java.util.ArrayList<>();
     private int bedCandidateIndex;
     private double bestBedDmgCache;
+    /** Roher (NICHT totem-abgeschlagener) Bett-Schaden des aktuell besten Kandidaten. Die absolute
+     *  bed-min-damage-Schwelle muss gegen diesen Wert pruefen, nicht gegen den totem-gewichteten:
+     *  totemAdjustedDamage() ist eine reine VERGLEICHS-Gewichtung zwischen Optionen (siehe dort), kein
+     *  Mass fuer "lohnt sich diese Explosion ueberhaupt". Gegen den 0.3-Abschlag geprueft war die
+     *  Schwelle gegen JEDEN totem-tragenden Gegner (also praktisch jeden ernsthaften PvP-Gegner)
+     *  faktisch unerreichbar und legte Bed Aura fast komplett still (live gemessen: 2-3 Betten/Minute
+     *  statt durchgehender Platzierung, waehrend Crystal im selben Setup 192/Minute schaffte). */
+    private double bestBedRawDmgCache;
     private int bedPlaceFails;
     private int bedUnreachableTicks;
     private BlockPos bedCalcOrigin;
@@ -1377,6 +1394,26 @@ public class GodmodePvP extends Module {
                 auraMode = 0;
             }
 
+            // Bett-Abstandhalten: eine Bett-Explosion macht im Nahbereich ein Vielfaches eines Crystals
+            // (live ~50 Rohschaden). Klebt der Bot im Nahkampf am Gegner (1-3 Bloecke), liegt JEDE
+            // erreichbare Platzierung auch im eigenen Explosionsradius - calcBestBed findet dann
+            // garantiert null Kandidaten (live gemessen: cands=0 bei dist<=4.3, Treffer nur bei
+            // dist 4.6-5.4). Sind Betten die EINZIGE Explosiv-Option, wird deshalb BARITONES
+            // Verfolgungs-Radius aufgemacht statt gegen ihn anzukaempfen: ein reiner Rueckwaerts-
+            // Schritt (explosionRetreatUntil) hat den Bot stattdessen komplett eingefroren - er
+            // cancelt Baritones Follow, der eigene Rueckwaerts-Tastendruck feuert aber nur INNERHALB
+            // attack-range, also stand der Bot zwischen attack-range und Bett-Reichweite bewegungslos
+            // (live reproduziert: dist blieb sekundenlang exakt auf 3.66 stehen).
+            boolean bedIsOnlyExplosive = useBeds.get() && totalItem(GodmodePvP::isBed) > 0
+                && totalItem(Items.END_CRYSTAL) == 0
+                && !(totalItem(Items.RESPAWN_ANCHOR) > 0 && totalItem(Items.GLOWSTONE) > 0);
+            int wantFollowRadius = bedIsOnlyExplosive ? BED_FOLLOW_RADIUS : DEFAULT_FOLLOW_RADIUS;
+            var baritoneSettings = BaritoneAPI.getSettings();
+            if (baritoneSettings.followRadius.value != wantFollowRadius) {
+                baritoneSettings.followRadius.value = wantFollowRadius;
+            }
+            if (bedIsOnlyExplosive && dist < BED_STANDOFF_DIST) currentAction = "bett-abstand";
+
             if (auraMode == 1) {
                 // 3s ohne neue Platzierung -> nicht ewig auf unerreichbaren/erschoepften Kandidaten
                 // haengen bleiben, Crystal uebernimmt
@@ -1644,6 +1681,7 @@ public class GodmodePvP extends Module {
             bestCrystalDmgCache = 0;
             bestAnchorDmgCache = 0;
             bestBedDmgCache = 0;
+            bestBedRawDmgCache = 0;
             return;
         }
 
@@ -1684,9 +1722,11 @@ public class GodmodePvP extends Module {
         }
 
         bestBedDmgCache = 0;
+        bestBedRawDmgCache = 0;
         if (hasBedItem && bedCandidateIndex < bedCandidates.size()) {
             BedSpot best = bedCandidates.get(bedCandidateIndex);
-            bestBedDmgCache = totemAdjustedDamage(target, DamageUtils.bedDamage(target, Vec3.atCenterOf(best.pos())));
+            bestBedRawDmgCache = DamageUtils.bedDamage(target, Vec3.atCenterOf(best.pos()));
+            bestBedDmgCache = totemAdjustedDamage(target, bestBedRawDmgCache);
         }
 
         if (ca == null) return;
@@ -1730,7 +1770,7 @@ public class GodmodePvP extends Module {
         // ein simpler On/Off-Schalter, siehe Beschreibung).
         double bedEnterMargin = auraMode == 2 ? -0.3 : 0.15;
         boolean wantBed = hasBedItem && inRange && bedCandidateIndex < bedCandidates.size()
-            && bestBedDmgCache >= bedMinDamage.get() && bestBedDmgCache > crystalDmg + 0.15 + bedEnterMargin;
+            && bestBedRawDmgCache >= bedMinDamage.get() && bestBedDmgCache > crystalDmg + 0.15 + bedEnterMargin;
 
         // Wenn beide verfuegbar waeren, gewinnt die schadenstaerkere Option - Anchor braucht nur 1
         // Glowstone und ist meist die effizientere Standardwahl bei echtem Gleichstand.
@@ -1942,6 +1982,16 @@ public class GodmodePvP extends Module {
 
     private static final Direction[] BED_DIRECTIONS = { Direction.NORTH, Direction.SOUTH, Direction.EAST, Direction.WEST };
 
+    /** Zieldistanz, ab der eine Bett-Platzierung ueberhaupt self-safe moeglich ist (live ermittelt:
+     *  unter ~4.5 Bloecken liegt jede erreichbare Zelle im eigenen Explosionsradius). */
+    private static final double BED_STANDOFF_DIST = 4.6;
+
+    /** Baritone-Verfolgungsradius im Normalfall (Crystal/Anchor/Nahkampf) bzw. wenn Betten die einzige
+     *  Explosiv-Option sind - im Bett-Fall bewusst groesser, damit der Bot ueberhaupt auf einer Distanz
+     *  stehen bleibt, auf der eine self-safe Bett-Platzierung existiert (siehe handleOffense). */
+    private static final int DEFAULT_FOLLOW_RADIUS = 3;
+    private static final int BED_FOLLOW_RADIUS = 5;
+
     /** Toleranz fuer den LoS-Block-Raycast (hasRaycastLineOfSight): ein Treffer NAEHER als dieser Abstand
      *  zum eigentlichen Zielpunkt zaehlt noch als "erreicht", nicht als blockiert. Kein exakter MISS
      *  ist der Normalfall an einer Kandidaten-Zelle, die direkt an einer Wand/Kante liegt (Slab-Stufe,
@@ -1952,10 +2002,25 @@ public class GodmodePvP extends Module {
      */
     private static final double LOS_RAYCAST_TOLERANCE = 0.6;
 
-    /** Alle gueltigen Bett-Plaetze um das Ziel, sortiert nach Schaden (absteigend). Ein Bett braucht anders
-     *  als Crystal/Anchor KEINE feste Unterlage (nur zwei freie, ersetzbare Bloecke: Fuss- + Kopfteil in
-     *  eine der vier Himmelsrichtungen) - wirkt aber nur ausserhalb der Overworld (Nether/End); das kann der
-     *  Client nicht vorab pruefen, das entscheidet allein der Server. */
+    /** Reichweite, in der eine Bett-Platzierung real ausgefuehrt werden kann (identisch zur Pruefung in
+     *  tryPlaceBed) - Kandidaten ausserhalb davon gehoeren gar nicht erst in die Liste, sonst blockieren
+     *  sie den Index und laufen erst nach 8 Warte-Ticks pro Stueck durch. */
+    private static final double BED_PLACE_REACH = 4.2;
+
+    /** Alle gueltigen Bett-Plaetze um das Ziel, sortiert nach NETTO-Vorteil (Zielschaden minus
+     *  Eigenschaden, absteigend). Ein Bett braucht anders als Crystal/Anchor KEINE feste Unterlage
+     *  (nur zwei freie, ersetzbare Bloecke: Fuss- + Kopfteil in eine der vier Himmelsrichtungen) -
+     *  wirkt aber nur ausserhalb der Overworld (Nether/End); das kann der Client nicht vorab pruefen.
+     *
+     *  Suchradius horizontal +-2 statt +-1 (Live-Messung): eine Bett-Explosion macht im Nahbereich
+     *  ~50 Schaden, also liegt bei einem +-1-Wuerfel um ein Ziel, das im Nahkampf 2-4 Bloecke vor
+     *  einem steht, JEDE Kandidatenzelle auch fuer einen selbst im vollen Explosionsradius - der
+     *  Eigenschaden-Deckel (max-self-damage) hat dann restlos alle Kandidaten verworfen (live
+     *  gemessen: cands=0 bei dist 2.6-4.3, Bed Aura feuerte nur in den seltenen Momenten mit
+     *  dist > 4.6). Mit +-2 existieren Zellen auf der ABGEWANDTEN Seite des Ziels: volles Schadens-
+     *  potential am Gegner, deutlich weniger am eigenen Koerper. Die Sortierung nach Netto-Vorteil
+     *  waehlt genau diese Zellen zuerst, statt nur nach rohem Zielschaden zu gehen (der ist am
+     *  gefaehrlichsten Platz - direkt zwischen beiden - naturgemaess am hoechsten). */
     private void calcBestBed(LivingEntity target, Vec3 center) {
         bedCandidates.clear();
         bedCandidateIndex = 0;
@@ -1965,19 +2030,22 @@ public class GodmodePvP extends Module {
         int bz = (int) Math.floor(center.z);
 
         java.util.List<BedSpot> found = new java.util.ArrayList<>();
-        java.util.List<Double> dmgs = new java.util.ArrayList<>();
+        java.util.List<Double> scores = new java.util.ArrayList<>();
 
-        for (int dx = -1; dx <= 1; dx++) {
-            for (int dz = -1; dz <= 1; dz++) {
+        for (int dx = -2; dx <= 2; dx++) {
+            for (int dz = -2; dz <= 2; dz++) {
                 for (int dy = -1; dy <= 1; dy++) {
                     BlockPos foot = new BlockPos(bx + dx, by + dy, bz + dz);
                     if (!validBedCell(foot)) continue;
+
+                    Vec3 pos = Vec3.atCenterOf(foot);
+                    // Nur Zellen, die wir real anklicken koennen - siehe BED_PLACE_REACH.
+                    if (mc.player.distanceToSqr(pos) > BED_PLACE_REACH * BED_PLACE_REACH) continue;
 
                     Direction dir = findFreeBedDirection(foot);
                     if (dir == null) continue;
                     BlockPos head = foot.relative(dir);
 
-                    Vec3 pos = Vec3.atCenterOf(foot);
                     if (hitsFriendBed(pos)) continue;
 
                     AABB footBox = new AABB(foot);
@@ -1992,13 +2060,13 @@ public class GodmodePvP extends Module {
                     if (mc.player.getBoundingBox().intersects(footBox) || mc.player.getBoundingBox().intersects(headBox)) continue;
 
                     double selfDmg = DamageUtils.bedDamage(mc.player, pos);
-                    if (selfDmg > maxSelfDamage.get()) continue;
+                    if (!bedSelfDamageAcceptable(selfDmg)) continue;
 
                     double dmg = DamageUtils.bedDamage(target, pos);
                     if (dmg <= 0) continue;
 
                     found.add(new BedSpot(foot, dir));
-                    dmgs.add(dmg);
+                    scores.add(dmg - selfDmg);
                 }
             }
         }
@@ -2008,7 +2076,7 @@ public class GodmodePvP extends Module {
         java.util.List<Integer> order = new java.util.ArrayList<>();
         for (int i = 0; i < found.size(); i++) order.add(i);
         order.sort((a, b) -> {
-            int cmp = Double.compare(dmgs.get(b), dmgs.get(a));
+            int cmp = Double.compare(scores.get(b), scores.get(a));
             return cmp != 0 ? cmp : Integer.compare(found.get(a).pos().hashCode(), found.get(b).pos().hashCode());
         });
         for (int i : order) bedCandidates.add(found.get(i));
@@ -2146,7 +2214,7 @@ public class GodmodePvP extends Module {
                     if (Math.sqrt(self.distanceToSqr(posCenter)) > 4.2) continue;
 
                     double selfDmg = DamageUtils.bedDamage(mc.player, posCenter);
-                    if (selfDmg > maxSelfDamage.get()) continue;
+                    if (!bedSelfDamageAcceptable(selfDmg)) continue;
 
                     if (interactBedAt(pos)) bedMaintCooldown = delay(3);
                     return;
@@ -2163,6 +2231,17 @@ public class GodmodePvP extends Module {
         return rotateAndRun(Rotations.getYaw(center), Rotations.getPitch(center), PRIORITY_BED, () ->
             BlockUtils.interact(new BlockHitResult(center, BlockUtils.getDirection(pos), pos, true), InteractionHand.MAIN_HAND, true)
         );
+    }
+
+    /** Eigenschaden-Freigabe fuer Bett-Explosionen: eigener (hoeherer) Deckel als Crystal/Anchor, plus
+     *  harter Selbstmord-Schutz. Bett-PvP ist bewusst ein Trade - der Bot nimmt Schaden in Kauf und
+     *  faengt ihn mit Totem/Heiltrank ab - aber eine Zuendung, die die eigenen AKTUELLEN HP (inkl.
+     *  Absorption) toeten wuerde, ist nie ein guter Trade und wird unabhaengig vom eingestellten
+     *  Deckel verworfen (entspricht Meteors BedAura 'anti-suicide'). */
+    private boolean bedSelfDamageAcceptable(double selfDmg) {
+        if (selfDmg > bedMaxSelfDamage.get()) return false;
+        double effectiveHp = mc.player.getHealth() + mc.player.getAbsorptionAmount();
+        return selfDmg < effectiveHp - 1.0;
     }
 
     private static boolean isBed(ItemStack stack) {
@@ -3459,7 +3538,48 @@ public class GodmodePvP extends Module {
         InvUtils.move().from(src).to(dst);
     }
 
+    /** Raeumt einen Hotbar-Slot frei, indem ein dort liegender Ballast-Stack ins Hauptinventar
+     *  zurueckgeschoben wird. NOETIG, weil InvUtils.swap() ausschliesslich mit HOTBAR-Slots
+     *  arbeitet: liegt eine Kampfressource nur im Hauptinventar, ist sie fuer Platzierung/Wurf
+     *  faktisch nicht vorhanden. Genau das ist live passiert - nach einem Nether-Abschnitt
+     *  blockierten uebrig gebliebene Betten und leere Glasflaschen (Reste der Fire-Res-Traenke)
+     *  die komplette Hotbar, waehrend Crystals/Obsidian/Anchor/Glowstone auf den Haupt-Slots
+     *  12-15 lagen: der Bot hatte volle Vorraete und platzierte trotzdem 95 Sekunden lang NULL
+     *  Explosive (nur Nahkampf + Heiltraenke, live gemessen).
+     *
+     *  Ballast = leere Glasflaschen (reines Trank-Abfallprodukt) und Betten AUSSERHALB von
+     *  Nether/End, wo sie ohnehin nicht explodieren. Beides wird nur verschoben, nie geworfen -
+     *  im Nether ist das Bett sofort wieder die Hauptwaffe.
+     *  @return true, wenn ein Slot freigeraeumt wurde. */
+    private boolean evictHotbarBallast() {
+        boolean bedsUseless = mc.level == null || mc.level.dimension() == Level.OVERWORLD;
+        for (int i = 0; i <= 8; i++) {
+            ItemStack s = mc.player.getInventory().getItem(i);
+            if (s.isEmpty()) return false; // schon Platz - nichts zu raeumen
+            boolean ballast = s.is(Items.GLASS_BOTTLE) || (bedsUseless && isBed(s));
+            if (!ballast) continue;
+
+            int dst = findFreeMainSlot();
+            if (dst < 0) return false;
+            InvUtils.move().from(i).to(dst);
+            return true;
+        }
+        return false;
+    }
+
+    /** Erster freier Slot im Hauptinventar (9-35) fuer evictHotbarBallast(). */
+    private int findFreeMainSlot() {
+        for (int i = 9; i <= 35; i++) {
+            if (mc.player.getInventory().getItem(i).isEmpty()) return i;
+        }
+        return -1;
+    }
+
     private void inventoryTick(Player self) {
+        // Erst Platz schaffen, dann nachfuellen - sonst findet hotbarTargetSlot() nie einen Slot
+        // und jeder refill() unten laeuft wirkungslos ins Leere (siehe evictHotbarBallast).
+        evictHotbarBallast();
+
         refill(Items.END_CRYSTAL, minCrystals.get());
         refill(Items.RESPAWN_ANCHOR, minAnchors.get());
         refill(Items.GLOWSTONE, minGlowstone.get());
