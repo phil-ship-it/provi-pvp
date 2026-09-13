@@ -231,6 +231,13 @@ public class GodmodePvP extends Module {
         .build()
     );
 
+    public final Setting<Boolean> throughWalls = sgCombat.add(new BoolSetting.Builder()
+        .name("through-walls")
+        .description("Greift auch durch Waende/Deckung an: die eigenen Sichtlinien-Sperren fuer Crystal-, Anchor- und Bett-Plaetze entfallen, ebenso die Sichtpruefung vor dem Nahkampf. Vanilla prueft serverseitig NUR die Distanz (ca. 3 Bloecke fuer Nahkampf, 4.5 fuer Platzieren), keine Sichtlinie - ein Schlag oder eine Platzierung hinter einer duennen Wand geht also wirklich durch. Zusaetzlich werden Meteors CrystalAura und KillAura auf volle Reichweite-durch-Waende gestellt (walls-range = range), sonst bremst deren eigene, niedrigere Wanddistanz alles wieder aus. Wovon das bewusst NICHT gilt: Enderperlen - die fliegen physikalisch gegen die Wand, dort bleibt die Sichtpruefung aktiv.")
+        .defaultValue(true)
+        .build()
+    );
+
     public final Setting<Boolean> preHit = sgCombat.add(new BoolSetting.Builder()
         .name("pre-hit")
         .description("Schlaegt den Gegner vor der Explosion fuer mehr Schaden. Off by default - Vanillas Angriffs-Cooldown (~0.5-0.6s je nach Waffe) ist gegen ein Anchor/Crystal-Sperrfeuer reine Zeitverschwendung; ohne diesen Extra-Hit koennen Anchor und Crystal so schnell hintereinander gezuendet werden, wie der Server sie verarbeitet.")
@@ -702,6 +709,9 @@ public class GodmodePvP extends Module {
     private int shieldUntil;
     private CrystalAura.SupportMode savedSupport;
     private int savedSupportDelay = -1;
+    /** Gemerkte Original-Werte der walls-range-Einstellungen (0 = CrystalAura place, 1 = CrystalAura
+     *  break, 2 = KillAura); -1 = nichts veraendert. Siehe syncWallsRange(). */
+    private final double[] savedWallsRange = { -1, -1, -1 };
     private boolean supportSyncFailed;
     private int lastCrystalCount = -1;
     private int lastAnchorBlockCount = -1;
@@ -973,6 +983,7 @@ public class GodmodePvP extends Module {
         if (noFallOn.get()) safeEnable(m, NoFall.class);
         if (killAuraOn.get()) safeEnable(m, KillAura.class);
         syncMobFilter();
+        syncWallsRange();
 
         MeteorClient.EVENT_BUS.subscribe(this);
 
@@ -995,6 +1006,7 @@ public class GodmodePvP extends Module {
             if (savedPlaceDelay >= 0) ca.placeDelay.set(savedPlaceDelay);
             restoreSupport(ca);
         }
+        restoreWallsRange();
         savedPlaceDelay = -1;
         dtapStage = 0;
         cancelFollow();
@@ -1404,7 +1416,7 @@ public class GodmodePvP extends Module {
 
         // Pop-Fenster: volle Aggression
         if (tickCounter < popBurstUntil) {
-            if (preHit.get() && dist <= attackRange.get() && self.getAttackStrengthScale(0.5f) >= 0.9f && self.hasLineOfSight(target) && prepareCritAndCheck(dist)) attackMelee(target);
+            if (preHit.get() && dist <= attackRange.get() && self.getAttackStrengthScale(0.5f) >= 0.9f && canReachThrough(target) && prepareCritAndCheck(dist)) attackMelee(target);
             selectAura(target);
             currentAction = "burst";
         }
@@ -1559,14 +1571,22 @@ public class GodmodePvP extends Module {
             breakShield(p);
             currentAction = "schild-brechen";
         } else if (preHit.get() && dist <= attackRange.get() && self.getAttackStrengthScale(0.5f) >= 0.9f
-            && self.hasLineOfSight(target) && explosionImminent(target) && prepareCritAndCheck(dist)) {
+            && canReachThrough(target) && explosionImminent(target) && prepareCritAndCheck(dist)) {
             attackMelee(target);
             currentAction = "pre-hit";
         } else if (meleeFallback.get() && dist <= attackRange.get() && self.getAttackStrengthScale(0.5f) >= 0.9f
-            && self.hasLineOfSight(target) && !explosionImminent(target)) {
+            && canReachThrough(target) && !explosionImminent(target)) {
             attackMelee(target);
             currentAction = "nahkampf-fallback";
         }
+    }
+
+    /** Sichtlinie zum Ziel fuer NAHKAMPF-Aktionen. Bei through-walls entfaellt sie: Vanilla prueft
+     *  serverseitig nur die Angriffsdistanz, keine Sichtlinie - ein Schlag durch eine duenne Wand oder
+     *  in ein Loch hinein kommt also wirklich an. Gilt bewusst NICHT fuer Enderperlen (die fliegen
+     *  physikalisch gegen die Wand) - dort bleibt hasLineOfSight() direkt im Aufruf stehen. */
+    private boolean canReachThrough(LivingEntity target) {
+        return throughWalls.get() || mc.player.hasLineOfSight(target);
     }
 
     @Override
@@ -2294,6 +2314,10 @@ public class GodmodePvP extends Module {
      */
     private boolean hasRaycastLineOfSight(Vec3 point) {
         if (mc.level == null || mc.player == null) return true;
+        // through-walls: die Sichtlinie ist eine reine Selbstbeschraenkung des Clients - der Server
+        // prueft beim Platzieren nur die Distanz. Faellt sie weg, sind auch Plaetze hinter Deckung
+        // (andere Seite einer Wand, im Loch des Gegners) wieder gueltige Kandidaten.
+        if (throughWalls.get()) return true;
         Vec3 eye = mc.player.getEyePosition();
         ClipContext ctx = new ClipContext(eye, point, ClipContext.Block.COLLIDER, ClipContext.Fluid.NONE, mc.player);
         BlockHitResult result = mc.level.clip(ctx);
@@ -4267,6 +4291,61 @@ public class GodmodePvP extends Module {
             }
             savedSupportDelay = -1;
         }
+    }
+
+    /** Zieht Meteors eigene "durch Waende"-Reichweiten auf die volle Reichweite hoch, wenn through-walls
+     *  an ist. CrystalAura und KillAura fuehren jeweils ein eigenes walls-range, das UNABHAENGIG von
+     *  unseren Sichtpruefungen greift (CrystalAura: Kandidat hinter einer Wand wird nur akzeptiert, wenn
+     *  er innerhalb walls-range liegt; KillAura-Standard ist mit 3.5 sogar kleiner als die normale
+     *  Reichweite). Ohne diesen Abgleich bleibt "durch Waende" auf halber Strecke stehen: unsere Logik
+     *  liefert Ziele hinter Deckung, Meteor verwirft sie danach wieder. Alte Werte werden gemerkt und
+     *  beim Ausschalten des Moduls zurueckgesetzt. */
+    private void syncWallsRange() {
+        if (!throughWalls.get()) return;
+        syncWallsField(CrystalAura.class, Modules.get().get(CrystalAura.class), "placeWallsRange", "placeRange", 0);
+        syncWallsField(CrystalAura.class, Modules.get().get(CrystalAura.class), "breakWallsRange", "breakRange", 1);
+        syncWallsField(KillAura.class, Modules.get().get(KillAura.class), "wallsRange", "range", 2);
+    }
+
+    /** Setzt ein walls-range-Feld auf den Wert des zugehoerigen normalen Reichweiten-Feldes. */
+    private void syncWallsField(Class<?> owner, Module module, String wallsField, String rangeField, int saveSlot) {
+        if (module == null) return;
+        try {
+            java.lang.reflect.Field wf = owner.getDeclaredField(wallsField);
+            java.lang.reflect.Field rf = owner.getDeclaredField(rangeField);
+            wf.setAccessible(true);
+            rf.setAccessible(true);
+            @SuppressWarnings("unchecked")
+            Setting<Double> walls = (Setting<Double>) wf.get(module);
+            @SuppressWarnings("unchecked")
+            Setting<Double> range = (Setting<Double>) rf.get(module);
+            if (walls == null || range == null) return;
+            if (savedWallsRange[saveSlot] < 0) savedWallsRange[saveSlot] = walls.get();
+            if (walls.get() < range.get()) walls.set(range.get());
+        } catch (Throwable t) {
+            // Meteor-Version hat die Felder umbenannt: kein Grund abzubrechen - unsere eigenen
+            // Sichtpruefungen sind trotzdem aus, nur Meteors Zusatzbremse bleibt dann bestehen.
+            savedWallsRange[saveSlot] = -1;
+        }
+    }
+
+    private void restoreWallsRange() {
+        restoreWallsField(CrystalAura.class, Modules.get().get(CrystalAura.class), "placeWallsRange", 0);
+        restoreWallsField(CrystalAura.class, Modules.get().get(CrystalAura.class), "breakWallsRange", 1);
+        restoreWallsField(KillAura.class, Modules.get().get(KillAura.class), "wallsRange", 2);
+    }
+
+    private void restoreWallsField(Class<?> owner, Module module, String wallsField, int saveSlot) {
+        if (module == null || savedWallsRange[saveSlot] < 0) return;
+        try {
+            java.lang.reflect.Field wf = owner.getDeclaredField(wallsField);
+            wf.setAccessible(true);
+            @SuppressWarnings("unchecked")
+            Setting<Double> walls = (Setting<Double>) wf.get(module);
+            if (walls != null) walls.set(savedWallsRange[saveSlot]);
+        } catch (Throwable ignored) {
+        }
+        savedWallsRange[saveSlot] = -1;
     }
 
     private void tuneAutoMend() {
