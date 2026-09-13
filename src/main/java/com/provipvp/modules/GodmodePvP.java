@@ -1270,7 +1270,7 @@ public class GodmodePvP extends Module {
         // Option", obwohl mit aktiviertem use-beds (z.B. im Nether ohne Anchor-Support) noch ein
         // voll funktionsfaehiger dritter Explosionsweg zur Verfuegung steht, und bricht das Gefecht
         // dauerhaft ab statt ihn zu nutzen.
-        boolean hasBedSupply = useBeds.get() && totalItem(GodmodePvP::isBed) > 0;
+        boolean hasBedSupply = useBeds.get() && bedsExplodeHere() && totalItem(GodmodePvP::isBed) > 0;
         if (retreatThreshold.get() && lowOnTotems && warnedOutOfCrystals && warnedOutOfAnchorSupply && !hasBedSupply) {
             cancelFollow();
             if (dist <= 10.0 && tickCounter - lastPearlTick > delay(30)
@@ -1433,9 +1433,9 @@ public class GodmodePvP extends Module {
             // cancelt Baritones Follow, der eigene Rueckwaerts-Tastendruck feuert aber nur INNERHALB
             // attack-range, also stand der Bot zwischen attack-range und Bett-Reichweite bewegungslos
             // (live reproduziert: dist blieb sekundenlang exakt auf 3.66 stehen).
-            boolean bedIsOnlyExplosive = useBeds.get() && totalItem(GodmodePvP::isBed) > 0
+            boolean bedIsOnlyExplosive = useBeds.get() && bedsExplodeHere() && totalItem(GodmodePvP::isBed) > 0
                 && totalItem(Items.END_CRYSTAL) == 0
-                && !(totalItem(Items.RESPAWN_ANCHOR) > 0 && totalItem(Items.GLOWSTONE) > 0);
+                && !(anchorsExplodeHere() && totalItem(Items.RESPAWN_ANCHOR) > 0 && totalItem(Items.GLOWSTONE) > 0);
             // BEWUSST nur im Bett-only-Fall: den groesseren Radius versuchsweise auch dann zu halten,
             // wenn Betten lediglich UNTERdurchschnittlich genutzt sind, wurde live gemessen und war ein
             // klarer Rueckschritt (Crystals 288 -> 260 UND Betten 89 -> 71 pro 90s) - auf 5 Bloecken
@@ -1588,7 +1588,7 @@ public class GodmodePvP extends Module {
      *  sofern der Eigenschaden vertretbar bleibt. Behebt liegen gebliebene, nie gezuendete Anchors
      *  (Hauptursache der Inkonsistenz) und nutzt nebenbei auch fremde/liegen gebliebene Anchors mit. */
     private void maintainNearbyAnchors() {
-        if (!useAnchors.get() || anchorMode.get() == 2) return;
+        if (!useAnchors.get() || anchorMode.get() == 2 || !anchorsExplodeHere()) return;
         if (anchorMaintCooldown > 0) {
             anchorMaintCooldown--;
             return;
@@ -1698,6 +1698,25 @@ public class GodmodePvP extends Module {
     }
     // ---------- Aura-Steuerung ----------
 
+    /** Ein Respawn Anchor explodiert NUR ausserhalb des Nethers - dort ist er ein voll funktionsfaehiger
+     *  Spawnpunkt-Block, das Aufladen und Benutzen setzt lediglich den Spawn und macht NULL Schaden
+     *  (Minecraft Wiki, Respawn Anchor: "if the player attempts to set their spawn ... in the Overworld,
+     *  the End, or custom dimensions in which they are disabled, the block explodes"). Ohne diese Pruefung
+     *  waehlt die Aura im Nether einen Anchor-Kandidaten, platziert, laedt mit Glowstone, interagiert -
+     *  und wundert sich, dass nie etwas passiert: explosionImminent() bleibt dabei die ganze Zeit true
+     *  (bestAnchorDmgCache > 0, denn die Schadensformel kennt die Dimension nicht), was zusaetzlich den
+     *  Nahkampf-Fallback blockiert. Der Bot steht also im Nether neben dem Gegner und fuehrt eine
+     *  Waffe vor, die dort gar nicht existiert. */
+    private boolean anchorsExplodeHere() {
+        return mc.level != null && mc.level.dimension() != Level.NETHER;
+    }
+
+    /** Spiegelbild dazu: ein Bett explodiert nur AUSSERHALB der Oberwelt (Nether/End). In der Oberwelt
+     *  ist es ein normales Moebelstueck - Platzieren und Benutzen setzt nur den Spawn. */
+    private boolean bedsExplodeHere() {
+        return mc.level != null && mc.level.dimension() != Level.OVERWORLD;
+    }
+
     /** Zaehlt den TATSAECHLICHEN Ressourcenverbrauch ueber Inventar-Deltas (Crystal/Anchor/Bett), statt
      *  eigene Zuendungen zu zaehlen: Crystals werden von Meteors CrystalAura platziert und gezuendet, in
      *  diesem Modul gibt es dafuer gar keinen zentralen Aufrufpunkt - ein Zaehler auf unserer Seite waere
@@ -1747,8 +1766,8 @@ public class GodmodePvP extends Module {
         // dabei rauskam - genau das erzeugte spuerbares Ruckeln/Stottern im Movement, waehrend "Platzierung"
         // nach aussen einfach nichts tat.
         boolean hasCrystals = totalItem(Items.END_CRYSTAL) > 0;
-        boolean hasAnchorItem = totalItem(Items.RESPAWN_ANCHOR) > 0 && totalItem(Items.GLOWSTONE) > 0;
-        boolean hasBedItem = useBeds.get() && totalItem(GodmodePvP::isBed) > 0;
+        boolean hasAnchorItem = anchorsExplodeHere() && totalItem(Items.RESPAWN_ANCHOR) > 0 && totalItem(Items.GLOWSTONE) > 0;
+        boolean hasBedItem = useBeds.get() && bedsExplodeHere() && totalItem(GodmodePvP::isBed) > 0;
         Module ca = Modules.get().get(CrystalAura.class);
         if (!hasCrystals && !hasAnchorItem && !hasBedItem) {
             if (ca != null && ca.isActive()) ca.toggle();
@@ -2289,7 +2308,7 @@ public class GodmodePvP extends Module {
      *  keinen Ladezustand zu pruefen: die Explosion (falls Position/Dimension sie ueberhaupt zulassen)
      *  loest beim allerersten Interagieren aus. */
     private void maintainNearbyBeds() {
-        if (!useBeds.get()) return;
+        if (!useBeds.get() || !bedsExplodeHere()) return; // in der Oberwelt setzt der Rechtsklick nur den Spawn
         if (bedMaintCooldown > 0) {
             bedMaintCooldown--;
             return;
@@ -3067,8 +3086,8 @@ public class GodmodePvP extends Module {
             // Block-Paket), was sich als Lag bemerkbar machte UND ihn am Ende blind/bewegungsunfaehig
             // in seiner eigenen Kiste stehen liess.
             boolean outOfExplosives = totalItem(Items.END_CRYSTAL) <= 0
-                && !(totalItem(Items.RESPAWN_ANCHOR) > 0 && totalItem(Items.GLOWSTONE) > 0)
-                && !(useBeds.get() && totalItem(GodmodePvP::isBed) > 0);
+                && !(anchorsExplodeHere() && totalItem(Items.RESPAWN_ANCHOR) > 0 && totalItem(Items.GLOWSTONE) > 0)
+                && !(useBeds.get() && bedsExplodeHere() && totalItem(GodmodePvP::isBed) > 0);
             // Echte Notdeckung heisst: NICHTS Explosives mehr verfuegbar - solange noch Crystals/Anchor+
             // Glowstone/Betten da sind, soll der Bot damit kaempfen (Block neben dem GEGNER fuer die
             // Crystal-Unterlage, schlagen, crystaln, verfolgen), statt sich staendig ohne echten Grund
@@ -3645,16 +3664,20 @@ public class GodmodePvP extends Module {
      *  12-15 lagen: der Bot hatte volle Vorraete und platzierte trotzdem 95 Sekunden lang NULL
      *  Explosive (nur Nahkampf + Heiltraenke, live gemessen).
      *
-     *  Ballast = leere Glasflaschen (reines Trank-Abfallprodukt) und Betten AUSSERHALB von
-     *  Nether/End, wo sie ohnehin nicht explodieren. Beides wird nur verschoben, nie geworfen -
-     *  im Nether ist das Bett sofort wieder die Hauptwaffe.
+     *  Ballast = leere Glasflaschen (reines Trank-Abfallprodukt) plus die Sprengmittel, die in der
+     *  AKTUELLEN Dimension gar nicht explodieren koennen: Betten in der Oberwelt, Respawn Anchors im
+     *  Nether (dort sind sie ein funktionierender Spawn-Block, siehe anchorsExplodeHere). Beides wird
+     *  nur verschoben, nie geworfen - ein Dimensionswechsel macht sie sofort wieder zur Hauptwaffe.
      *  @return true, wenn ein Slot freigeraeumt wurde. */
     private boolean evictHotbarBallast() {
-        boolean bedsUseless = mc.level == null || mc.level.dimension() == Level.OVERWORLD;
+        boolean bedsUseless = !bedsExplodeHere();
+        boolean anchorsUseless = !anchorsExplodeHere();
         for (int i = 0; i <= 8; i++) {
             ItemStack s = mc.player.getInventory().getItem(i);
             if (s.isEmpty()) return false; // schon Platz - nichts zu raeumen
-            boolean ballast = s.is(Items.GLASS_BOTTLE) || (bedsUseless && isBed(s));
+            boolean ballast = s.is(Items.GLASS_BOTTLE)
+                || (bedsUseless && isBed(s))
+                || (anchorsUseless && s.is(Items.RESPAWN_ANCHOR));
             if (!ballast) continue;
 
             int dst = findFreeMainSlot();
@@ -3679,12 +3702,17 @@ public class GodmodePvP extends Module {
         evictHotbarBallast();
 
         refill(Items.END_CRYSTAL, minCrystals.get());
-        refill(Items.RESPAWN_ANCHOR, minAnchors.get());
-        refill(Items.GLOWSTONE, minGlowstone.get());
+        // Nur nachfuellen, was hier auch explodiert - sonst schiebt refill() genau den Stack zurueck in
+        // die Hotbar, den evictHotbarBallast() eine Zeile vorher als Ballast herausgeraeumt hat
+        // (endloses Hin-und-Her alle 20 Ticks, das dauerhaft einen Hotbar-Slot der echten Waffen belegt).
+        if (anchorsExplodeHere()) {
+            refill(Items.RESPAWN_ANCHOR, minAnchors.get());
+            refill(Items.GLOWSTONE, minGlowstone.get());
+        }
         refill(Items.ENDER_PEARL, minPearls.get());
         refill(Items.OBSIDIAN, minObsidian.get());
         refill(Items.COBWEB, minWeb.get());
-        refill(GodmodePvP::isBed, minBeds.get());
+        if (bedsExplodeHere()) refill(GodmodePvP::isBed, minBeds.get());
         refill(GodmodePvP::isHealingSplash, minHealPotionsStock.get());
 
         int totems = totalItem(Items.TOTEM_OF_UNDYING);
@@ -3703,12 +3731,17 @@ public class GodmodePvP extends Module {
         }
         if (!noCrystals) warnedOutOfCrystals = false;
 
-        boolean noAnchorSupply = totalItem(Items.RESPAWN_ANCHOR) == 0 || totalItem(Items.GLOWSTONE) == 0;
-        if (noAnchorSupply && !warnedOutOfAnchorSupply) {
+        // "Anchor nicht verfuegbar" heisst hier bewusst auch "explodiert in dieser Dimension nicht" -
+        // dieses Flag ist zugleich die Rueckzugs-Bedingung (siehe handleTargeting), und im Nether ist ein
+        // voller Anchor-Vorrat kampftechnisch exakt so viel wert wie gar keiner. Die Chat-Warnung kommt
+        // trotzdem nur im echten Mangelfall, sonst wuerde sie bei jedem Nether-Besuch faelschlich melden.
+        boolean anchorUnusable = !anchorsExplodeHere()
+            || totalItem(Items.RESPAWN_ANCHOR) == 0 || totalItem(Items.GLOWSTONE) == 0;
+        if (anchorUnusable && !warnedOutOfAnchorSupply) {
             warnedOutOfAnchorSupply = true;
-            ChatUtils.info("Kein Respawn Anchor oder Glowstone mehr im Inventar - Anchor-Modus pausiert!");
+            if (anchorsExplodeHere()) ChatUtils.info("Kein Respawn Anchor oder Glowstone mehr im Inventar - Anchor-Modus pausiert!");
         }
-        if (!noAnchorSupply) warnedOutOfAnchorSupply = false;
+        if (!anchorUnusable) warnedOutOfAnchorSupply = false;
 
         warnIfEmpty(Items.ENDER_PEARL, "Enderperlen");
         warnIfEmpty(Items.OBSIDIAN, "Obsidian");

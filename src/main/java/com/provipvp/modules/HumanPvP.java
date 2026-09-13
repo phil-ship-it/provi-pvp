@@ -1268,8 +1268,13 @@ public class HumanPvP extends Module {
         // aktiviert) gibt es nichts zu platzieren - Simulation und CrystalAura-Toggle komplett
         // ueberspringen statt sinnlos weiterzurechnen.
         boolean hasCrystals = totalItem(Items.END_CRYSTAL) > 0;
-        boolean hasAnchorItem = totalItem(Items.RESPAWN_ANCHOR) > 0 && totalItem(Items.GLOWSTONE) > 0;
-        boolean hasBedItem = useBeds.get() && totalItem(HumanPvP::isBed) > 0;
+        // Dimensionsregel wie in GodmodePvP: ein Respawn Anchor explodiert NUR ausserhalb des Nethers,
+        // ein Bett NUR ausserhalb der Oberwelt. Ohne diese Pruefung waehlt die Aura eine Waffe, die in
+        // der aktuellen Dimension gar nicht zuenden kann, und der Bot fuehrt sie folgenlos vor.
+        boolean hasAnchorItem = mc.level != null && mc.level.dimension() != Level.NETHER
+            && totalItem(Items.RESPAWN_ANCHOR) > 0 && totalItem(Items.GLOWSTONE) > 0;
+        boolean hasBedItem = useBeds.get() && mc.level != null && mc.level.dimension() != Level.OVERWORLD
+            && totalItem(HumanPvP::isBed) > 0;
         Module ca = Modules.get().get(CrystalAura.class);
         if (!hasCrystals && !hasAnchorItem && !hasBedItem) {
             if (ca != null && ca.isActive()) ca.toggle();
