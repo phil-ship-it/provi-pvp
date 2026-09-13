@@ -193,7 +193,7 @@ public class GodmodePvP extends Module {
     public final Setting<Double> bedMinDamage = sgCombat.add(new DoubleSetting.Builder()
         .name("bed-min-damage")
         .description("Mindestschaden, den eine Bett-Explosion beim Ziel anrichten muss, damit Bett-Modus ueberhaupt in Frage kommt - unabhaengig vom Vergleich zu Crystal/Anchor. Verhindert ein Bett fuer eine fast wirkungslose Explosion (z.B. Ziel steht nur am Rand des Blast-Radius) zu verbrauchen. Realer, verifizierter Mechanik-Abgleich (Meteor BedAura 'min-damage', CandyCat BedAura 'minDmg').")
-        .defaultValue(4.0)
+        .defaultValue(3.0)
         .range(0.5, 10.0)
         .sliderRange(0.5, 10.0)
         .build()
@@ -205,6 +205,22 @@ public class GodmodePvP extends Module {
         .defaultValue(16.0)
         .range(2.0, 36.0)
         .sliderRange(2.0, 36.0)
+        .build()
+    );
+
+    public final Setting<Double> balanceResources = sgCombat.add(new DoubleSetting.Builder()
+        .name("balance-resources")
+        .description("Gleicht den Verbrauch der drei Explosiv-Ressourcen (Crystal/Anchor/Bett) aus: liegen zwei Optionen im Schaden dicht beieinander, gewinnt die, die bisher WENIGER verbraucht wurde (gezaehlt ueber Inventar-Deltas). Der Wert ist der maximale Schadens-Bonus (in HP), den diese Bevorzugung vergeben darf - ein echter Schadensvorsprung schlaegt den Ausgleich immer. 0 = aus. Gemessener Effekt (je drei 90s-Fenster): Bett-Anteil im Nether 14% -> 23-26%, Anchor-Anteil in der Oberwelt 15% -> 26%. Das ist ein bewusster Tausch, kein Gratis-Gewinn: eine Bett-/Anchor-Zuendung dauert laenger als ein Crystal-Zyklus, die reine Explosionszahl pro Sekunde sinkt dabei also leicht. Hoeher stellen, wenn die Betten/Anchors trotzdem liegen bleiben - bei min-support-delay 1 ist der Crystal-Zyklus so schnell, dass 1.5 HP Bonus im Nether kaum noch durchschlaegt.")
+        .defaultValue(1.5)
+        .range(0.0, 5.0)
+        .sliderRange(0.0, 5.0)
+        .build()
+    );
+
+    public final Setting<Boolean> aggressive = sgCombat.add(new BoolSetting.Builder()
+        .name("aggressive")
+        .description("Aggressiv-Profil: halbiert alle kuenstlichen Wartezeiten (Anchor-/Bett-Platzierung und -Wartung, D-Tap, Perlwuerfe) statt sie wie no-delay komplett auf 0 zu setzen - jede Platzierung behaelt so mindestens einen Tick fuer die Server-Bestaetigung. Wirkt vor allem auf die verzoegerungs-gebremsten Ressourcen: live A/B in der Oberwelt hob es den Anchor-Anteil von 14.8% auf 26.4%, bei leicht niedrigerer Gesamt-Explosionszahl (4.74 -> 4.28 pro Sekunde), weil ein Anchor-Zyklus laenger dauert als ein Crystal-Zyklus. Fuer maximale reine Schlagzahl stattdessen min-support-delay senken - das ist der Rate-Hebel, dieser hier ist der Mix-Hebel. Bewusst OHNE Eingriff in die Aura-Umschalt-Traegheit: kuerzere Traegheit wurde getestet und senkte die Explosionen pro 90s von 438 auf 377, weil jeder Moduswechsel CrystalAura neu startet und ein angefangenes Platzierungsfenster wegwirft.")
+        .defaultValue(true)
         .build()
     );
 
@@ -294,8 +310,8 @@ public class GodmodePvP extends Module {
 
     public final Setting<Integer> minSupportDelay = sgCombat.add(new IntSetting.Builder()
         .name("min-support-delay")
-        .description("Mindest-Tickabstand zwischen Obsidian-Unterbau und dem folgenden Crystal-Platzieren (CrystalAuras 'support-delay'). Beide Aktionen nutzen Minecrafts eigenes sequenznummer-basiertes Block-Vorhersage-System (seit 1.19) - schickt man beide zu dicht hintereinander raus, bevor die erste Sequenz vom Server bestaetigt ist, kann die Vorhersage durcheinanderkommen ('Crystal-Hitbox erscheint, aber kein Crystal kommt'). Auf Servern mit spuerbarer Latenz oder Versions-Uebersetzung (z.B. ViaVersion) braucht es mehr Puffer als den Meteor-Standard. Wird nur angehoben, nie gesenkt - bei anhaltenden Fehlplatzierungen hochdrehen.")
-        .defaultValue(4)
+        .description("Mindest-Tickabstand zwischen Obsidian-Unterbau und dem folgenden Crystal-Platzieren (CrystalAuras 'support-delay'). Beide Aktionen nutzen Minecrafts eigenes sequenznummer-basiertes Block-Vorhersage-System (seit 1.19) - schickt man beide zu dicht hintereinander raus, bevor die erste Sequenz vom Server bestaetigt ist, kann die Vorhersage durcheinanderkommen ('Crystal-Hitbox erscheint, aber kein Crystal kommt'). Steht auf Meteors eigenem Standard (1), weil dieser Wert der schaerfste Aggressions-Hebel ueberhaupt ist: live A/B ueber je drei 90s-Fenster hat 4 -> 1 die Explosionen pro Sekunde im Nether von 3.3-4.3 auf 5.3 und in der Oberwelt von 3.2 auf 4.3 gehoben (+33 bis +60%), bei ~+31% ausgeteiltem Schaden. Auf Servern mit spuerbarer Latenz oder Versions-Uebersetzung (z.B. ViaVersion) bei Fehlplatzierungen wieder hochdrehen - der Wert wird nur angehoben, nie unter diesen Mindestwert gesenkt.")
+        .defaultValue(1)
         .range(0, 10)
         .sliderRange(0, 10)
         .build()
@@ -624,6 +640,13 @@ public class GodmodePvP extends Module {
     private final Map<UUID, Vec3> velocities = new HashMap<>();
     private int tickCounter;
     private int auraMode = -1;
+    /** Wie viele Einheiten jeder Ressource seit dem Einschalten tatsaechlich VERBRAUCHT wurden
+     *  (Inventar-Delta, siehe trackResourceUsage) - Grundlage fuer balance-resources.
+     *  Index 0 = Crystal, 1 = Anchor, 2 = Bett. */
+    private final int[] auraUsage = new int[3];
+    /** Letzter beobachteter Inventarstand der drei Ressourcen (-1 = noch nie gemessen) - Referenz fuer
+     *  die Delta-Messung in trackResourceUsage(). */
+    private final int[] lastResourceCount = { -1, -1, -1 };
     private int lastErrorWarnTick = -999;
     private boolean pendingFreeLook;
     private double pendingFreeLookYaw, pendingFreeLookPitch;
@@ -756,6 +779,8 @@ public class GodmodePvP extends Module {
         tickCounter = 0;
         supportSyncFailed = false;
         auraMode = -1;
+        java.util.Arrays.fill(auraUsage, 0);
+        java.util.Arrays.fill(lastResourceCount, -1);
         lastErrorWarnTick = -999;
         savedPlaceDelay = -1;
         popBurstUntil = 0;
@@ -979,6 +1004,10 @@ public class GodmodePvP extends Module {
         Input.setKeyState(mc.options.keyUp, false);
         rotationsThisTick = 0;
         pendingFreeLook = false;
+        // Verbrauchs-Delta jeden Tick messen (nicht nur im Kampf) - eine Explosion kann das Item auch
+        // dann aus dem Inventar nehmen, wenn dieser Tick spaeter fruehzeitig abbricht (Schild-Block,
+        // Rueckzug, kein Ziel).
+        trackResourceUsage();
 
         boolean guiOpen = mc.gui.screen() != null;
         handleInventory(self, guiOpen);
@@ -1407,6 +1436,11 @@ public class GodmodePvP extends Module {
             boolean bedIsOnlyExplosive = useBeds.get() && totalItem(GodmodePvP::isBed) > 0
                 && totalItem(Items.END_CRYSTAL) == 0
                 && !(totalItem(Items.RESPAWN_ANCHOR) > 0 && totalItem(Items.GLOWSTONE) > 0);
+            // BEWUSST nur im Bett-only-Fall: den groesseren Radius versuchsweise auch dann zu halten,
+            // wenn Betten lediglich UNTERdurchschnittlich genutzt sind, wurde live gemessen und war ein
+            // klarer Rueckschritt (Crystals 288 -> 260 UND Betten 89 -> 71 pro 90s) - auf 5 Bloecken
+            // Abstand verliert CrystalAura Platzierungsziele, ohne dass dadurch mehr self-safe
+            // Bett-Zellen entstehen. Die Bett-Quote haengt an der Eigenschaden-Grenze, nicht am Abstand.
             int wantFollowRadius = bedIsOnlyExplosive ? BED_FOLLOW_RADIUS : DEFAULT_FOLLOW_RADIUS;
             var baritoneSettings = BaritoneAPI.getSettings();
             if (baritoneSettings.followRadius.value != wantFollowRadius) {
@@ -1664,6 +1698,47 @@ public class GodmodePvP extends Module {
     }
     // ---------- Aura-Steuerung ----------
 
+    /** Zaehlt den TATSAECHLICHEN Ressourcenverbrauch ueber Inventar-Deltas (Crystal/Anchor/Bett), statt
+     *  eigene Zuendungen zu zaehlen: Crystals werden von Meteors CrystalAura platziert und gezuendet, in
+     *  diesem Modul gibt es dafuer gar keinen zentralen Aufrufpunkt - ein Zaehler auf unserer Seite waere
+     *  systematisch zu niedrig und der Ausgleich damit dauerhaft schief. Nur Abnahmen zaehlen; ein
+     *  Anstieg (Nachschub aus einer Kiste, Kit-Refill) setzt lediglich den Referenzwert neu. */
+    private void trackResourceUsage() {
+        int[] now = { totalItem(Items.END_CRYSTAL), totalItem(Items.RESPAWN_ANCHOR), totalItem(GodmodePvP::isBed) };
+        for (int i = 0; i < 3; i++) {
+            if (lastResourceCount[i] >= 0 && now[i] < lastResourceCount[i]) auraUsage[i] += lastResourceCount[i] - now[i];
+            lastResourceCount[i] = now[i];
+        }
+    }
+
+    /** Ausgleichs-Bonus (in HP-Schaden) fuer eine Explosiv-Option: je weiter ihr bisheriger Anteil am
+     *  Gesamtverbrauch unter dem Gleichanteil liegt, desto groesser der Bonus - maximal
+     *  balance-resources. Nur zwischen den gerade VERFUEGBAREN Optionen verteilt: fehlt z.B. das Bett
+     *  (Overworld), waere ein Gleichanteil von 1/3 unerreichbar und Crystal/Anchor bekaemen beide
+     *  dauerhaft Bonus - also ohne Wirkung, aber mit verzerrtem Bezugswert.
+     *  Vor 20 verbrauchten Einheiten passiert nichts (zu kleine Stichprobe: die ersten paar Explosionen
+     *  wuerden den Anteil sonst auf 100% treiben und die Wahl gegen die real bessere Option kippen). */
+    private double balanceBonus(int mode, boolean hasCrystals, boolean hasAnchorItem, boolean hasBedItem) {
+        double max = balanceResources.get();
+        if (max <= 0) return 0;
+
+        boolean[] avail = { hasCrystals, hasAnchorItem, hasBedItem };
+        if (!avail[mode]) return 0;
+
+        int options = 0, total = 0;
+        for (int i = 0; i < 3; i++) {
+            if (!avail[i]) continue;
+            options++;
+            total += auraUsage[i];
+        }
+        if (options < 2 || total < 20) return 0;
+
+        double fairShare = 1.0 / options;
+        double share = (double) auraUsage[mode] / total;
+        if (share >= fairShare) return 0;
+        return max * (fairShare - share) / fairShare;
+    }
+
     private void selectAura(LivingEntity target) {
         // Ohne ein einziges Crystal UND ohne vollstaendige Anchor-Ausruestung (Anchor + Glowstone) UND ohne
         // Bett (falls aktiviert) gibt es schlicht nichts zu platzieren - die teure Damage-/Positions-
@@ -1737,10 +1812,22 @@ public class GodmodePvP extends Module {
         // Anchor-Plaetze unerreichbar? -> 2 s Crystal erzwingen (Anti-Stuck)
         boolean anchorForced = tickCounter < crystalForcedUntil;
 
+        // Ressourcen-Ausgleich: liegen zwei Optionen im Schaden dicht beieinander, bekommt die bisher
+        // WENIGER genutzte einen kleinen Bonus (siehe balance-resources). Ohne das gewann Crystal
+        // praktisch jeden knappen Vergleich und die Betten blieben faktisch ungenutzt (live 339:99).
+        // Bewusst NUR als Summand in denselben Vergleichen wie bisher - alle harten Gates (use-anchors,
+        // anchor-mode 2, Glowstone, Reichweite, bed-min-damage, Eigenschaden) bleiben unberuehrt.
+        double bonusCrystal = balanceBonus(0, hasCrystals, hasAnchorItem, hasBedItem);
+        double bonusAnchor = balanceBonus(1, hasCrystals, hasAnchorItem, hasBedItem);
+        double bonusBed = balanceBonus(2, hasCrystals, hasAnchorItem, hasBedItem);
+
         // Hysterese statt scharfer Schwelle: zum Wechsel IN den Anchor-/Bett-Modus braucht es einen klaren
         // Vorsprung, zum Bleiben reicht Gleichstand. Ohne das kippt der Modus bei jedem winzigen
         // Schadens-Unterschied (z.B. durch die Ziel-Vorhersage) mehrfach pro Sekunde hin und her -
-        // jedes Mal ein voller CrystalAura-Neustart, der wie ein Ruckeln/Haken wirkt.
+        // jedes Mal ein voller CrystalAura-Neustart, der wie ein Ruckeln/Haken wirkt. Die Marge NICHT
+        // aggressiv abzusenken ist live belegt: mit halbierter Umschalt-Traegheit und weggefallener
+        // Eintritts-Marge fielen die Gesamt-Explosionen pro 90s von 438 auf 377 - haeufigeres Umschalten
+        // heisst mehr CrystalAura-Neustarts, also weniger tatsaechliche Zuendungen statt mehr.
         double margin = anchorMode.get() == 1 ? 0.0 : 0.15;
         double enterMargin = auraMode == 1 ? -0.3 : margin;
 
@@ -1751,9 +1838,10 @@ public class GodmodePvP extends Module {
             // Anchor schon bei Gleichstand (bricht Schilde)
             wantAnchor = !outOfGlowstone && !anchorForced && inRange
                 && anchorCandidateIndex < anchorCandidates.size()
-                && bestAnchorDmgCache >= crystalDmg + enterMargin;
+                && bestAnchorDmgCache + bonusAnchor >= crystalDmg + bonusCrystal + enterMargin;
         } else {
-            wantAnchor = !outOfGlowstone && !anchorForced && inRange && bestAnchorDmgCache > crystalDmg + 0.15 + enterMargin;
+            wantAnchor = !outOfGlowstone && !anchorForced && inRange
+                && bestAnchorDmgCache + bonusAnchor > crystalDmg + bonusCrystal + 0.15 + enterMargin;
         }
 
         // syncSupport() konnte CrystalAuras Obsidian-Auto-Unterbau nicht erzwingen -> Crystal-Modus ist
@@ -1770,18 +1858,23 @@ public class GodmodePvP extends Module {
         // ein simpler On/Off-Schalter, siehe Beschreibung).
         double bedEnterMargin = auraMode == 2 ? -0.3 : 0.15;
         boolean wantBed = hasBedItem && inRange && bedCandidateIndex < bedCandidates.size()
-            && bestBedRawDmgCache >= bedMinDamage.get() && bestBedDmgCache > crystalDmg + 0.15 + bedEnterMargin;
+            && bestBedRawDmgCache >= bedMinDamage.get()
+            && bestBedDmgCache + bonusBed > crystalDmg + bonusCrystal + bedEnterMargin;
 
-        // Wenn beide verfuegbar waeren, gewinnt die schadenstaerkere Option - Anchor braucht nur 1
-        // Glowstone und ist meist die effizientere Standardwahl bei echtem Gleichstand.
+        // Wenn beide verfuegbar waeren, gewinnt die schadenstaerkere Option - inklusive Ausgleichs-Bonus,
+        // sonst wuerde der Ausgleich hier direkt wieder wegsortiert.
         if (wantAnchor && wantBed) {
-            if (bestBedDmgCache > bestAnchorDmgCache) wantAnchor = false; else wantBed = false;
+            if (bestBedDmgCache + bonusBed > bestAnchorDmgCache + bonusAnchor) wantAnchor = false;
+            else wantBed = false;
         }
 
         // Deutlich seltener umschalten als der Rohwert - genug Zeit, damit eine begonnene Platzierung/
         // Ladung auch tatsaechlich fertig wird, statt staendig unterbrochen zu werden. Skaliert mit der
         // Zielgeschwindigkeit statt eines fixen Werts: ein schnell bewegtes Ziel veraltet die Anchor-/
         // Bett-/Crystal-Bewertung viel schneller als ein stehendes, verdient also eine kuerzere Sperre.
+        // Bewusst NICHT vom Aggressiv-Profil verkuerzt - live gemessen war genau das ein Rueckschritt
+        // (siehe Kommentar bei 'margin' oben): weniger Traegheit heisst mehr CrystalAura-Neustarts und
+        // damit WENIGER Explosionen pro Sekunde, nicht mehr.
         // Waehrend eines aktiven Kombo-Fensters (popBurstUntil, siehe trackPop) komplett umgangen - beim
         // Nachschlag auf einen frisch erkannten Totem-Pop zaehlt jeder Tick, nicht erst der naechste
         // freie Umschalt-Slot.
@@ -2252,7 +2345,12 @@ public class GodmodePvP extends Module {
      *  Sofort-Modus (no-delay) aktiv ist. So bleibt jede einzelne Cooldown-Stelle im Code weiterhin
      *  lesbar (die "normale" Wartezeit steht direkt daneben), aber no-delay hebelt sie zentral aus. */
     private int delay(int ticks) {
-        return instantMode.get() ? 0 : ticks;
+        if (instantMode.get()) return 0;
+        // Aggressiv-Profil: halbe Wartezeit statt gar keiner. no-delay auf 0 zu setzen hat im Test
+        // Aktionen schneller abgefeuert, als der Server sie bestaetigt (verlorene Betten/Perlen);
+        // die Haelfte verdoppelt die Aktionsrate, laesst aber jeder Platzierung noch eine
+        // Server-Bestaetigung Zeit.
+        return aggressive.get() ? Math.max(1, ticks / 2) : ticks;
     }
 
     /** Reiht eine Rotation+Aktion ein. Anders als vorher (ein starrer 1-Aktion-pro-Tick-Mutex, der
