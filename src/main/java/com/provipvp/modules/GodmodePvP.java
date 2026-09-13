@@ -224,6 +224,13 @@ public class GodmodePvP extends Module {
         .build()
     );
 
+    public final Setting<Boolean> pistonAura = sgCombat.add(new BoolSetting.Builder()
+        .name("piston-aura")
+        .description("Piston-PvP als ANGRIFF: sitzt der Gegner so in einem Loch/einer Obsidian-Deckung, dass ueber mehrere Sekunden KEIN Crystal-, Anchor- oder Bett-Platz mehr Schaden bringt, wird ein Crystal daneben gesetzt und mit Kolben + Redstone-Block in sein Loch geschoben. Genau die Technik, die auf Anarchy-Servern 'Piston Aura' heisst - sie bringt eine Explosion an eine Stelle, an der man selbst nichts platzieren darf. Braucht Kolben UND Redstone-Bloecke in der Hotbar (zwei zusaetzliche Slots) - ohne diese Items passiert schlicht nichts.")
+        .defaultValue(true)
+        .build()
+    );
+
     public final Setting<Boolean> preHit = sgCombat.add(new BoolSetting.Builder()
         .name("pre-hit")
         .description("Schlaegt den Gegner vor der Explosion fuer mehr Schaden. Off by default - Vanillas Angriffs-Cooldown (~0.5-0.6s je nach Waffe) ist gegen ein Anchor/Crystal-Sperrfeuer reine Zeitverschwendung; ohne diesen Extra-Hit koennen Anchor und Crystal so schnell hintereinander gezuendet werden, wie der Server sie verarbeitet.")
@@ -426,6 +433,34 @@ public class GodmodePvP extends Module {
     public final Setting<Boolean> buildCover = sgDefense.add(new BoolSetting.Builder()
         .name("build-cover")
         .description("Baut eigene Obsidian-Deckung (offene Seiten schliessen), wenn kein natuerliches Loch in der Naehe ist.")
+        .defaultValue(true)
+        .build()
+    );
+
+    public final Setting<Boolean> surroundOn = sgDefense.add(new BoolSetting.Builder()
+        .name("surround")
+        .description("Setzt im Nahkampf Obsidian um die eigenen Fuesse (Surround, Standard-Verteidigung im Crystal-PvP): der Gegner kann dann keinen Crystal mehr direkt an die Fuesse setzen, wo er den meisten Schaden macht. BEWUSST bleibt die Seite ZUM Gegner offen - ein vollstaendiger Ring mauert den Bot ein, Baritones Verfolgung laeuft dann gegen die eigene Wand (genau dieser Selbsteinmauerungs-Bug ist bei build-cover schon einmal aufgetreten). Braucht Obsidian im Inventar.")
+        .defaultValue(true)
+        .build()
+    );
+
+    public final Setting<Boolean> antiBed = sgDefense.add(new BoolSetting.Builder()
+        .name("anti-bed")
+        .description("Baut ein FREMDES Bett in Explosionsreichweite ab, statt zu warten bis der Gegner es zuendet. Ein Bett explodiert im Nether/End mit Staerke 5 (staerker als TNT) und toetet laut 2b2t-Wiki auch in voller Prot-4-Ruestung - das ist die Standard-Todesursache im Nether-PvP. Ein Bett hat Haerte 0.2, geht also praktisch sofort kaputt. Nur Betten, die der Bot NICHT selbst gelegt hat, und nur wenn die Explosion an dieser Stelle mehr Eigenschaden machen wuerde als bed-max-self-damage erlaubt (sonst wird es lieber selbst gezuendet).")
+        .defaultValue(true)
+        .build()
+    );
+
+    public final Setting<Boolean> antiPiston = sgDefense.add(new BoolSetting.Builder()
+        .name("anti-piston")
+        .description("Bricht Piston-PvP: Gegner setzen einen Kolben plus Redstone-Block neben ein Loch/eine Deckung und schieben damit einen bereits platzierten Crystal auf dich zu - so kommt eine Explosion an eine Stelle, an der man selbst gar nicht platzieren koennte. Erkennt fremde Kolben (auch Sticky) im Nahbereich und bricht sie ab (Haerte 0.5), bevor sie ausfahren; ein danebenliegender Redstone-Block wird ebenfalls entfernt, weil er die Stromquelle ist.")
+        .defaultValue(true)
+        .build()
+    );
+
+    public final Setting<Boolean> secureFooting = sgDefense.add(new BoolSetting.Builder()
+        .name("secure-footing")
+        .description("Setzt Obsidian unter die eigenen Fuesse, sobald dort Luft, Lava oder Feuer ist. Im Nether ist das die haeufigste Todesursache neben Betten: Netherrack hat Sprengwiderstand 0.4, nach zwei Explosionen ist der Boden weg, darunter oft Lava - und ein Wassereimer verdampft dort, es gibt also keinen MLG-Ausweg.")
         .defaultValue(true)
         .build()
     );
@@ -716,6 +751,24 @@ public class GodmodePvP extends Module {
     private int secondEnemyWarnCooldown;
     private boolean lowOnTotems;
 
+    // Surround / Anti-Bett / Anti-Piston / Bodensicherung / Piston-Aura
+    private int surroundCooldown;
+    private int hostileBlockCooldown;
+    private int footingCooldown;
+    /** Betten, die der Bot SELBST gelegt hat - alles andere in Reichweite ist ein feindliches Bett und
+     *  wird von anti-bed abgebaut statt abgewartet. Analog zu anchorsChargedByUs. */
+    private final java.util.Set<BlockPos> bedsPlacedByUs = new java.util.HashSet<>();
+    /** Eigene Piston-Aura-Bauteile - damit anti-piston nicht die eigene Maschine wieder abreisst. */
+    private final java.util.Set<BlockPos> pistonPartsByUs = new java.util.HashSet<>();
+    /** Wie lange in Folge KEINE Explosivoption mehr Schaden am Ziel bringt (Gegner eingegraben/in
+     *  Deckung) - Ausloeser fuer die Piston-Aura. */
+    private int explosiveStarvedTicks;
+    private int pistonStage;
+    private int pistonStageTick;
+    private BlockPos pistonCrystalCell, pistonBodyCell;
+    private Direction pistonPushDir;
+    private int pistonCooldown;
+
     // Anchor-Platzierung (neue Anchors an guten Stellen) + Anchor-Wartung (JEDER Anchor im Nahbereich,
     // egal von wem/wann platziert, wird geladen und gezuendet - laeuft unabhaengig vom Aura-Modus,
     // damit ein waehrend Anchor-Modus platzierter Anchor auch nach einem Wechsel zu Crystal fertig wird).
@@ -806,6 +859,18 @@ public class GodmodePvP extends Module {
         fireResStartTick = -999;
         dtapStage = 0;
         dtapCooldown = 0;
+        surroundCooldown = 0;
+        hostileBlockCooldown = 0;
+        footingCooldown = 0;
+        bedsPlacedByUs.clear();
+        pistonPartsByUs.clear();
+        explosiveStarvedTicks = 0;
+        pistonStage = 0;
+        pistonStageTick = 0;
+        pistonCrystalCell = null;
+        pistonBodyCell = null;
+        pistonPushDir = null;
+        pistonCooldown = 0;
         dtapSpot = null;
         lastAuraSwitch = -999;
         lastHealth.clear();
@@ -1011,6 +1076,7 @@ public class GodmodePvP extends Module {
 
         boolean guiOpen = mc.gui.screen() != null;
         handleInventory(self, guiOpen);
+        if (tickCounter % 40 == 0) pruneOwnedBlocks();
 
         if (blocking) {
             if (tickCounter < shieldUntil) {
@@ -1405,6 +1471,18 @@ public class GodmodePvP extends Module {
         // umgeschaltet wird. Das war die Hauptursache dafuer, dass nicht alle Anchors gezuendet wurden.
         maintainNearbyAnchors();
         maintainNearbyBeds();
+
+        // Verteidigung, die keinen Aura-Modus braucht und deshalb IMMER laeuft: fremde Betten/Kolben
+        // wegraeumen, bevor sie zuenden bzw. ausfahren, den eigenen Stand sichern und im Nahbereich
+        // die Fuesse mit Obsidian umstellen. Reihenfolge ist Absicht - eine gegnerische Bett-Explosion
+        // toetet sofort, ein weggesprengter Boden erst beim naechsten Schritt, Surround ist reine Vorsorge.
+        removeHostileBlocks(self);
+        secureFootingTick(self, dist);
+        updateSurround(self, target, dist);
+
+        // Piston-Aura: nur wenn ueber Sekunden keine Explosivoption mehr Schaden bringt (Gegner
+        // eingegraben). Laeuft VOR der normalen Aura-Auswahl, weil sie genau deren Ausfall behandelt.
+        if (runPistonAura(self, target, dist)) return;
 
         if (dtapStage != 0) {
             runDtapTick(target);
@@ -2288,6 +2366,10 @@ public class GodmodePvP extends Module {
                 bedPlaceFails = 0;
                 bedPlaceCooldown = delay(4); // kurze Pause, damit maintainNearbyBeds Zeit zum Zuenden hat
                 lastBedProgressTick = tickCounter;
+                // Besitz merken, sonst haelt anti-bed das eigene Bett fuer einen gegnerischen Bett-Bomber
+                // und reisst es wieder ab, bevor es gezuendet werden kann.
+                bedsPlacedByUs.add(spot.pos());
+                bedsPlacedByUs.add(spot.pos().relative(spot.dir()));
             } else {
                 bedCandidateIndex++;
             }
@@ -3032,6 +3114,344 @@ public class GodmodePvP extends Module {
         return best;
     }
 
+    /** Horizontale Richtung vom Bot zum Ziel - gemeinsame Basis fuer Surround und Notdeckung, damit
+     *  beide dieselbe Seite offen lassen. */
+    private Direction horizontalDirTo(Player self, LivingEntity target) {
+        Vec3 to = target.position().subtract(self.position());
+        Direction best = null;
+        double bestDot = 0;
+        for (Direction dir : Direction.Plane.HORIZONTAL) {
+            double dot = dir.getStepX() * to.x + dir.getStepZ() * to.z;
+            if (dot > bestDot) {
+                bestDot = dot;
+                best = dir;
+            }
+        }
+        return best;
+    }
+
+    /** Surround: Obsidian an die eigenen Fuss-Nachbarn, damit dort kein gegnerischer Crystal mehr
+     *  hinpasst (Standard-Verteidigung im Crystal-PvP). Die Seite ZUM Gegner bleibt offen - ein
+     *  geschlossener Ring nimmt Baritone jeden Weg und der Bot mauert sich selbst ein. Ein Block pro
+     *  Durchlauf, damit ein einzelner Tick nicht drei Rotationen und den halben Obsidianvorrat frisst. */
+    private void updateSurround(Player self, LivingEntity target, double dist) {
+        if (surroundCooldown > 0) surroundCooldown--;
+        if (!surroundOn.get() || dist > 5.0 || !self.onGround() || surroundCooldown > 0) return;
+
+        FindItemResult obsidian = InvHelper.find(Items.OBSIDIAN);
+        if (!obsidian.found()) return;
+
+        Direction toward = horizontalDirTo(self, target);
+        BlockPos feet = self.blockPosition();
+        for (Direction dir : Direction.Plane.HORIZONTAL) {
+            if (dir == toward) continue;
+            BlockPos side = feet.relative(dir);
+            if (!mc.level.getBlockState(side).isAir()) continue;
+            if (!BlockUtils.canPlace(side, true)) continue;
+            if (BlockUtils.place(side, obsidian, true, PRIORITY_MISC)) {
+                surroundCooldown = delay(4);
+                currentAction = "surround";
+            }
+            return;
+        }
+    }
+
+    /** Raeumt gegnerische Angriffsbauten im Nahbereich weg, bevor sie zuenden bzw. ausfahren:
+     *  fremde Betten (Nether/End: Explosionsstaerke 5, toetet auch durch Prot 4) und fremde Kolben
+     *  samt Redstone-Block (Piston-PvP schiebt damit einen Crystal in die eigene Deckung).
+     *  Eigene Bauteile werden nie angefasst - sonst reisst der Bot seine eigene Piston-Aura ab. */
+    private void removeHostileBlocks(Player self) {
+        if (hostileBlockCooldown > 0) {
+            hostileBlockCooldown--;
+            return;
+        }
+        if (!antiBed.get() && !antiPiston.get()) return;
+
+        BlockPos feet = self.blockPosition();
+        for (int dx = -3; dx <= 3; dx++) {
+            for (int dy = -2; dy <= 2; dy++) {
+                for (int dz = -3; dz <= 3; dz++) {
+                    BlockPos pos = feet.offset(dx, dy, dz);
+                    BlockState st = mc.level.getBlockState(pos);
+
+                    boolean hostileBed = antiBed.get() && bedsExplodeHere()
+                        && st.getBlock() instanceof BedBlock
+                        && !bedsPlacedByUs.contains(pos)
+                        && !bedsPlacedByUs.contains(pos.relative(st.getValue(BedBlock.FACING)))
+                        && !bedsPlacedByUs.contains(pos.relative(st.getValue(BedBlock.FACING).getOpposite()))
+                        // Nur abbauen, was wir NICHT selbst gefahrlos zuenden koennten - sonst nimmt
+                        // anti-bed der eigenen Bed Aura die fertige Explosion weg.
+                        && !bedSelfDamageAcceptable(DamageUtils.bedDamage(mc.player, Vec3.atCenterOf(pos)));
+
+                    boolean hostilePiston = antiPiston.get() && !pistonPartsByUs.contains(pos)
+                        && (st.is(Blocks.PISTON) || st.is(Blocks.STICKY_PISTON) || st.is(Blocks.REDSTONE_BLOCK));
+
+                    if (!hostileBed && !hostilePiston) continue;
+                    if (mc.player.distanceToSqr(Vec3.atCenterOf(pos)) > 4.5 * 4.5) continue;
+                    if (!BlockUtils.canBreak(pos)) continue;
+
+                    Vec3 center = Vec3.atCenterOf(pos);
+                    boolean queued = rotateAndRun(Rotations.getYaw(center), Rotations.getPitch(center), PRIORITY_MISC,
+                        () -> BlockUtils.breakBlock(pos, true));
+                    if (queued) {
+                        hostileBlockCooldown = delay(2);
+                        currentAction = hostileBed ? "fremd-bett-abbauen" : "anti-piston";
+                    }
+                    return;
+                }
+            }
+        }
+    }
+
+    /** Bodensicherung: steht der Bot ueber Luft/Lava/Feuer, kommt Obsidian darunter. Im Nether ist das
+     *  der haeufigste Tod neben Betten - Netherrack (Sprengwiderstand 0.4) ist nach zwei Explosionen
+     *  weg, darunter liegt oft Lava, und Wasser verdampft dort (kein MLG moeglich). */
+    private void secureFootingTick(Player self, double dist) {
+        if (footingCooldown > 0) footingCooldown--;
+        if (!secureFooting.get() || dist > 8 || footingCooldown > 0) return;
+
+        BlockPos below = self.blockPosition().below();
+        BlockState st = mc.level.getBlockState(below);
+        if (!st.isAir() && !st.is(Blocks.LAVA) && !st.is(Blocks.FIRE) && !st.is(Blocks.SOUL_FIRE)) return;
+
+        // Nicht jede Bodenluecke ist gefaehrlich: liegt innerhalb von drei Bloecken wieder fester,
+        // nicht brennender Boden, faellt der Bot dort hoechstens eine Stufe herunter - dafuer Obsidian
+        // zu verbrennen war live der Normalfall (83 Platzierungen in 70s, vor allem waehrend
+        // Explosions-Knockback). Gebaut wird nur ueber Lava/Feuer oder ueber einem echten Abgrund.
+        boolean lethal = false;
+        BlockPos scan = below;
+        for (int i = 0; i < 3; i++) {
+            BlockState s = mc.level.getBlockState(scan);
+            if (s.is(Blocks.LAVA) || s.is(Blocks.FIRE) || s.is(Blocks.SOUL_FIRE)) {
+                lethal = true;
+                break;
+            }
+            if (s.blocksMotion()) return; // sicherer Boden in Reichweite - nichts zu tun
+            scan = scan.below();
+        }
+        if (!lethal && !mc.level.getBlockState(scan).isAir()) return;
+
+        FindItemResult obsidian = InvHelper.find(Items.OBSIDIAN);
+        if (!obsidian.found()) return;
+        if (!BlockUtils.canPlace(below, true)) return;
+        if (BlockUtils.place(below, obsidian, true, PRIORITY_MISC)) {
+            footingCooldown = delay(4);
+            currentAction = "boden-sichern";
+        }
+    }
+
+    /** Haelt die Besitz-Merklisten klein und aktuell: ein Eintrag, dessen Block nicht mehr existiert
+     *  (gezuendet, weggesprengt, abgebaut) oder der ausser Reichweite liegt, wuerde sonst ewig mitlaufen -
+     *  und im schlimmsten Fall ein SPAETER dort platziertes gegnerisches Bett als "unseres" durchwinken. */
+    private void pruneOwnedBlocks() {
+        BlockPos feet = mc.player.blockPosition();
+        bedsPlacedByUs.removeIf(p -> p.distSqr(feet) > 256
+            || !(mc.level.getBlockState(p).getBlock() instanceof BedBlock));
+        pistonPartsByUs.removeIf(p -> {
+            if (p.distSqr(feet) > 256) return true;
+            BlockState st = mc.level.getBlockState(p);
+            return !(st.is(Blocks.PISTON) || st.is(Blocks.STICKY_PISTON) || st.is(Blocks.REDSTONE_BLOCK)
+                || st.is(Blocks.OBSIDIAN) || st.is(Blocks.MOVING_PISTON) || st.is(Blocks.PISTON_HEAD));
+        });
+    }
+
+    /** Schadensgrenze, unter der eine Explosivoption als "der Gegner sitzt zu gut" gilt - Ausloeser fuer
+     *  die Piston-Aura. 4 HP entspricht in etwa dem, was ein Crystal vom Lochrand aus noch durch volle
+     *  Netherit-Ruestung bringt; alles darunter lohnt den normalen Platz nicht mehr. */
+    private static final double PISTON_WEAK_DAMAGE = 4.0;
+
+    /** Piston-Aura (Angriff) - die Antwort auf einen Gegner, der in einem Loch bzw. unter Deckung sitzt.
+     *  Ein Kolben schiebt ENTITIES, und ein End Crystal ist eine Entity: man setzt den Crystal also auf
+     *  den Lochrand (dort gibt es eine Unterlage) und schiebt ihn anschliessend in die LUFTSAEULE UEBER
+     *  DEM KOPF des Gegners - genau die Zelle, in der die Explosion am meisten weh tut und in die man
+     *  normal nichts setzen kann, weil unter ihr kein Block, sondern der Spieler selbst steht.
+     *  Obsidian schiebt ein Kolben NICHT (Push-Reaktion BLOCK), die Deckung selbst bleibt also stehen.
+     *
+     *  Ausloeser ist bewusst NICHT "gar kein Schaden mehr moeglich": ist der Gegner komplett zugebaut,
+     *  laesst sich auch nichts mehr hineinschieben. Der reale Fall ist SCHWACHER Schaden - der Gegner
+     *  im Loch, erreichbar sind nur noch Plaetze zwei Bloecke entfernt am Rand.
+     *
+     *  Ablauf als Zustandsautomat, eine Aktion pro Tick (jede braucht ihre eigene Rotation):
+     *  1 = Obsidian-Unterlage am Rand, 2 = Crystal darauf, 3 = Kolben dahinter (zum Ziel ausgerichtet),
+     *  4 = Redstone-Block daneben -> Kolben faehrt aus, schiebt den Crystal ueber den Gegner,
+     *  CrystalAura zuendet ihn dort ganz normal.
+     *
+     *  Die Blickrichtung beim Kolbensetzen ist NICHT kosmetisch: Vanilla richtet einen Kolben nach
+     *  {@code getNearestLookingDirection().getOpposite()} aus, der Kopf zeigt also zum Spieler. Damit er
+     *  zum GEGNER zeigt, muss der Bot beim Setzen bewusst VOM Ziel weg schauen.
+     *  @return true, wenn diese Tick-Aktion die Piston-Aura war. */
+    private boolean runPistonAura(Player self, LivingEntity target, double dist) {
+        if (pistonCooldown > 0) pistonCooldown--;
+
+        // Ausloeser: seit >= 1.5s bringt KEINE Explosivoption mehr als PISTON_WEAK_DAMAGE, obwohl der
+        // Gegner in Reichweite ist - das ist die Signatur eines Gegners im Loch/unter Deckung.
+        double bestAvailable = Math.max(bestCrystalDmgCache, Math.max(bestAnchorDmgCache, bestBedDmgCache));
+        if (bestAvailable > PISTON_WEAK_DAMAGE || dist > 6.0) explosiveStarvedTicks = 0;
+        else explosiveStarvedTicks++;
+
+        if (pistonStage == 0) {
+            if (!pistonAura.get() || pistonCooldown > 0 || explosiveStarvedTicks < 40) return false;
+            if (!startPistonAura(self, target)) return false;
+        }
+
+        // Haengengeblieben (Block weggesprengt, Ziel weg, Reichweite verloren) -> abbrechen statt ewig warten
+        if (tickCounter - pistonStageTick > 40 || dist > 7.0) {
+            resetPistonAura();
+            return false;
+        }
+
+        switch (pistonStage) {
+            case 1 -> {
+                BlockPos base = pistonCrystalCell.below();
+                BlockState st = mc.level.getBlockState(base);
+                if (st.is(Blocks.OBSIDIAN) || st.is(Blocks.BEDROCK)) {
+                    pistonStage = 2;
+                    pistonStageTick = tickCounter;
+                    return false;
+                }
+                FindItemResult obsidian = InvHelper.find(Items.OBSIDIAN);
+                if (!obsidian.found()) {
+                    resetPistonAura();
+                    return false;
+                }
+                if (BlockUtils.place(base, obsidian, true, PRIORITY_CRYSTAL)) {
+                    pistonPartsByUs.add(base);
+                    pistonStage = 2;
+                    pistonStageTick = tickCounter;
+                }
+            }
+            case 2 -> {
+                if (!mc.level.getEntitiesOfClass(EndCrystal.class, new AABB(pistonCrystalCell)).isEmpty()) {
+                    pistonStage = 3;
+                    pistonStageTick = tickCounter;
+                    return false;
+                }
+                FindItemResult crystal = InvHelper.find(Items.END_CRYSTAL);
+                if (!crystal.found()) {
+                    resetPistonAura();
+                    return false;
+                }
+                Vec3 base = Vec3.atCenterOf(pistonCrystalCell.below());
+                rotateAndRun(Rotations.getYaw(base), Rotations.getPitch(base), PRIORITY_CRYSTAL, () -> {
+                    boolean swapped = InvUtils.swap(crystal.slot(), true);
+                    BlockUtils.interact(new BlockHitResult(base, Direction.UP, pistonCrystalCell.below(), false),
+                        InteractionHand.MAIN_HAND, true);
+                    if (swapped) InvUtils.swapBack();
+                });
+                pistonStage = 3;
+                pistonStageTick = tickCounter;
+            }
+            case 3 -> {
+                FindItemResult piston = InvHelper.find(Items.PISTON);
+                if (!piston.found()) piston = InvHelper.find(Items.STICKY_PISTON);
+                if (!piston.found() || !mc.level.getBlockState(pistonBodyCell).isAir()) {
+                    resetPistonAura();
+                    return false;
+                }
+                // Vom Ziel WEG schauen, damit der Kolbenkopf zum Ziel zeigt (siehe Javadoc oben).
+                float awayYaw = (float) (Rotations.getYaw(target.position()) + 180.0);
+                boolean queued = rotateAndRun(awayYaw, 0, PRIORITY_CRYSTAL, () -> {
+                    FindItemResult p = InvHelper.find(Items.PISTON).found()
+                        ? InvHelper.find(Items.PISTON) : InvHelper.find(Items.STICKY_PISTON);
+                    BlockUtils.place(pistonBodyCell, p, false, PRIORITY_CRYSTAL);
+                });
+                if (queued) {
+                    pistonPartsByUs.add(pistonBodyCell);
+                    pistonStage = 4;
+                    pistonStageTick = tickCounter;
+                }
+            }
+            case 4 -> {
+                FindItemResult redstone = InvHelper.find(Items.REDSTONE_BLOCK);
+                if (!redstone.found()) {
+                    resetPistonAura();
+                    return false;
+                }
+                BlockPos power = findPowerCell(pistonBodyCell);
+                if (power == null) {
+                    resetPistonAura();
+                    return false;
+                }
+                if (BlockUtils.place(power, redstone, true, PRIORITY_CRYSTAL)) {
+                    pistonPartsByUs.add(power);
+                    pistonCooldown = delay(60); // ausgefahren - CrystalAura uebernimmt das Zuenden
+                    resetPistonAura();
+                }
+            }
+        }
+        currentAction = "piston-aura";
+        return true;
+    }
+
+    /** Sucht die Geometrie fuer die Piston-Aura. Zielzelle des Schubs ist die Luftsaeule UEBER dem Kopf
+     *  des Gegners: dort steht unter der Zelle kein Block, sondern der Spieler selbst - genau deshalb
+     *  kann CrystalAura da nichts platzieren, obwohl es die wirksamste Stelle waere. Von dort aus wird
+     *  seitlich zurueckgerechnet: Crystal-Zelle am Rand (mit fester Unterlage), dahinter der Kolben. */
+    private boolean startPistonAura(Player self, LivingEntity target) {
+        // ALLE Bauteile vorab pruefen, nicht erst in der jeweiligen Stufe: sonst setzt der Automat
+        // Obsidian und einen Crystal und bricht danach mangels Kolben ab - ein verschenkter Crystal
+        // pro Versuch (live so beobachtet, bevor diese Pruefung da war).
+        if (!InvHelper.has(Items.END_CRYSTAL) || !InvHelper.has(Items.REDSTONE_BLOCK)) return false;
+        if (!InvHelper.has(Items.PISTON) && !InvHelper.has(Items.STICKY_PISTON)) return false;
+
+        // Schubziel von unten nach oben suchen: bei einem 1 Block tiefen Loch ist die Kopfzelle selbst
+        // seitlich offen, bei einem 2 Bloecke tiefen liegt die erste seitlich erreichbare Zelle eine
+        // Ebene HOEHER (auf Hoehe des umgebenden Bodens). Tiefer ist immer besser - naeher am Kopf.
+        for (int level = 1; level <= 2; level++) {
+            BlockPos pushTarget = target.blockPosition().above(level);
+            if (!mc.level.getBlockState(pushTarget).isAir()) continue;
+
+            for (Direction dir : Direction.Plane.HORIZONTAL) {
+                BlockPos crystalCell = pushTarget.relative(dir);
+                BlockPos bodyCell = crystalCell.relative(dir);
+                if (!mc.level.getBlockState(crystalCell).isAir()) continue;
+                if (!mc.level.getBlockState(crystalCell.above()).isAir()) continue; // End Crystal ist 2 Bloecke hoch
+                if (!mc.level.getBlockState(bodyCell).isAir()) continue;
+                // Unterlage fuer den Crystal: vorhandenes Obsidian/Bedrock oder eine freie Zelle, in die
+                // wir selbst Obsidian setzen koennen. Netherrack/Stein traegt keinen Crystal.
+                BlockState base = mc.level.getBlockState(crystalCell.below());
+                if (!base.is(Blocks.OBSIDIAN) && !base.is(Blocks.BEDROCK) && !base.isAir()) continue;
+                if (self.distanceToSqr(Vec3.atCenterOf(bodyCell)) > 4.5 * 4.5) continue;
+                if (self.distanceToSqr(Vec3.atCenterOf(crystalCell)) > 4.5 * 4.5) continue;
+
+                pistonCrystalCell = crystalCell;
+                pistonBodyCell = bodyCell;
+                pistonPushDir = dir.getOpposite(); // Schubrichtung: vom Kolben ueber den Gegner
+                if (findPowerCell(bodyCell) == null) continue;
+
+                pistonStage = 1;
+                pistonStageTick = tickCounter;
+                return true;
+            }
+        }
+        pistonCrystalCell = null;
+        pistonBodyCell = null;
+        pistonPushDir = null;
+        return false;
+    }
+
+    /** Freie, erreichbare Zelle direkt am Kolben, in die der Redstone-Block passt (nicht die
+     *  Schubrichtung selbst - dort steht der Crystal). */
+    private BlockPos findPowerCell(BlockPos pistonCell) {
+        for (Direction dir : Direction.values()) {
+            if (dir == pistonPushDir) continue;
+            BlockPos cell = pistonCell.relative(dir);
+            if (!mc.level.getBlockState(cell).isAir()) continue;
+            if (mc.player.distanceToSqr(Vec3.atCenterOf(cell)) > 4.5 * 4.5) continue;
+            if (!BlockUtils.canPlace(cell, true)) continue;
+            return cell;
+        }
+        return null;
+    }
+
+    private void resetPistonAura() {
+        pistonStage = 0;
+        pistonCrystalCell = null;
+        pistonBodyCell = null;
+        pistonPushDir = null;
+        explosiveStarvedTicks = 0;
+    }
+
     /** Notdeckung: platziert einen Obsidian-Block an einer offenen Seite, wenn kein natuerliches Loch da ist.
      *  Baut NIE in die Richtung des Ziels - sonst mauert sich der Bot die eigene Sichtlinie zu und kann
      *  weder Nahkampf noch Explosionen mehr landen (genau das erzeugte den "steht nur noch da"-Bug: der
@@ -3040,19 +3460,10 @@ public class GodmodePvP extends Module {
         FindItemResult obsidian = InvHelper.find(Items.OBSIDIAN);
         if (!obsidian.found()) return;
 
-        Vec3 toTarget = target.position().subtract(self.position());
-        net.minecraft.core.Direction towardTarget = null;
-        double bestDot = 0;
-        for (net.minecraft.core.Direction dir : net.minecraft.core.Direction.Plane.HORIZONTAL) {
-            double dot = dir.getStepX() * toTarget.x + dir.getStepZ() * toTarget.z;
-            if (dot > bestDot) {
-                bestDot = dot;
-                towardTarget = dir;
-            }
-        }
+        Direction towardTarget = horizontalDirTo(self, target);
 
         BlockPos feet = self.blockPosition();
-        for (net.minecraft.core.Direction dir : net.minecraft.core.Direction.Plane.HORIZONTAL) {
+        for (Direction dir : Direction.Plane.HORIZONTAL) {
             if (dir == towardTarget) continue;
             BlockPos side = feet.relative(dir);
             if (mc.level.getBlockState(side).isAir()) {
@@ -3714,6 +4125,10 @@ public class GodmodePvP extends Module {
         refill(Items.COBWEB, minWeb.get());
         if (bedsExplodeHere()) refill(GodmodePvP::isBed, minBeds.get());
         refill(GodmodePvP::isHealingSplash, minHealPotionsStock.get());
+        // Piston-Aura-Bauteile in die Hotbar nachziehen. refill() tut nichts, wenn gar keine da
+        // sind - wer ohne Kolben/Redstone spielt, verliert dadurch also keinen Hotbar-Slot.
+        refill(Items.PISTON, 1);
+        refill(Items.REDSTONE_BLOCK, 1);
 
         int totems = totalItem(Items.TOTEM_OF_UNDYING);
         if (totems < 6 && !warnedLowTotems) {
