@@ -768,6 +768,15 @@ public class GodmodePvP extends Module {
     /** Betten, die der Bot SELBST gelegt hat - alles andere in Reichweite ist ein feindliches Bett und
      *  wird von anti-bed abgebaut statt abgewartet. Analog zu anchorsChargedByUs. */
     private final java.util.Set<BlockPos> bedsPlacedByUs = new java.util.HashSet<>();
+
+    // Manuelles Feuer-Durchlaufen (siehe fireWalkAllowed/walkThroughFire): nur im Nahbereich, nur
+    // solange es Boden gutmacht - sonst gehoert die Bewegung Baritone.
+    private static final double FIRE_WALK_MAX_DIST = 6.0;
+    private static final int FIRE_WALK_PATIENCE = 20;      // 1s ohne Annaeherung reicht als Urteil
+    private static final int FIRE_WALK_BLOCK_TICKS = 100;  // danach 5s lang wieder Baritone
+    private int fireWalkStartTick = -1;
+    private int fireWalkBlockedUntil;
+    private double fireWalkStartDist;
     /** Eigene Piston-Aura-Bauteile - damit anti-piston nicht die eigene Maschine wieder abreisst. */
     private final java.util.Set<BlockPos> pistonPartsByUs = new java.util.HashSet<>();
     /** Wie lange in Folge KEINE Explosivoption mehr Schaden am Ziel bringt (Gegner eingegraben/in
@@ -864,6 +873,9 @@ public class GodmodePvP extends Module {
         hpAtHealWindowStart = -999;
         healWindowStartTick = -999;
         healPotionCooldown = 0;
+        fireWalkStartTick = -1;
+        fireWalkBlockedUntil = 0;
+        fireWalkStartDist = 0;
         healingUntilFull = false;
         drinkingFireRes = false;
         fireResStartTick = -999;
@@ -1133,6 +1145,7 @@ public class GodmodePvP extends Module {
         // echte Aktion lief, ist der Tail-Flush ohnehin ueberfluessig (naechster Tick berechnet
         // pendingFreeLook frisch neu) - jetzt wird er dann komplett uebersprungen statt nur mit
         // niedrigerer Prioritaet trotzdem ein zweites Rotations-Paket zu senden.
+
         if (pendingFreeLook && rotationsThisTick == 0) {
             rotateAndRun(pendingFreeLookYaw, pendingFreeLookPitch, PRIORITY_LOOK, null);
         }
@@ -1460,8 +1473,8 @@ public class GodmodePvP extends Module {
             currentAction = "rueckzugsschritt";
         } else if (flying) {
             updateFollow(target);
-        } else if (ignoreFire.get() && fireBlocksPath(self, target)) {
-            walkThroughFire(target);
+        } else if (fireWalkAllowed(dist) && fireBlocksPath(self, target)) {
+            walkThroughFire(self, target, dist);
             currentAction = "feuer-durchqueren";
         } else if (!updateHolePositioning(target, dist)) {
             updateFollow(target);
@@ -2822,17 +2835,46 @@ public class GodmodePvP extends Module {
         return block == Blocks.FIRE || block == Blocks.SOUL_FIRE;
     }
 
+    /** Darf das manuelle Feuer-Durchlaufen diesen Tick uebernehmen? Zwei harte Schranken, beide aus einem
+     *  live reproduzierten Totalausfall heraus: der Bot stand mit einem passiven Gegner 16.5 Bloecke
+     *  entfernt ueber 13 Sekunden bewegungslos in "feuer-durchqueren" (Eigengeschwindigkeit exakt 0.00).
+     *  Ursache: nach den ersten Anchor-/Crystal-Explosionen brennt die halbe Umgebung, fireBlocksPath()
+     *  meldet also praktisch dauerhaft Feuer, dieser Zweig kappt Baritone (cancelFollow) und drueckt
+     *  stattdessen blind "W" Richtung Ziel - gegen eine Wand/Kraterkante laeuft der Bot damit fuer immer
+     *  ins Leere, waehrend Baritone laengst drumherum gefunden haette.
+     *  1. Nur im Nahbereich: weiter weg ist Pfadsuche IMMER besser als blind geradeaus.
+     *  2. Nur solange es etwas bringt: kommt der Bot nicht naeher, uebernimmt wieder Baritone. */
+    private boolean fireWalkAllowed(double dist) {
+        if (!ignoreFire.get()) return false;
+        if (dist > FIRE_WALK_MAX_DIST) return false;
+        return tickCounter >= fireWalkBlockedUntil;
+    }
+
     /** Baritone weigert sich hart, durch Feuer zu pathen - dafuer kurz manuell geradeaus durchlaufen,
-     *  der Schaden ist minimal verglichen mit dem, was der Bot sonst schon wegsteckt. */
-    private void walkThroughFire(LivingEntity target) {
+     *  der Schaden ist minimal verglichen mit dem, was der Bot sonst schon wegsteckt. Bricht selbst ab,
+     *  sobald das Durchlaufen ueber FIRE_WALK_PATIENCE Ticks keinen Boden gutgemacht hat. */
+    private void walkThroughFire(Player self, LivingEntity target, double dist) {
+        if (fireWalkStartTick < 0 || tickCounter - fireWalkStartTick > FIRE_WALK_PATIENCE) {
+            // Neues Fenster beginnen bzw. das abgelaufene auswerten.
+            if (fireWalkStartTick >= 0 && dist > fireWalkStartDist - 0.5) {
+                // Kein Fortschritt (oder sogar weiter weg) - Zweig fuer eine Weile sperren, Baritone
+                // bekommt die Bewegung zurueck und routet um das Feuer herum.
+                fireWalkBlockedUntil = tickCounter + FIRE_WALK_BLOCK_TICKS;
+                fireWalkStartTick = -1;
+                return;
+            }
+            fireWalkStartTick = tickCounter;
+            fireWalkStartDist = dist;
+        }
+
         cancelFollow();
         Vec3 center = target.getBoundingBox().getCenter();
-        mc.player.setYRot((float) Rotations.getYaw(center));
+        self.setYRot((float) Rotations.getYaw(center));
         Input.setKeyState(mc.options.keyUp, true);
         Input.setKeyState(mc.options.keySprint, true);
         // Auto-Sprung ueber Stufen/Kanten im Weg - sonst bleibt die manuelle Geradeaus-Bewegung
         // (ohne Baritones Pfadberechnung) an jedem kleinen Hoehenunterschied haengen.
-        Input.setKeyState(mc.options.keyJump, mc.player.horizontalCollision && mc.player.onGround());
+        Input.setKeyState(mc.options.keyJump, self.horizontalCollision && self.onGround());
     }
 
     private void updateFollow(LivingEntity target) {
@@ -3826,13 +3868,19 @@ public class GodmodePvP extends Module {
             yaw = Rotations.getYaw(aimAt) + 180.0;
             pitch = -35; // steilerer Bogen als vorher (-20 war zu flach - Perle blieb oft am Boden/Hindernis haengen)
         } else if (aimAt != null) {
-            // Auf einen bewegten (v.a. in der Luft befindlichen, fallenden/geworfenen) Gegner reicht die
-            // aktuelle Position als Zielpunkt nicht - die Perle braucht je nach Distanz oft 0.5-2s Flugzeit,
-            // in der sich das Ziel spuerbar weiterbewegt (Ursache fuer "Perlen sind nicht akkurat, wenn der
-            // Gegner in der Luft ist"). Iteriert kurz zwischen "Pitch fuer den aktuellen Zielpunkt loesen"
-            // und "Zielpunkt anhand der dabei ermittelten Flugzeit neu vorhersagen" - konvergiert in der
-            // Praxis nach 2-3 Runden, da die Korrektur pro Runde schnell kleiner wird.
+            // Zwei Fehlerquellen, die beide eingerechnet werden muessen:
+            // 1. Zielbewegung: die Perle braucht je nach Distanz 0.5-2s Flugzeit. Deshalb wird abwechselnd
+            //    der Wurf fuer den aktuellen Zielpunkt geloest und der Zielpunkt mit der dabei berechneten
+            //    Flugzeit neu vorhergesagt (konvergiert nach 2-3 Runden).
+            // 2. EIGENbewegung: Minecraft addiert die Geschwindigkeit des Werfers auf die Perle
+            //    (getKnownMovement(), Y nur wenn nicht am Boden). Der Bot wirft praktisch immer im Sprint,
+            //    das sind bis zu 0.3 Bloecke/Tick gegen eine Wurfgeschwindigkeit von 1.5 - nachgerechnet
+            //    im Mittel 2.68 Bloecke Zielfehler, 82% der Wuerfe mehr als einen Block daneben. Genau das
+            //    war die Ursache der "Perlen liegen nicht akkurat"-Meldung; solvePearlAim korrigiert
+            //    dafuer sowohl Pitch als auch Yaw.
             Vec3 from = mc.player.getEyePosition().subtract(0, 0.1, 0);
+            Vec3 own = mc.player.getKnownMovement();
+            Vec3 extraVel = new Vec3(own.x, mc.player.onGround() ? 0 : own.y, own.z);
             // predictOverTicks() arbeitet mit der rohen Entity-Position (Fuesse) - dieselbe Referenz wie
             // fuer D-Tap/Crystal-Bodensuche anderswo im File. Ohne diesen Offset wuerde jede verfeinerte
             // Iteration nach der ersten leise auf Fusshoehe statt Koerpermitte zielen (~0.9 Bloecke zu
@@ -3840,25 +3888,17 @@ public class GodmodePvP extends Module {
             // Iteration laeuft trotzdem) systematisch zu flach/kurz.
             Vec3 centerOffset = aimAt.getBoundingBox().getCenter().subtract(aimAt.position());
             Vec3 aimPoint = aimAt.getBoundingBox().getCenter();
-            double[] arrivalTicks = {0};
-            yaw = Rotations.getYaw(aimPoint);
-            pitch = PvpMath.solvePearlPitch(from, yaw, aimPoint, arrivalTicks);
-            for (int i = 0; i < 2 && !Double.isNaN(pitch); i++) {
-                aimPoint = predictOverTicks(aimAt, (int) Math.round(arrivalTicks[0])).add(centerOffset);
-                yaw = Rotations.getYaw(aimPoint);
-                pitch = PvpMath.solvePearlPitch(from, yaw, aimPoint, arrivalTicks);
+            double[] aim = PvpMath.solvePearlAim(from, aimPoint, extraVel);
+            for (int i = 0; i < 2 && aim != null; i++) {
+                aimPoint = predictOverTicks(aimAt, (int) Math.round(aim[2])).add(centerOffset);
+                aim = PvpMath.solvePearlAim(from, aimPoint, extraVel);
             }
-            // Hinweis nach Live-Untersuchung (yaw/pitch/Rotation bei Wurf-Ausfuehrung ueber mehrere
-            // Wuerfe hinweg geprueft - Berechnung und tatsaechlich gesetzte Rotation stimmten JEDES Mal
-            // exakt ueberein, auch beim allerersten Wurf einer frischen Session): Minecraft wirft
-            // EnderPearlItem serverseitig mit shootFromRotation(..., inaccuracy=1.0F) - genau wie
-            // Schneebaelle/Eier/Traenke hat JEDER Perlwurf eine vom Server angewandte Zufallsstreuung,
-            // unabhaengig vom Client-Aim. Ein gelegentlich daneben landender Wurf trotz korrekt
-            // berechnetem yaw/pitch ist dieser eingebaute Vanilla-Streufaktor, kein Bug hier.
-            // Ziel physisch ausserhalb der Perlen-Reichweite (z.B. gerade sehr hoch explosionsgeschleudert,
-            // steiler Wurf noetig als selbst ein Pitch von -90 hergibt) - lieber die Perle sparen als sie
-            // sicher danebenzuwerfen. Naechster Tick probiert es mit der dann aktuellen Position erneut.
-            if (Double.isNaN(pitch)) return;
+            if (aim == null) return; // ausserhalb der physischen Perlenreichweite - Perle sparen
+            yaw = aim[0];
+            pitch = aim[1];
+            // Restliche Streuung ist Vanilla, kein Bug hier: Minecraft wirft EnderPearlItem serverseitig
+            // mit shootFromRotation(..., inaccuracy=1.0F) - jeder Wurf bekommt eine kleine Zufallsstreuung
+            // vom Server, unabhaengig vom Client-Aim.
         } else {
             return;
         }
@@ -3942,6 +3982,14 @@ public class GodmodePvP extends Module {
         if (feet.equals(mc.player.blockPosition())) return; // sonst web(t) sich der Bot bei Ueberlappung selbst ein
         if (!mc.level.getBlockState(feet).isAir()) return;
         if (!mc.level.getBlockState(feet.below()).blocksMotion()) return;
+
+        // Nur ein Ziel bremsen, das sich ueberhaupt bewegt. Ein stehender Gegner (Dummy, campender
+        // Spieler, jemand der gar nicht angreift) gewinnt durch das Web nichts fuer uns - es liegt dann
+        // aber mitten in unserem eigenen Anmarschweg und bremst ausgerechnet den Bot aus, der da noch
+        // hinlaufen will. Genau die Beobachtung aus dem Feld: "er perlt hin, setzt ein Web, danach
+        // passiert nichts".
+        Vec3 targetVel = velocities.getOrDefault(target.getUUID(), Vec3.ZERO);
+        if (targetVel.horizontalDistance() < 0.05) return;
 
         FindItemResult web = InvHelper.find(Items.COBWEB);
         if (web.found()) BlockUtils.place(feet, web, true, 50);

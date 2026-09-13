@@ -73,96 +73,110 @@ class PvpMathTest {
         assertEquals(0f, PvpMath.clampAbs(-5f, 0f), 1e-6);
     }
 
-    // ---------- simulatePearlHeightAt ----------
+    // ---------- simulatePearl ----------
 
     @Test
-    void simulatePearlHeightAtLevelThrowFallsBelowStart() {
+    void simulatePearlLevelThrowFallsBelowStart() {
         // Waagerecht geworfen (pitch=0) faellt eine Perle unter Wurfhoehe, sobald sie ueberhaupt eine
         // spuerbare Distanz erreicht - reine Schwerkraftwirkung ohne Aufwaertskomponente.
-        double height = PvpMath.simulatePearlHeightAt(0, 0, 10, null);
-        assertFalse(Double.isNaN(height));
-        assertTrue(height < 0, "Waagerechter Wurf sollte unter Starthoehe landen, war " + height);
+        PvpMath.PearlArrival hit = PvpMath.simulatePearl(0, 0, Vec3.ZERO, 10, 0, 1);
+        assertNotNull(hit);
+        assertTrue(hit.height() < 0, "Waagerechter Wurf sollte unter Starthoehe landen, war " + hit.height());
     }
 
     @Test
-    void simulatePearlHeightAtSteeperPitchLandsHigher() {
+    void simulatePearlSteeperPitchLandsHigher() {
         // Ein steilerer (weiter nach oben gerichteter, also negativerer Pitch in Minecrafts Konvention)
         // Wurf muss bei GLEICHER horizontaler Zieldistanz hoeher landen als ein flacherer.
-        double flat = PvpMath.simulatePearlHeightAt(0, -10, 15, null);
-        double steep = PvpMath.simulatePearlHeightAt(0, -40, 15, null);
-        assertFalse(Double.isNaN(flat));
-        assertFalse(Double.isNaN(steep));
-        assertTrue(steep > flat, "steep=" + steep + " sollte > flat=" + flat + " sein");
+        PvpMath.PearlArrival flat = PvpMath.simulatePearl(0, -10, Vec3.ZERO, 15, 0, 1);
+        PvpMath.PearlArrival steep = PvpMath.simulatePearl(0, -40, Vec3.ZERO, 15, 0, 1);
+        assertNotNull(flat);
+        assertNotNull(steep);
+        assertTrue(steep.height() > flat.height(),
+            "steep=" + steep.height() + " sollte > flat=" + flat.height() + " sein");
     }
 
     @Test
-    void simulatePearlHeightAtReturnsNaNWhenDistanceUnreachable() {
-        // Senkrecht nach oben (pitch=-90) hat keinerlei horizontale Geschwindigkeitskomponente -
-        // jede horizontale Zieldistanz > 0 ist unerreichbar.
-        double height = PvpMath.simulatePearlHeightAt(0, -90, 20, null);
-        assertTrue(Double.isNaN(height));
+    void simulatePearlAddsThrowerVelocity() {
+        // Minecraft addiert die Eigenbewegung des Werfers auf die Perle - mit Rueckenwind ist sie an
+        // derselben Zieldistanz frueher da als aus dem Stand.
+        PvpMath.PearlArrival still = PvpMath.simulatePearl(0, 0, Vec3.ZERO, 15, 0, 1);
+        PvpMath.PearlArrival running = PvpMath.simulatePearl(0, 0, new Vec3(0, 0, 0.28), 15, 0, 1);
+        assertNotNull(still);
+        assertNotNull(running);
+        assertTrue(running.ticks() < still.ticks(),
+            "mit Eigenbewegung sollte die Perle frueher ankommen: " + running.ticks() + " vs " + still.ticks());
     }
 
     @Test
-    void simulatePearlHeightAtWritesArrivalTicksWhenReached() {
-        double[] arrival = {-1};
-        double height = PvpMath.simulatePearlHeightAt(0, 0, 5, arrival);
-        assertFalse(Double.isNaN(height));
-        assertTrue(arrival[0] > 0, "Ankunfts-Tick sollte positiv sein, war " + arrival[0]);
+    void simulatePearlReachesTargetDistanceAndReportsFlightTime() {
+        PvpMath.PearlArrival hit = PvpMath.simulatePearl(0, 0, Vec3.ZERO, 5, 0, 1);
+        assertNotNull(hit);
+        assertTrue(hit.ticks() > 0, "Ankunfts-Tick sollte positiv sein, war " + hit.ticks());
     }
 
     @Test
-    void simulatePearlHeightAtWritesSaturatedArrivalTicksWhenUnreached() {
-        double[] arrival = {-1};
-        double height = PvpMath.simulatePearlHeightAt(0, -90, 20, arrival);
-        assertTrue(Double.isNaN(height));
-        assertEquals(300, arrival[0], 1e-9);
+    void simulatePearlReturnsNullWhenDistanceNeverReached() {
+        // Senkrecht nach oben geworfen: die horizontale Zieldistanz wird nie erreicht.
+        assertNull(PvpMath.simulatePearl(0, -90, Vec3.ZERO, 20, 0, 1));
     }
 
-    // ---------- solvePearlPitch ----------
+    // ---------- solvePearlAim ----------
 
     @Test
-    void solvePearlPitchAtOwnFeetNeedsNoBallistics() {
-        Vec3 from = new Vec3(0, 64, 0);
-        Vec3 to = new Vec3(0.1, 64, 0.1); // < 0.5 Bloecke horizontale Distanz
-        double pitch = PvpMath.solvePearlPitch(from, 0, to, null);
-        assertFalse(Double.isNaN(pitch));
+    void solvePearlAimAtOwnFeetNeedsNoBallistics() {
+        double[] aim = PvpMath.solvePearlAim(new Vec3(0, 64, 0), new Vec3(0.1, 64, 0.1), Vec3.ZERO);
+        assertNotNull(aim);
     }
 
     @Test
-    void solvePearlPitchOnSameLevelIsShallowNegative() {
-        // Ziel auf gleicher Hoehe, normale Wurfdistanz: die geloeste Ballistik-Pitch muss leicht nach
-        // oben zeigen (negativ in Minecrafts Konvention), um den Hoehenverlust durch Schwerkraft
-        // waehrend des Flugs auszugleichen - nicht einfach der direkte 0-Grad-Blick.
-        Vec3 from = new Vec3(0, 64, 0);
-        Vec3 to = new Vec3(12, 64, 0);
-        double pitch = PvpMath.solvePearlPitch(from, 0, to, null);
-        assertFalse(Double.isNaN(pitch));
-        assertTrue(pitch < 0, "Pitch sollte negativ (nach oben) sein, war " + pitch);
+    void solvePearlAimOnSameLevelAimsUpwards() {
+        // Ziel auf gleicher Hoehe, normale Wurfdistanz: der geloeste Pitch muss leicht nach oben zeigen
+        // (negativ in Minecrafts Konvention), um den Hoehenverlust durch die Schwerkraft auszugleichen.
+        double[] aim = PvpMath.solvePearlAim(new Vec3(0, 64, 0), new Vec3(12, 64, 0), Vec3.ZERO);
+        assertNotNull(aim);
+        assertTrue(aim[1] < 0, "Pitch sollte negativ (nach oben) sein, war " + aim[1]);
     }
 
     @Test
-    void solvePearlPitchResultActuallyLandsAtTarget() {
-        // End-zu-Ende-Check: die geloeste Pitch, erneut durch simulatePearlHeightAt gejagt, muss
-        // tatsaechlich nahe der Ziel-Hoehendifferenz landen (bisektionsbedingte Toleranz).
+    void solvePearlAimLandsAtTargetWhileStandingStill() {
         Vec3 from = new Vec3(0, 70, 0);
         Vec3 to = new Vec3(0, 65, 18); // 5 Bloecke tiefer, 18 Bloecke entfernt
-        double yaw = 0;
-        double pitch = PvpMath.solvePearlPitch(from, yaw, to, null);
-        assertFalse(Double.isNaN(pitch));
+        double[] aim = PvpMath.solvePearlAim(from, to, Vec3.ZERO);
+        assertNotNull(aim);
 
-        double landedHeight = PvpMath.simulatePearlHeightAt(yaw, pitch, 18, null);
-        double expectedDy = to.y - from.y;
-        assertEquals(expectedDy, landedHeight, 0.5, "geloeste Pitch landet nicht nahe der Zielhoehe");
+        PvpMath.PearlArrival hit = PvpMath.simulatePearl(aim[0], aim[1], Vec3.ZERO, 18, 0, 1);
+        assertNotNull(hit);
+        assertEquals(to.y - from.y, hit.height(), 0.1, "geloester Wurf landet nicht auf Zielhoehe");
+        assertEquals(0, hit.lateral(), 0.1, "geloester Wurf hat Seitenversatz");
     }
 
     @Test
-    void solvePearlPitchReturnsNaNWhenTargetPhysicallyUnreachable() {
-        // Extrem hoch UND extrem nah: selbst der steilste erlaubte Wurf (Pitch nahe -90) kann die
-        // Zielhoehe bei dieser Distanz nicht erreichen.
+    void solvePearlAimCompensatesOwnMovement() {
+        // Kern des behobenen Fehlers: Minecraft addiert die Eigenbewegung des Werfers auf die Perle.
+        // Ein im Sprint quer zur Wurfrichtung geworfener Ball muss trotzdem ins Ziel gehen - deshalb
+        // korrigiert der Loeser auch den Yaw, nicht nur den Pitch.
         Vec3 from = new Vec3(0, 64, 0);
-        Vec3 to = new Vec3(1, 200, 1);
-        double pitch = PvpMath.solvePearlPitch(from, 0, to, null);
-        assertTrue(Double.isNaN(pitch));
+        Vec3 to = new Vec3(0, 64, 20);
+        Vec3 sprintSideways = new Vec3(0.28, 0, 0);
+
+        double[] aim = PvpMath.solvePearlAim(from, to, sprintSideways);
+        assertNotNull(aim);
+        PvpMath.PearlArrival hit = PvpMath.simulatePearl(aim[0], aim[1], sprintSideways, 20, 0, 1);
+        assertNotNull(hit);
+        assertEquals(0, hit.height(), 0.1);
+        assertEquals(0, hit.lateral(), 0.1, "Seitenversatz durch Eigenbewegung nicht auskorrigiert");
+
+        // Gegenprobe: ohne Kompensation (direkt aufs Ziel gezielt) landet derselbe Wurf klar daneben.
+        PvpMath.PearlArrival naive = PvpMath.simulatePearl(0, aim[1], sprintSideways, 20, 0, 1);
+        assertNotNull(naive);
+        assertTrue(Math.abs(naive.lateral()) > 1.0,
+            "unkompensierter Wurf sollte deutlich daneben liegen, war " + naive.lateral());
+    }
+
+    @Test
+    void solvePearlAimReturnsNullWhenTargetPhysicallyUnreachable() {
+        // Extrem hoch UND extrem nah: selbst der steilste erlaubte Wurf erreicht die Zielhoehe nicht.
+        assertNull(PvpMath.solvePearlAim(new Vec3(0, 64, 0), new Vec3(1, 200, 1), Vec3.ZERO));
     }
 }

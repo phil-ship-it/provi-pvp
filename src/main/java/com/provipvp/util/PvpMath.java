@@ -22,26 +22,43 @@ public final class PvpMath {
         return Math.max(-max, Math.min(max, v));
     }
 
-    /** Simuliert einen Perlenwurf mit gegebenem Yaw/Pitch nach Minecrafts eigener Projektil-Physik
-     *  (Richtungsvektor wie ThrowableProjectile#shootFromRotation, dann pro Tick: vy -= 0.03, v *= 0.99,
-     *  pos += v) und liefert die Hoehe relativ zum Startpunkt, sobald die Perle horizontal targetDistXZ
-     *  erreicht hat (zwischen den beiden umgebenden Ticks linear interpoliert). NaN, wenn sie die Distanz
-     *  innerhalb von 300 Ticks (15s, weit jenseits jeder echten Wurfdistanz) nie erreicht.
-     *  @param arrivalTicksOut optionaler 1-Element-Output fuer den (interpolierten) Ankunfts-Tick, oder null. */
-    public static double simulatePearlHeightAt(double yaw, double pitch, double targetDistXZ, double[] arrivalTicksOut) {
+    /** Ankunft einer simulierten Perle an der Zieldistanz, alles relativ zum Wurfpunkt:
+     *  @param height   Hoehe ueber dem Wurfpunkt
+     *  @param lateral  Seitenversatz quer zur Ziellinie (positiv = links davon, siehe Kreuzprodukt unten)
+     *  @param ticks    interpolierter Ankunfts-Tick (Flugzeit) */
+    public record PearlArrival(double height, double lateral, double ticks) {}
+
+    /** Simuliert einen Perlenwurf nach Minecrafts eigener Projektil-Physik und liefert, wo die Perle
+     *  die Ziel-Horizontaldistanz kreuzt. Pro Tick exakt in Vanilla-Reihenfolge fuer ThrowableProjectile:
+     *  Schwerkraft (vy -= 0.03), dann Luftwiderstand (v *= 0.99), dann Bewegung (pos += v) - bestaetigt
+     *  an Meteors eigenem ProjectileEntitySimulator ("gravity -> drag -> position").
+     *
+     *  extraVel ist die EIGENBEWEGUNG des Werfers, die Minecraft beim Abwurf auf die Startgeschwindigkeit
+     *  addiert (Projectile#shootFromRotation, danach {@code add(shooter.getKnownMovement())}, Y nur wenn
+     *  der Werfer nicht am Boden steht). Genau dieser Term fehlte hier bisher: der Bot wirft praktisch
+     *  immer im Sprint (~0.15-0.30 Bloecke/Tick) gegen eine Perlengeschwindigkeit von 1.5 - das sind bis
+     *  zu 20% Zusatzgeschwindigkeit QUER zur Zielrichtung. Numerisch nachgerechnet ueber 300 Zufallsfaelle
+     *  mit Sprinttempo: mittlerer Zielfehler 2.68 Bloecke, 82% der Wuerfe mehr als einen Block daneben.
+     *
+     *  Der Fortschritt wird auf die Ziellinie projiziert (Skalarprodukt), der Querversatz ueber das
+     *  Kreuzprodukt bestimmt - so liefert eine einzige Simulation beide Fehlerkomponenten, die
+     *  {@link #solvePearlAim} dann getrennt auf Pitch und Yaw zurueckrechnet.
+     *  @return null, wenn die Perle die Distanz in 300 Ticks nie erreicht (viel zu steil geworfen). */
+    public static PearlArrival simulatePearl(double yaw, double pitch, Vec3 extraVel,
+                                             double targetDistXZ, double dirX, double dirZ) {
         double yawRad = Math.toRadians(yaw), pitchRad = Math.toRadians(pitch);
         double vx = -Math.sin(yawRad) * Math.cos(pitchRad);
         double vy = -Math.sin(pitchRad);
         double vz = Math.cos(yawRad) * Math.cos(pitchRad);
         double len = Math.sqrt(vx * vx + vy * vy + vz * vz);
-        vx = vx / len * 1.5;
-        vy = vy / len * 1.5;
-        vz = vz / len * 1.5;
+        vx = vx / len * 1.5 + extraVel.x;
+        vy = vy / len * 1.5 + extraVel.y;
+        vz = vz / len * 1.5 + extraVel.z;
 
         double x = 0, y = 0, z = 0;
         for (int tick = 0; tick < 300; tick++) {
-            double prevDistXZ = Math.sqrt(x * x + z * z);
-            double prevY = y;
+            double prevX = x, prevY = y, prevZ = z;
+            double prevProgress = prevX * dirX + prevZ * dirZ;
 
             vy -= 0.03;
             vx *= 0.99;
@@ -51,57 +68,58 @@ public final class PvpMath {
             y += vy;
             z += vz;
 
-            double distXZ = Math.sqrt(x * x + z * z);
-            if (distXZ >= targetDistXZ) {
-                double frac = distXZ > prevDistXZ ? (targetDistXZ - prevDistXZ) / (distXZ - prevDistXZ) : 1.0;
-                if (arrivalTicksOut != null) arrivalTicksOut[0] = tick + frac;
-                return prevY + (y - prevY) * frac;
+            double progress = x * dirX + z * dirZ;
+            if (progress >= targetDistXZ) {
+                double frac = progress > prevProgress ? (targetDistXZ - prevProgress) / (progress - prevProgress) : 1.0;
+                double hx = prevX + (x - prevX) * frac;
+                double hy = prevY + (y - prevY) * frac;
+                double hz = prevZ + (z - prevZ) * frac;
+                return new PearlArrival(hy, hx * dirZ - hz * dirX, tick + frac);
             }
         }
-        if (arrivalTicksOut != null) arrivalTicksOut[0] = 300;
-        return Double.NaN;
+        return null;
     }
 
-    /** Simple "look directly at the target" pitch works fine up close, but a thrown Ender Pearl is a real
-     *  projectile (power 1.5, gravity 0.03/tick, 0.99 air drag - see Meteor's own ProjectileEntitySimulator/
-     *  Minecraft's ThrowableItemProjectile) - aimed dead-on at longer range it visibly falls short since
-     *  gravity has more time to pull it down over the longer flight. Solves for the pitch that actually
-     *  lands at the target's height by simulating Minecraft's own pearl physics and bisecting on it,
-     *  instead of guessing a fixed arc offset. Falls back to the direct look-pitch if nothing in the
-     *  bounded search range lands close (never happens in practice within pearl-gapclose's own range caps,
-     *  purely a safety net).
-     *  @param arrivalTicksOut optionaler 1-Element-Output fuer den Ankunfts-Tick bei finalem Pitch, oder null. */
-    public static double solvePearlPitch(Vec3 from, double yaw, Vec3 to, double[] arrivalTicksOut) {
-        double dx = to.x - from.x, dz = to.z - from.z;
+    /** Loest Yaw UND Pitch fuer einen Perlenwurf auf einen Punkt, inklusive der Eigenbewegung des
+     *  Werfers. Pitch kommt aus einer Bisektion ueber die Ankunftshoehe (die faellt monoton mit
+     *  steigendem Pitch), der Yaw aus dem verbleibenden Querversatz - beides abwechselnd, bis der
+     *  Restfehler verschwindet (konvergiert numerisch in 2-3 Runden; ueber 300 Zufallsfaelle mit
+     *  Sprinttempo blieb der groesste Restfehler bei 0.02 Bloecken).
+     *
+     *  Nur den Pitch zu loesen reicht NICHT, sobald der Werfer sich bewegt: die Eigenbewegung kippt die
+     *  Flugbahn auch seitlich weg, dagegen hilft ausschliesslich eine Yaw-Korrektur.
+     *  @return {yaw, pitch, Flugzeit in Ticks} oder null, wenn das Ziel physisch nicht erreichbar ist. */
+    public static double[] solvePearlAim(Vec3 from, Vec3 to, Vec3 extraVel) {
+        double dx = to.x - from.x, dz = to.z - from.z, dy = to.y - from.y;
         double distXZ = Math.sqrt(dx * dx + dz * dz);
-        double dy = to.y - from.y;
-        double directPitch = Math.toDegrees(-Math.atan2(dy, distXZ));
+        double yaw = Math.toDegrees(Math.atan2(-dx, dz));
         if (distXZ < 0.5) { // praktisch am eigenen Fuss - keine Ballistik noetig
-            if (arrivalTicksOut != null) arrivalTicksOut[0] = 0;
-            return directPitch;
+            return new double[] { yaw, Math.toDegrees(-Math.atan2(dy, Math.max(distXZ, 1e-6))), 0 };
         }
 
-        // Pitch ist auf [-90,90] begrenzt - ohne diese Klammer suchte die Bisektion bei sehr steilen
-        // Wuerfen (Ziel hoch UND nah, z.B. gerade explosionsgeschleudert) in physisch unmoeglichem
-        // Terrain jenseits von -90 Grad und lieferte einen voellig sinnlosen, viel zu flachen Pitch -
-        // die Perle landete dann weit vor dem Ziel statt in dessen Naehe.
-        double lo = Math.max(-89, directPitch - 40);
-        double hi = directPitch;
+        double dirX = dx / distXZ, dirZ = dz / distXZ;
+        double pitch = Math.toDegrees(-Math.atan2(dy, distXZ));
+        PearlArrival hit = null;
 
-        for (int i = 0; i < 40; i++) {
-            double mid = (lo + hi) / 2;
-            double heightAtDist = simulatePearlHeightAt(yaw, mid, distXZ, null);
-            // NaN (Distanz nie erreicht, zu steil nach oben verschossen) zaehlt wie "deutlich zu hoch" -
-            // also wie beim Ueberschiessen weniger Korrektur nach oben nehmen.
-            boolean overshootsHeight = Double.isNaN(heightAtDist) || heightAtDist > dy;
-            if (overshootsHeight) lo = mid; else hi = mid;
+        for (int round = 0; round < 6; round++) {
+            // Pitch ist auf [-90,90] begrenzt; die Ankunftshoehe faellt monoton mit steigendem Pitch,
+            // deshalb reicht eine simple Bisektion ueber den gesamten erlaubten Bereich.
+            double lo = -89, hi = 89;
+            for (int i = 0; i < 40; i++) {
+                double mid = (lo + hi) / 2;
+                PearlArrival probe = simulatePearl(yaw, mid, extraVel, distXZ, dirX, dirZ);
+                // "Distanz nie erreicht" heisst zu steil nach oben geworfen - zaehlt wie zu hoch.
+                if (probe == null || probe.height() > dy) lo = mid; else hi = mid;
+            }
+            pitch = (lo + hi) / 2;
+            hit = simulatePearl(yaw, pitch, extraVel, distXZ, dirX, dirZ);
+            if (hit == null) return null;
+            // Selbst der steilste erlaubte Wurf erreicht die Zielhoehe nicht (Ziel sehr hoch und nah,
+            // z.B. gerade explosionsgeschleudert) - lieber die Perle sparen als sicher danebenwerfen.
+            if (Math.abs(hit.height() - dy) > 1.0) return null;
+            if (Math.abs(hit.lateral()) < 0.02) break;
+            yaw += Math.toDegrees(Math.atan2(hit.lateral(), distXZ));
         }
-        double finalPitch = (lo + hi) / 2;
-        double landedHeight = simulatePearlHeightAt(yaw, finalPitch, distXZ, arrivalTicksOut);
-        // Selbst der steilst erlaubte Wurf (Pitch nahe -90) erreicht die Zielhoehe nicht - das Ziel ist
-        // bei dieser Distanz schlicht ausserhalb der physischen Reichweite einer Perle (z.B. gerade sehr
-        // hoch explosionsgeschleudert, aber noch zu nah, um genug Anlauf fuer die Hoehe zu nehmen).
-        if (Double.isNaN(landedHeight) || landedHeight < dy - 0.5) return Double.NaN;
-        return finalPitch;
+        return new double[] { yaw, pitch, hit.ticks() };
     }
 }

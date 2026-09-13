@@ -1871,11 +1871,17 @@ public class HumanPvP extends Module {
             yaw = Rotations.getYaw(aimAt) + 180.0;
             pitch = -35; // steilerer Bogen als vorher (-20 war zu flach)
         } else {
-            yaw = Rotations.getYaw(aimAt);
-            pitch = PvpMath.solvePearlPitch(mc.player.getEyePosition().subtract(0, 0.1, 0), yaw, aimAt.getBoundingBox().getCenter(), null);
+            // Eigenbewegung einrechnen: Minecraft addiert die Geschwindigkeit des Werfers auf die Perle
+            // (Y nur wenn nicht am Boden). Ohne das landet ein Wurf aus dem Lauf systematisch daneben.
+            Vec3 own = mc.player.getKnownMovement();
+            double[] aim = PvpMath.solvePearlAim(mc.player.getEyePosition().subtract(0, 0.1, 0),
+                aimAt.getBoundingBox().getCenter(),
+                new Vec3(own.x, mc.player.onGround() ? 0 : own.y, own.z));
             // Ziel physisch ausserhalb der Perlen-Reichweite (z.B. gerade sehr hoch explosionsgeschleudert)
             // - lieber die Perle sparen als sie sicher danebenzuwerfen.
-            if (Double.isNaN(pitch)) return;
+            if (aim == null) return;
+            yaw = aim[0];
+            pitch = aim[1];
         }
 
         if (pearl.isOffhand()) {
