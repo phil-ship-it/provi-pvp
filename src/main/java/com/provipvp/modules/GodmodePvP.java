@@ -771,6 +771,16 @@ public class GodmodePvP extends Module {
 
     // Manuelles Feuer-Durchlaufen (siehe fireWalkAllowed/walkThroughFire): nur im Nahbereich, nur
     // solange es Boden gutmacht - sonst gehoert die Bewegung Baritone.
+    /** Naeher als das darf der Bot dem Ziel nicht bleiben: ab hier ueberlappen die Hitboxen so weit,
+     *  dass jede Explosivplatzierung den eigenen Eigenschaden-Deckel reisst (live: bester Crystal-Platz
+     *  nur noch 0.1 HP Zielschaden). Er tritt dann aktiv zurueck, statt im Gegner stehenzubleiben. */
+    private static final double MIN_ATTACK_DIST = 1.4;
+
+    /** Ab diesem Zielschaden gilt eine Explosion als "kommt gleich und lohnt sich" (explosionImminent).
+     *  Vorher genuegte JEDER Wert > 0 - ein 0.1-HP-Platz hat damit dauerhaft den Nahkampf-Fallback
+     *  blockiert, obwohl faktisch nichts passierte. */
+    private static final double MIN_MEANINGFUL_DAMAGE = 1.0;
+
     private static final double FIRE_WALK_MAX_DIST = 6.0;
     private static final int FIRE_WALK_PATIENCE = 20;      // 1s ohne Annaeherung reicht als Urteil
     private static final int FIRE_WALK_BLOCK_TICKS = 100;  // danach 5s lang wieder Baritone
@@ -1468,7 +1478,7 @@ public class GodmodePvP extends Module {
             activeHole = null;
             heightCalcOrigin = null;
             currentAction = "beobachten-fern";
-        } else if (tickCounter < explosionRetreatUntil) {
+        } else if (tickCounter < explosionRetreatUntil || dist < MIN_ATTACK_DIST) {
             cancelFollow();
             currentAction = "rueckzugsschritt";
         } else if (flying) {
@@ -2042,14 +2052,14 @@ public class GodmodePvP extends Module {
      *  aber nie mit ausgerollt wurde. bestAnchorDmgCache/bestBedDmgCache > 0 heisst: der letzte Scan
      *  (selectAura(), laeuft davor im selben Tick) hat wirklich einen machbaren Kandidaten gefunden. */
     private boolean explosionImminent(LivingEntity target) {
-        if (auraMode == 1) return bestAnchorDmgCache > 0;
-        if (auraMode == 2) return bestBedDmgCache > 0;
+        if (auraMode == 1) return bestAnchorDmgCache > MIN_MEANINGFUL_DAMAGE;
+        if (auraMode == 2) return bestBedDmgCache > MIN_MEANINGFUL_DAMAGE;
         if (auraMode == 0) {
             // ca.isActive() allein reicht nicht - das Modul kann eingeschaltet sein, aber ohne Obsidian fuer den
             // Support-Unterbau (oder ohne jeden gueltigen Platzierungs-Kandidaten) faktisch nie explodieren.
             // bestCrystalDmgCache > 0 heisst: der letzte Scan hat wirklich eine machbare Stelle gefunden.
             Module ca = Modules.get().get(CrystalAura.class);
-            return ca != null && ca.isActive() && bestCrystalDmgCache > 0;
+            return ca != null && ca.isActive() && bestCrystalDmgCache > MIN_MEANINGFUL_DAMAGE;
         }
         return false;
     }
@@ -3004,7 +3014,15 @@ public class GodmodePvP extends Module {
         // in der Naehe aufgetaucht ist (siehe explosionRetreatUntil, gesetzt direkt neben auto-shield).
         // Rotation zeigt hier bereits exakt auf 'center' (siehe oben) - "rueckwaerts" IST also "vom Ziel
         // weg", keine eigene Richtungsberechnung noetig.
-        Input.setKeyState(mc.options.keyDown, tickCounter < explosionRetreatUntil);
+        // Rueckwaerts auch, wenn das Ziel praktisch IM eigenen Koerper steht: auf Distanz 0 liegt jede
+        // Explosivplatzierung genauso im eigenen Radius wie beim Gegner, der Eigenschaden-Deckel verwirft
+        // damit JEDEN Kandidaten - live gemessen blieb der beste Crystal-Platz bei 0.1 HP Zielschaden
+        // haengen, der Bot stand handlungsunfaehig im Gegner drin. Gegen echte Spieler faellt das kaum
+        // auf, weil Spieler sich gegenseitig wegschieben; gegen einen Trainings-Dummy (clientseitig, ohne
+        // Kollision) oder einen stehenden Gegner laeuft der Bot dagegen direkt hinein und bleibt stecken.
+        boolean tooClose = dist < MIN_ATTACK_DIST;
+        Input.setKeyState(mc.options.keyDown, tickCounter < explosionRetreatUntil || tooClose);
+        if (tooClose) currentAction = "abstand-gewinnen";
     }
 
     /** Warnt und macht kurz vorsichtiger, wenn waehrend des Kampfes ein zweiter Spieler in der Naehe auftaucht. */
