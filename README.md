@@ -76,12 +76,13 @@ alongside everything above.
 The fully aggressive profile. Optimized for winning trades as fast as possible, not for looking legitimate.
 
 - **Target acquisition & movement** — picks the closest valid player within `follow-range` by default, or with
-  `smart-targeting` prefers an isolated player over a slightly closer one who has backup nearby. Only actively
-  closes distance (walking or pearling) once inside a separate, smaller `engage-distance` — prevents the bot from
-  sprinting across the map the instant it's turned on. Engagement is "sticky" in two ways: a hard Crystal/Anchor
-  knockback that briefly throws the distance back out won't cause the bot to give up the chase, and once
-  actually engaged it keeps fighting that same player by identity until they die, leave, or go out of range —
-  a third player briefly wandering past no longer steals the fight.
+  `smart-targeting` prefers an isolated player over a slightly closer one who has backup nearby. Moving targets only
+  have their distance closed (walking or pearling) once inside a separate, smaller `engage-distance`, preventing the
+  bot from sprinting across the map the instant it is turned on. Stationary targets are pursued throughout
+  `follow-range` by default, so a stationary dummy or a knockback-separated opponent is actively re-approached.
+  Engagement is sticky: a hard Crystal/Anchor knockback that briefly throws the distance back out will not cause the
+  bot to give up, and once actually engaged it keeps fighting that same player by identity until they die, leave, or
+  go out of range — a third player briefly wandering past no longer steals the fight.
 - **Damage-optimized Crystal/Anchor/Bed placement** — evaluates every reachable placement spot each tick, picks
   whichever explosive deals more damage to the target than to itself, respects a self-damage cap, and avoids
   friendly fire against anyone on the Meteor friends list. Bed Aura (`use-beds`, off by default) works exactly

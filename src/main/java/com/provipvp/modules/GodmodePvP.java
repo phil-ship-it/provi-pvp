@@ -78,7 +78,7 @@ public class GodmodePvP extends Module {
     // General
     public final Setting<Boolean> follow = sgGeneral.add(new BoolSetting.Builder()
         .name("follow")
-        .description("Verfolgt das Ziel automatisch mit Baritone, sobald es in Engage-Distanz ist.")
+        .description("Verfolgt das Ziel automatisch mit Baritone, sobald es in Engage-Distanz ist oder dort stillsteht.")
         .defaultValue(true)
         .build()
     );
@@ -98,6 +98,13 @@ public class GodmodePvP extends Module {
         .defaultValue(16)
         .range(4, 64)
         .sliderRange(4, 40)
+        .build()
+    );
+
+    public final Setting<Boolean> pursueStationaryTargets = sgGeneral.add(new BoolSetting.Builder()
+        .name("pursue-stationary-targets")
+        .description("Schliesst die Distanz zu einem stillstehenden Ziel auch ausserhalb der Engage-Distanz. Bewegte Ziele behalten die Kaltstart-Bremse, damit der Bot beim Aktivieren nicht quer ueber die Karte sprintet.")
+        .defaultValue(true)
         .build()
     );
 
@@ -1222,7 +1229,10 @@ public class GodmodePvP extends Module {
             engagedTargetId = target.getUUID();
             engaged = false; // neues Ziel -> Kaltstart-Schwelle (engage-distance) gilt wieder von vorn
         }
-        if (dist <= engageDistance.get()) engaged = true;
+        Vec3 targetVelocity = target.getDeltaMovement();
+        boolean targetStandingStill = target.onGround()
+            && targetVelocity.x * targetVelocity.x + targetVelocity.z * targetVelocity.z <= 0.0025;
+        if (dist <= engageDistance.get() || pursueStationaryTargets.get() && targetStandingStill) engaged = true;
 
         // Kontinuierliches Ziel-Tracking: der Bot schaut das Ziel (vorhergesagte Position) die meiste
         // Zeit direkt an, nicht nur kurz waehrend einer einzelnen Anzielen-Aktion. Ausserhalb der
