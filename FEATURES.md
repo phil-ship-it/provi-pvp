@@ -41,11 +41,14 @@ nothing described in the [README](README.md) is hardcoded. Defaults are the valu
 | `d-tap` | `true` | After a knockback hit, places obsidian in the predicted flight path and detonates two Crystals spaced at the hit-invulnerability window, for a fast double-totem-pop. Candidate floor spots must be within the bot's own reach (4.5 blocks), not just near the target's predicted position — on a hard vertical/horizontal launch the prediction can drift well past that, and without this check the bot occasionally built an obsidian pillar it couldn't actually reach to follow up on, leaving it standing there doing nothing. |
 | `use-mace` | `true` | Uses the Mace over axe/sword for finishing hits while falling (Smash Attack bonus). |
 | `elytra-combat` | `true` | Firework boost when gliding speed drops too low during elytra combat. |
-| `zero-delay` | `true` | Sets CrystalAura's placement delay to 0 (instant reaction). |
+| `zero-delay` | `true` | Sets CrystalAura placement/break delays to 0 and enables Fast-Break. The attack uses the real server-provided End-Crystal entity ID from `EntityAdded`; the client does not guess an ID before the server has created the entity. |
+| `ghost-block-mitigation` | `true` | Tracks own block placements until a server block update arrives. After two round trips, a still-only-client prediction is removed locally and Baritone's world cache is reloaded; no fabricated network desync packet is sent. |
 | `min-support-delay` | `4` | Minimum tick gap between placing an obsidian support block and the following crystal placement (CrystalAura's `support-delay`). Both actions use Minecraft's own sequence-numbered block-prediction system (since 1.19) — sending them too close together, before the first sequence is server-acknowledged, can desync the prediction ("crystal hitbox appears, but no crystal actually spawns"). Needs more headroom on high-latency or cross-version-translated (e.g. ViaVersion) connections than Meteor's own default. Only ever raised, never lowered. |
 | `kill-aura` | `false` | Also runs Meteor's KillAura for melee. Mob filter is shared with the `Mobs` group. Off by default since the built-in axe-melee logic already covers it. |
 | `escape-pearl` | `true` | Pearls away at low HP with an enemy nearby. |
 | `knockback-pearl` | `true` | Pearls straight down for a controlled landing whenever the bot is in real danger from a fall: either just launched by knockback (hit or explosion) with strong upward velocity, or generally airborne and already 3+ blocks into a fall (the same height Minecraft itself starts counting fall damage from) — not just the post-hit case, so walking off a ledge or getting launched by something else entirely still gets caught. |
+| `anti-anchor-disengage` | `true` | Counts damaging Anchor explosions over a 20-tick window. Three or more while the bot stands in an open 1×1 hole trigger a steep pearl escape toward a point 2.5 blocks above the feet. |
+| `explosion-floor-snap` | `true` | Uses a prior vertical-velocity sample. When an explosion adds more than 0.45 vertical velocity, a same-tick pearl release is solved toward a real floor ahead; the legacy fall-protection pearl remains 80°. |
 
 ### Defense
 
@@ -67,6 +70,11 @@ nothing described in the [README](README.md) is hardcoded. Defaults are the valu
 | `retreat-threshold` | `true` | Breaks off the fight (retreats) once totems drop below 2 **and** there are no Crystal/Anchor resources left. |
 | `retreat-on-losing-trade` | `true` | Pearls away if the bot itself was just hard-hit (popped) but its own Crystal/Anchor explosions haven't damaged the target in a while — recognizes a losing trade instead of continuing pointlessly. |
 | `multi-target-alarm` | `true` | Warns and becomes briefly more cautious when a second player shows up nearby during a fight. |
+| `insta-city` | `true` | Breaks reachable enemy Obsidian surround with a hotbar pickaxe, waits for the authoritative block update, then places a Crystal into the confirmed gap. Vanilla survival cannot legally turn a hand-started break into a final-tick pickaxe break. |
+| `anti-escape-trap` | `true` | Detects a true four-sided 1×1 cell one to three blocks along the target's movement vector and fills it with Cobweb, falling back to Obsidian. The Bot's own hitbox and the player's current body are excluded. |
+| `turtle-master-defense` | `true` | Below the health threshold, moves a Crossbow already loaded with a Turtle-Master Tipped Arrow into the offhand, then fires it at the player's own feet in one use/release callback. |
+| `turtle-master-health` | `0.4` | Maximum-health fraction below which Turtle-Master defense is eligible. |
+| `turtle-master-cooldown` | `10` | Ticks between downward Turtle-Master shots. |
 | `trap-mode` | `1` | Cobweb at the target's feet to slow them: `0` = off, `1` = only when the target is close (≤6 blocks), `2` = always. |
 | `max-self-damage` | `12.0` | Maximum self-damage tolerated per placement spot. |
 

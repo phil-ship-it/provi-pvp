@@ -388,3 +388,38 @@ Vor dem Hinzufügen dieser Dokumentation lag als einzige unversionierte, nicht a
 ```
 
 Diese Dokumentation ist neu und muss separat committed werden, wenn sie dauerhaft in Git liegen soll.
+
+---
+
+## 11. QA-Iteration GodmodePvP (2026-09-23)
+
+### Umgesetzte Bereiche
+
+- **AutoPearl 2.0:** `anti-anchor-disengage` und `explosion-floor-snap`; prior-Y-Delta, 20-Tick-Ankerfenster, offene 1×1-Lochprüfung, PvpMath-Perlenziel und Same-Tick-Floor-Snap.
+- **Prediction:** CrystalAura `placeDelay`/`breakDelay`/`ticksExisted`/`fastBreak` auf sichere 0-Werte; keine erfundene Entity-ID. Eigene Blockplatzierungen werden über `ClientboundBlockUpdatePacket` bestätigt; nach `2 × RTT` wird nur lokale Ghost-Hitbox entfernt und Baritone-Cache neu geladen.
+- **City/Traps:** `insta-city` mit Hotbar-Pickaxe, serverseitig bestätigter Bruch-Lücke und Crystal-Selbstschadenprüfung; `anti-escape-trap` für echte 1×1-Löcher mit Cobweb/Obsidian.
+- **Turtle-Master:** geladene Crossbow mit Turtle-Master-Tipped-Arrow, Offhand-Staging, `useItem()` + `releaseUsingItem()` am selben Tick, 40%-Health-Schwelle.
+- **Blocking Bugs:** UUID-Positionsdelta invalidiert Follow/CustomGoal und Baritone-Cache; `selfDamageAllowed()` raytraced Explosion-zur-eigener-Hitbox; Combat-Slot-Mutex reserviert Mainhand-Slots und stoppt Baritone; Fire-Walk-Fallback nach 40 Ticks; Ressourcen-Refill funktioniert bei exaktem Threshold und priorisiert nur actionable Hotbar/Offhand-Ressourcen.
+
+### Verifikation
+
+- `cmd.exe /c gradlew.bat test` → `BUILD SUCCESSFUL`.
+- `cmd.exe /c gradlew.bat build` → `BUILD SUCCESSFUL`.
+- Finaler Jar `provipvp/build/libs/provi-pvp-0.9.3.jar` in `TestBot_1` und `TestBot_2` deployed.
+- Isolierter Fabric-Server: `bottest-qa`, leere Flatworld, `peaceful`, kein Arena-Datapack.
+- Wandtest: `bottest-qa/logs/latest.log:218-229` — Wand gesetzt, 39 Sekunden observed, beide Health `20.0`; kein Splash-Selbstschaden.
+- 15-TPS-Test: Serverlog `20:53:14-20:53:52` — 15 TPS für 20 Sekunden, anschließend 20 TPS; kein Spam-/Exception-Loop.
+- Kaltstart-/Teleport-Tests mit Server-Konsolen-Teleports erzeugen temporären Client/Server-Desync durch alte Movement-Pakete. Der UUID-Pfad wurde in `bottest-qa/logs/latest.log` dennoch als `Pearl-Teleport erkannt` erkannt; für belastbare Live-Messung muss der Arena-Server den Teleport selbst senden, nicht die Testkonsole.
+
+### Bekannte Grenzen
+
+- Eine Crystal-Entity-ID kann vor dem serverseitigen `AddEntity`-Paket nicht seriös vorhergesagt werden; Meteor greift deshalb auf die reale ID zurück.
+- Survival-Insta-City kann keinen handgestarteten Abbau legal in einen letzten Pickaxe-Tick umwandeln; der Code bricht mit der Pickaxe fort und bestätigt die Lücke serverseitig.
+- Turtle-Master benötigt eine bereits geladene Crossbow mit Turtle-Master-Pfeil; der Code erfindet keine geladene Item-DataPipe.
+- Offline-401-, optionale Mixin- und Google-Translate-Fehler der Testclients stammen aus der Testumgebung, nicht aus ProviPvP.
+
+### Testkonfiguration nach dem Lauf
+
+- TestBot_2-Modulkonfiguration wurde aus `C:\tmp\TestBot_2.modules.before-qa.nbt` wiederhergestellt.
+- Testclients und `godmode-qa-server` wurden beendet.
+- `TrouserStreak/` bleibt unversionierte Nutzerarbeit und wurde nicht verändert.

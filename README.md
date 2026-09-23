@@ -88,6 +88,13 @@ The fully aggressive profile. Optimized for winning trades as fast as possible, 
   friendly fire against anyone on the Meteor friends list. Bed Aura (`use-beds`, off by default) works exactly
   like Anchor but only detonates outside the Overworld (Nether/End) — the server decides, the client can't check
   ahead of time.
+- **Explosion recovery** — stationary-target pursuit, UUID/target-position displacement invalidation for Baritone,
+  steep Anchor-bomb disengage, 88.5° explosion floor-snap, and movement-vector-aware anti-escape holes. Block
+  placements are tracked until authoritative server updates; a client-only ghost is removed and Baritone's cache
+  is reloaded instead of fabricating a desync packet.
+- **City and trap pressure** — confirmed-gap Insta-City with a hotbar pickaxe, proactive Cobweb/Obsidian filling
+  of true 1×1 escape holes, and a hard Combat-Slot-Mutex that pauses Baritone while Anchor/Crystal/Bed/Perl
+  actions own the main hand.
 - **D-Tap** — after a knockback hit, places obsidian in the target's predicted flight path and detonates two
   Crystals spaced at the hit-invulnerability window, for a fast double-totem-pop.
 - **Combat mechanics** — automatic axe/sword/mace swapping, shield-breaking, pre-hits before explosions,
@@ -113,13 +120,13 @@ The fully aggressive profile. Optimized for winning trades as fast as possible, 
   reliability on laggy servers. Two exceptions stay active regardless of the switch — the aura-switch
   hysteresis and the Crystal support-delay floor — because those are technical requirements, not caution:
   removing them broke Crystal placement's sequence-number prediction outright (zero damage from any source).
-- **Single-rotation-per-tick guarantee** — Meteor's silent-rotation queue only applies the correct look
-  direction to the *first* rotate-and-act call queued in a given tick; any second one (e.g. a pearl throw
-  coinciding with an Anchor/Bed interaction or a D-Tap Crystal placement) used to silently execute with
-  whatever direction the player was facing *before* that tick's rotations, not the intended target —
-  manifesting as wildly misdirected pearls and Anchors/Beds/Crystals that never actually get interacted
-  with. Every rotate-and-act call now goes through a shared per-tick guard: if the slot is already taken,
-  the action is skipped cleanly (no cooldown spent, no item swapped away) and retried the following tick.
+- **Combat slot ownership** — combat actions reserve the selected hotbar slot, cancel Follow/CustomGoal pathing
+  while the reservation is live, swap and restore inside the action callback, and use the correct hand for
+  offhand items. This prevents Meteor's global `InvUtils.previousSlot` marker and Baritone from stealing a
+  slot between a queued Anchor/Crystal/Bed/Perl action and its restore.
+- **Turtle-Master defense** — below 40% maximum health, a charged Crossbow with a Turtle-Master Tipped Arrow is
+  staged in the offhand and fired straight down at the player's feet with `useItem()` plus
+  `releaseUsingItem()` in the same tick. It is a real item/effect sequence, not a direct server-side buff packet.
 
 ### HumanPvP (`.hpvp`)
 
