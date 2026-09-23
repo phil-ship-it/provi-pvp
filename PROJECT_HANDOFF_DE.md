@@ -423,3 +423,11 @@ Diese Dokumentation ist neu und muss separat committed werden, wenn sie dauerhaf
 - TestBot_2-Modulkonfiguration wurde aus `C:\tmp\TestBot_2.modules.before-qa.nbt` wiederhergestellt.
 - Testclients und `godmode-qa-server` wurden beendet.
 - `TrouserStreak/` bleibt unversionierte Nutzerarbeit und wurde nicht verändert.
+
+### Gezielte Feature-Läufe
+
+- **Anti-Anker:** `bottest-qa/logs/latest.log:46-55` — drei geladene Ankerblocks nacheinander entfernt, `TestBot_1 Inventory=[]`, Health `20.0`; der Pearl-Flug wurde aus dem Loch ausgelöst.
+- **Floor-Snap:** `bottest-qa/logs/latest.log:56-61` — Primed TNT mit `fuse=0`, eine Pearl, Inventory anschließend `[]`, Health `20.0`; der kontrollierte Pearl-Flug lief.
+- **Prediction:** `bottest-qa/logs/latest.log:62-67` — 64 Crystals/64 Obsidian, `Test passed. Count: 2` (zwei End-Crystal-Entities), Target- und Bot-Health `20.0`.
+- **City-Isolation:** Der erste City-Test wurde durch normale Crystal-/Melee-Damage vor dem Pickaxe-Pfad beendet; die vier Wandabfragen blieben `Test passed`. Ein zweiter Versuch mit unveränderlichem Target-Datenstand war nicht möglich, weil der Server-Command für die zusätzliche Max-Health-Property in 26.2 abgewiesen wurde. Der Code-Pfad ist damit compile- und setup-seitig geprüft, aber nicht als isolierter Pickaxe-Durchbruch bewiesen.
+- **Turtle:** Kein Lauf mit einer gültig geladenen Turtle-Master-Crossbow-NBT; der Server akzeptiert die verwendete 26.2-Item-Component-Synthese nicht ohne further mapping. Der Effektpfad bleibt statisch/code-seitig validiert.
