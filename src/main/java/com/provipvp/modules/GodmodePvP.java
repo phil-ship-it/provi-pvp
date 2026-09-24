@@ -6,6 +6,7 @@ import com.provipvp.util.PvpMath;
 import baritone.api.BaritoneAPI;
 import meteordevelopment.meteorclient.MeteorClient;
 import meteordevelopment.meteorclient.events.game.GameLeftEvent;
+import meteordevelopment.meteorclient.events.entity.EntityAddedEvent;
 import meteordevelopment.meteorclient.events.packets.PacketEvent;
 import meteordevelopment.meteorclient.events.world.TickEvent;
 import meteordevelopment.meteorclient.settings.BoolSetting;
@@ -859,8 +860,7 @@ public class GodmodePvP extends Module {
     private BlockPos instaCityBlock;
     private UUID instaCityTargetId;
     private int instaCityCooldown;
-    private int instaCityPreviousSlot = -1;
-    private int instaCityToolSlot = -1;
+    private boolean instaCityOwnsCombatSlot;
     private int instaCityBreakQueuedTick = -1;
     private boolean instaCityBreakConfirmed;
     private int antiEscapeCooldown;
@@ -1000,8 +1000,7 @@ public class GodmodePvP extends Module {
         instaCityBlock = null;
         instaCityTargetId = null;
         instaCityCooldown = 0;
-        instaCityPreviousSlot = -1;
-        instaCityToolSlot = -1;
+        instaCityOwnsCombatSlot = false;
         instaCityBreakQueuedTick = -1;
         instaCityBreakConfirmed = false;
         antiEscapeCooldown = 0;
@@ -1222,6 +1221,16 @@ public class GodmodePvP extends Module {
         }
     }
 
+    @EventHandler
+    private void onEntityAdded(EntityAddedEvent event) {
+        if (!(event.entity instanceof EndCrystal crystal) || mc.player == null) return;
+        Vec3 position = crystal.position();
+        double selfDamage = DamageUtils.crystalDamage(mc.player, position);
+        if (selfDamage > maxSelfDamage.get() || !selfDamageAllowed(position, selfDamage)) {
+            attackCrystal(crystal);
+        }
+    }
+
     /** Server-Wechsel/Disconnect: nichts (CrystalAura, KillAura, ...) darf ueber die Weltgrenze hinaus
      *  aktiv bleiben - sonst laufen fremde Meteor-Module beim naechsten Join in einem undefinierten
      *  Zustand (z.B. mc.player kurzzeitig null) mit und koennen den Client abstuerzen lassen. */
@@ -1253,6 +1262,7 @@ public class GodmodePvP extends Module {
         boolean guiOpen = mc.gui.screen() != null;
         if (!turtleAction) handleInventory(self, guiOpen);
         if (tickCounter % 40 == 0) pruneOwnedBlocks();
+        if (tickCounter % 20 == 0) syncWallsRange();
         if (turtleAction) {
             LivingEntity turtleTarget = handleTargeting(self);
             if (turtleTarget == null) return;
@@ -2083,7 +2093,7 @@ public class GodmodePvP extends Module {
                 if (gs.found() && interactAnchorAt(spot, gs)) {
                     anchorsChargedByUs.add(spot);
                 }
-            } else {
+            } else if (!combatSlotBusyFor(anchor)) {
                 anchorCandidateIndex++;
             }
         });
@@ -2742,18 +2752,36 @@ public class GodmodePvP extends Module {
         return result.getType() == HitResult.Type.MISS || result.getLocation().distanceTo(point) < LOS_RAYCAST_TOLERANCE;
     }
 
-    /** Explosions-Splash wird bei aktivem through-walls nicht einfach anhand der Distanz freigegeben.
-     *  Der Strahl vom Explosionszentrum zur Mitte der eigenen Hitbox muss frei bzw. bis unmittelbar
-     *  vor der Hitbox reached sein; eine Wand zwischen Crystal und Spieler verwirft den sonstigen
-     *  Selbstschaden-Fallback. */
+    /** Explosions-Splash wird bei aktivem through-walls nicht nur ueber die Hitbox-Mitte bewertet.
+     *  Mehrere Punkte der AABB werden geprueft; ist irgendein Punkt der Box fuer den Explosionsstrahl
+     *  exponiert, gilt die Position als selbstschadengefaehrlich. */
     private boolean selfDamageAllowed(Vec3 explosionPos, double selfDamage) {
         if (selfDamage <= 0 || mc.level == null || mc.player == null) return true;
-        Vec3 hitboxCenter = mc.player.getBoundingBox().getCenter();
-        ClipContext context = new ClipContext(explosionPos, hitboxCenter,
+        AABB box = mc.player.getBoundingBox();
+        return blastRayClear(explosionPos, box.getCenter())
+            || blastRayClear(explosionPos, new Vec3(box.minX, box.minY, box.minZ))
+            || blastRayClear(explosionPos, new Vec3(box.maxX, box.minY, box.minZ))
+            || blastRayClear(explosionPos, new Vec3(box.minX, box.maxY, box.minZ))
+            || blastRayClear(explosionPos, new Vec3(box.maxX, box.maxY, box.minZ))
+            || blastRayClear(explosionPos, new Vec3(box.minX, box.minY, box.maxZ))
+            || blastRayClear(explosionPos, new Vec3(box.maxX, box.minY, box.maxZ))
+            || blastRayClear(explosionPos, new Vec3(box.minX, box.maxY, box.maxZ))
+            || blastRayClear(explosionPos, new Vec3(box.maxX, box.maxY, box.maxZ));
+    }
+
+    private boolean blastRayClear(Vec3 explosionPos, Vec3 hitPoint) {
+        ClipContext context = new ClipContext(explosionPos, hitPoint,
             ClipContext.Block.COLLIDER, ClipContext.Fluid.NONE, mc.player);
         BlockHitResult result = mc.level.clip(context);
         return result.getType() == HitResult.Type.MISS
-            || result.getLocation().distanceTo(hitboxCenter) < LOS_RAYCAST_TOLERANCE;
+            || result.getLocation().distanceTo(hitPoint) < 0.15;
+    }
+
+    private boolean crystalPlacementSafe(Player self, BlockPos cell, double selfDamageScale) {
+        if (!validExplosionSpot(cell, true) || hitsFriend(Vec3.atCenterOf(cell), true)) return false;
+        double selfDamage = DamageUtils.crystalDamage(self, Vec3.atCenterOf(cell));
+        return selfDamage <= maxSelfDamage.get() * selfDamageScale
+            && selfDamageAllowed(Vec3.atCenterOf(cell), selfDamage);
     }
 
     /** Erste Himmelsrichtung, in der neben dem Fussteil noch eine zweite freie Zelle fuer das Kopfteil
@@ -2826,7 +2854,7 @@ public class GodmodePvP extends Module {
                 // und reisst es wieder ab, bevor es gezuendet werden kann.
                 bedsPlacedByUs.add(spot.pos());
                 bedsPlacedByUs.add(spot.pos().relative(spot.dir()));
-            } else {
+            } else if (!combatSlotBusyFor(bed)) {
                 bedCandidateIndex++;
             }
         });
@@ -2938,9 +2966,11 @@ public class GodmodePvP extends Module {
 
         var baritone = BaritoneAPI.getProvider().getPrimaryBaritone();
         baritone.getFollowProcess().cancel();
+        baritone.getFollowProcess().onLostControl();
         baritone.getPathingBehavior().cancelEverything();
         var customGoal = baritone.getCustomGoalProcess();
         if (customGoal.isActive()) customGoal.onLostControl();
+        resetPositioningState();
         followActive = false;
         followedId = null;
         return true;
@@ -2968,6 +2998,10 @@ public class GodmodePvP extends Module {
         } finally {
             releaseCombatSlot();
         }
+    }
+
+    private boolean combatSlotBusyFor(FindItemResult item) {
+        return !item.isOffhand() && combatSlotReserved && combatSlotTargetSlot != item.slot();
     }
 
     private boolean queueWithCombatSlot(FindItemResult item, double yaw, double pitch, int priority, Runnable action) {
@@ -3196,6 +3230,7 @@ public class GodmodePvP extends Module {
             case 1 -> { // Obsidian steht (oder gerade platziert) - 1. Crystal setzen
                 if (tickCounter - dtapStageTick > 15) { dtapStage = 0; return; } // Fenster verpasst
                 if (!mc.level.getBlockState(dtapSpot.above()).isAir()) { dtapStage = 0; return; } // besetzt
+                if (!crystalPlacementSafe(mc.player, dtapSpot.above(), 0.6)) { dtapStage = 0; return; }
 
                 FindItemResult crystal = InvHelper.find(Items.END_CRYSTAL);
                 if (!crystal.found()) { dtapStage = 0; return; }
@@ -3218,7 +3253,9 @@ public class GodmodePvP extends Module {
             }
             case 3 -> { // Trefferimmunitaet abwarten (~10 Ticks = 0.5s), dann 2. Crystal
                 if (tickCounter - dtapStageTick < 10) return;
-                if (tickCounter - dtapStageTick > 30 || !mc.level.getBlockState(dtapSpot.above()).isAir()) {
+                if (tickCounter - dtapStageTick > 30
+                    || !mc.level.getBlockState(dtapSpot.above()).isAir()
+                    || !crystalPlacementSafe(mc.player, dtapSpot.above(), 0.6)) {
                     dtapStage = 0;
                     dtapCooldown = delay(30);
                     return;
@@ -3376,12 +3413,15 @@ public class GodmodePvP extends Module {
     }
 
     private void cancelFollow() {
-        if (followActive) {
-            BaritoneAPI.getProvider().getPrimaryBaritone().getFollowProcess().cancel();
-            BaritoneAPI.getProvider().getPrimaryBaritone().getPathingBehavior().cancelEverything();
-            followActive = false;
-            followedId = null;
-        }
+        var baritone = BaritoneAPI.getProvider().getPrimaryBaritone();
+        baritone.getFollowProcess().cancel();
+        baritone.getFollowProcess().onLostControl();
+        baritone.getPathingBehavior().cancelEverything();
+        var customGoal = baritone.getCustomGoalProcess();
+        if (customGoal.isActive()) customGoal.onLostControl();
+        followActive = false;
+        followedId = null;
+        resetPositioningState();
     }
 
     /** Buendelt alle Felder, die eine als "veraltet" erkannte Positionierung/Navigation zuruecksetzen
@@ -3714,7 +3754,7 @@ public class GodmodePvP extends Module {
      *  noch existierenden Block. */
     private boolean handleInstaCity(Player self, LivingEntity target, double dist) {
         if (instaCityCooldown > 0) instaCityCooldown--;
-        if (combatSlotReserved) return false;
+        if (combatSlotReserved && !instaCityOwnsCombatSlot) return false;
         if (!instaCity.get() || mc.gui.screen() != null || dist > 5.5) {
             cancelInstaCity();
             return false;
@@ -3756,20 +3796,14 @@ public class GodmodePvP extends Module {
         if (!pickaxe.found() || !pickaxe.isHotbar()) return false;
 
         int selected = mc.player.getInventory().getSelectedSlot();
-        if (instaCityToolSlot >= 0) {
-            if (selected != instaCityToolSlot) {
+        if (instaCityOwnsCombatSlot) {
+            if (selected != combatSlotTargetSlot) {
                 cancelInstaCity();
                 return false;
             }
         } else {
-            instaCityToolSlot = pickaxe.slot();
-            if (selected != instaCityToolSlot) {
-                if (!InvUtils.swap(instaCityToolSlot, false)) {
-                    instaCityToolSlot = -1;
-                    return false;
-                }
-                instaCityPreviousSlot = selected;
-            }
+            if (!reserveCombatSlot(pickaxe.slot())) return false;
+            instaCityOwnsCombatSlot = true;
         }
 
         Vec3 center = Vec3.atCenterOf(pos);
@@ -3792,12 +3826,8 @@ public class GodmodePvP extends Module {
     }
 
     private void releaseInstaCityTool() {
-        if (instaCityPreviousSlot >= 0 && mc.player != null
-            && mc.player.getInventory().getSelectedSlot() == instaCityToolSlot) {
-            InvUtils.swap(instaCityPreviousSlot, false);
-        }
-        instaCityPreviousSlot = -1;
-        instaCityToolSlot = -1;
+        if (instaCityOwnsCombatSlot) releaseCombatSlot();
+        instaCityOwnsCombatSlot = false;
     }
 
     private BlockPos findInstaCityBlock(Player self, LivingEntity target) {
@@ -4061,6 +4091,7 @@ public class GodmodePvP extends Module {
                     resetPistonAura();
                     return false;
                 }
+                if (!crystalPlacementSafe(self, pistonCrystalCell, 1.0)) { resetPistonAura(); return false; }
                 Vec3 base = Vec3.atCenterOf(pistonCrystalCell.below());
                 rotateAndRun(Rotations.getYaw(base), Rotations.getPitch(base), PRIORITY_CRYSTAL,
                     () -> withCombatSlot(crystal, () -> BlockUtils.interact(
@@ -4141,6 +4172,7 @@ public class GodmodePvP extends Module {
                 if (!base.is(Blocks.OBSIDIAN) && !base.is(Blocks.BEDROCK) && !base.isAir()) continue;
                 if (self.distanceToSqr(Vec3.atCenterOf(bodyCell)) > 4.5 * 4.5) continue;
                 if (self.distanceToSqr(Vec3.atCenterOf(crystalCell)) > 4.5 * 4.5) continue;
+                if (!crystalPlacementSafe(self, crystalCell, 1.0)) continue;
 
                 pistonCrystalCell = crystalCell;
                 pistonBodyCell = bodyCell;
@@ -5148,7 +5180,10 @@ public class GodmodePvP extends Module {
      *  liefert Ziele hinter Deckung, Meteor verwirft sie danach wieder. Alte Werte werden gemerkt und
      *  beim Ausschalten des Moduls zurueckgesetzt. */
     private void syncWallsRange() {
-        if (!throughWalls.get()) return;
+        if (!throughWalls.get()) {
+            restoreWallsRange();
+            return;
+        }
         syncWallsField(CrystalAura.class, Modules.get().get(CrystalAura.class), "placeWallsRange", "placeRange", 0);
         syncWallsField(CrystalAura.class, Modules.get().get(CrystalAura.class), "breakWallsRange", "breakRange", 1);
         syncWallsField(KillAura.class, Modules.get().get(KillAura.class), "wallsRange", "range", 2);

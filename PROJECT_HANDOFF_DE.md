@@ -431,3 +431,16 @@ Diese Dokumentation ist neu und muss separat committed werden, wenn sie dauerhaf
 - **Prediction:** `bottest-qa/logs/latest.log:62-67` — 64 Crystals/64 Obsidian, `Test passed. Count: 2` (zwei End-Crystal-Entities), Target- und Bot-Health `20.0`.
 - **City-Isolation:** Der erste City-Test wurde durch normale Crystal-/Melee-Damage vor dem Pickaxe-Pfad beendet; die vier Wandabfragen blieben `Test passed`. Ein zweiter Versuch mit unveränderlichem Target-Datenstand war nicht möglich, weil der Server-Command für die zusätzliche Max-Health-Property in 26.2 abgewiesen wurde. Der Code-Pfad ist damit compile- und setup-seitig geprüft, aber nicht als isolierter Pickaxe-Durchbruch bewiesen.
 - **Turtle:** Die 26.2-Item-Component-Synthese wurde mit `item replace entity ... weapon.offhand with minecraft:crossbow[minecraft:charged_projectiles=...]` erfolgreich erzeugt; `equipment` zeigte `charged_projectiles` mit `minecraft:turtle_master`. Der nachfolgende `/damage`-Befehl wurde vom Server mit 13 Schaden quittiert, ließ Health jedoch auf 20 und erzeugte keine Active Effects. Der Turtle-Schuss selbst ist deshalb nicht als Effektlauf bestätigt.
+
+---
+
+## 12. Review-Follow-up (Through-Walls / Slot-Lockout)
+
+- **CustomGoal-Lifecycle:** `reserveCombatSlot()` und `cancelFollow()` rufen jetzt `onLostControl()` und `resetPositioningState()` auch dann auf, wenn `followActive=false`; `activeHole` kann keinen stillen alten Baritone-Pfad mehr unterdrücken.
+- **Lease-Contention:** `combatSlotBusyFor()` verhindert, dass Anchor-/Bed-Kandidaten bei temporär belegtem Combat-Slot dauerhaft übersprungen werden.
+- **Insta-City:** Pickaxe-Lease läuft jetzt über `reserveCombatSlot()`, `instaCityOwnsCombatSlot` und `releaseCombatSlot()`; kein separater Direkt-Swap-Pfad mehr.
+- **Blast-Exposure:** `selfDamageAllowed()` prüft neun Punkte der Spieler-AABB statt nur den Mittelpunkt mit 0.6-Block-Toleranz.
+- **Delegierte Pfade:** Piston-Aura, D-Tap Stage 1/3 und EntityAdded-End-Crystals werden erneut gegen `crystalPlacementSafe()`/`selfDamageAllowed()` geprüft.
+- **Dynamischer Wall-Range:** `syncWallsRange()` läuft alle 20 Ticks und stellt bei deaktiviertem `through-walls` die gespeicherten Meteor-Wandreichweiten wieder her.
+
+Verifikation: `cmd.exe /c gradlew.bat test` und `cmd.exe /c gradlew.bat build` erneut `BUILD SUCCESSFUL`; Review-Retest `bottest-qa/logs/latest.log:32-35` zeigt beide Clients im finalen Jar, ohne internen ProviPvP-Fehler.
