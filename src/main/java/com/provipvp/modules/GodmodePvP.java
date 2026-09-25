@@ -65,6 +65,8 @@ import net.minecraft.world.phys.BlockHitResult;
 import net.minecraft.world.phys.HitResult;
 import net.minecraft.world.phys.Vec3;
 
+import java.util.ArrayList;
+import java.util.List;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.Map;
@@ -785,6 +787,7 @@ public class GodmodePvP extends Module {
     private final Map<BlockPos, PendingBlockConfirmation> pendingBlockConfirmations = new HashMap<>();
     private int popBurstUntil;
     private int lastPearlTick = -999;
+    private int lastPearlScanTick = -999;
     private int lastSelfPopTick = -999;
     private int lastTargetDamageTick = -999;
     private final Map<UUID, Boolean> hadTotemEffects = new HashMap<>();
@@ -836,6 +839,9 @@ public class GodmodePvP extends Module {
     private int anchorExplosionWindowStart = -1;
     private int anchorExplosionWindowCount;
     private BlockPos activeHole;
+    private boolean holeEscapeActive;
+    private int holeEscapeStartedTick = -1;
+    private Vec3 holeEscapeLastPosition;
     private BlockPos heightCalcOrigin;
     private int buildCoverCooldown;
     // Zaehlt, wie viele Rotation+Aktion-Paare (rotateAndRun) diesen Tick schon eingereiht wurden.
@@ -994,6 +1000,7 @@ public class GodmodePvP extends Module {
         savedEntityFilters.clear();
         popBurstUntil = 0;
         lastPearlTick = -999;
+        lastPearlScanTick = -999;
         anchorPlaceCooldown = 0;
         anchorMaintCooldown = 0;
         anchorPlaceFails = 0;
@@ -1077,6 +1084,9 @@ public class GodmodePvP extends Module {
         selfTookRealDamageThisTick = false;
         selfVerticalDeltaThisTick = 0.0;
         activeHole = null;
+        holeEscapeActive = false;
+        holeEscapeStartedTick = -1;
+        holeEscapeLastPosition = null;
         heightCalcOrigin = null;
         buildCoverCooldown = 0;
         lastFireworkTick = -999;
@@ -1393,6 +1403,9 @@ public class GodmodePvP extends Module {
             cancelInstaCity();
             resetFireWalkState();
             activeHole = null;
+            holeEscapeActive = false;
+            holeEscapeStartedTick = -1;
+            holeEscapeLastPosition = null;
             heightCalcOrigin = null;
             Input.setKeyState(mc.options.keyLeft, false);
             Input.setKeyState(mc.options.keyRight, false);
@@ -1716,6 +1729,9 @@ public class GodmodePvP extends Module {
         followActive = false;
         followedId = null;
         activeHole = null;
+        holeEscapeActive = false;
+        holeEscapeStartedTick = -1;
+        holeEscapeLastPosition = null;
         heightCalcOrigin = null;
 
         var baritone = BaritoneAPI.getProvider().getPrimaryBaritone();
@@ -1778,8 +1794,7 @@ public class GodmodePvP extends Module {
         // Kein Sichtkontakt trotz Naehe (Hindernis im Weg): so gut wie sofort reagieren,
         // klappt das nicht, zum Gegner perlen statt festzustehen.
         if (obstacleStuckTicks > 8 && pearlThrow.get() && tickCounter - lastPearlTick > delay(20)
-            && InvHelper.has(Items.ENDER_PEARL)) {
-            throwPearl(target, false);
+            && InvHelper.has(Items.ENDER_PEARL) && throwPearlAtTarget(target)) {
             currentAction = "pearl-obstacle";
             obstacleStuckTicks = 0;
         }
@@ -1795,8 +1810,7 @@ public class GodmodePvP extends Module {
         if (oscillationAnchorPos == null || tickCounter - oscillationAnchorTick > 30) {
             if (oscillationAnchorPos != null && self.position().distanceTo(oscillationAnchorPos) < 1.5
                 && pearlThrow.get() && tickCounter - lastPearlTick > delay(20)
-                && InvHelper.has(Items.ENDER_PEARL)) {
-                throwPearl(target, false);
+                && InvHelper.has(Items.ENDER_PEARL) && throwPearlAtTarget(target)) {
                 currentAction = "pearl-oszillation";
             }
             oscillationAnchorPos = self.position();
@@ -1934,18 +1948,14 @@ public class GodmodePvP extends Module {
 
         // Perlen-Gapclose (bei grosser Distanz schnellerer Cooldown) - nur wenn schon engaged (siehe unten),
         // sonst wuerde auch ein 35 Blocke entfernter Spieler beim Kaltstart sofort angeperlt. Die Schwelle
-        // ist an attack-range gekoppelt (nie kleiner als Nahkampf-Reichweite+0.5) - sonst wuerde ein zu
-        // niedrig gestelltes pearl-min-dist eine Perle verschwenden, obwohl der Gegner noch schlagbar waere.
-        // Sichtlinie ist Pflicht: ohne sie fliegt die Perle nur gegen die Wand/den Huegel dazwischen statt
-        // zum Gegner (anders als die gezielte Hindernis-Perle oben, die genau auf so ein Durchclippen zielt).
+        // ist an attack-range gekoppelt (nie kleiner als Nahkampf-Reichweite+0.5).
+        // Die Perlenbahn wird gegen die aktuelle Umgebung und mehrere Zielpunkte geprueft. Ein
+        // straight-line LOS-Gate wuerde Lochrand und kurze Kanten faelschlich als "nicht werfbar"
+        // behandeln; der Scanner verwirft dagegen nur Kandidaten, deren Bahn wirklich kollidiert.
         double pearlReachThreshold = Math.max(pearlMinDist.get(), attackRange.get() + 0.5);
-        // Fixer, konservativer Cooldown statt distanzabhaengig gestaffelt: in einer grossen Arena ist
-        // "weit weg" der Normalfall, nicht die Ausnahme - die alte Staffelung (schneller ab >15 Bloecke)
-        // machte den "schnellen" Ast faktisch zum Standardfall und hielt den Perlen-Spam am Leben.
         long pearlCooldown = delay(50);
-        if (pearlThrow.get() && dist > pearlReachThreshold && engaged && self.hasLineOfSight(target)
-            && tickCounter - lastPearlTick > pearlCooldown && !guiOpen) {
-            throwPearl(target, false);
+        if (pearlThrow.get() && dist > pearlReachThreshold && engaged
+            && tickCounter - lastPearlTick > pearlCooldown && !guiOpen && throwPearlAtTarget(target)) {
             currentAction = "pearl-gapclose";
         }
 
@@ -3518,6 +3528,9 @@ public class GodmodePvP extends Module {
      *  Ping-Pong-Bewegung statt eines sauberen Neustarts. */
     private void resetPositioningState() {
         activeHole = null;
+        holeEscapeActive = false;
+        holeEscapeStartedTick = -1;
+        holeEscapeLastPosition = null;
         heightCalcOrigin = null;
         oscillationAnchorPos = null;
         oscillationAnchorTick = 0;
@@ -3726,7 +3739,7 @@ public class GodmodePvP extends Module {
     private BlockPos findLowestAroundTarget(Player self, LivingEntity target) {
         BlockPos targetPos = target.blockPosition();
 
-        if (activeHole != null && heightCalcOrigin != null && heightCalcOrigin.distSqr(targetPos) <= 4
+        if (activeHole != null && heightCalcOrigin != null && heightCalcOrigin.distSqr(targetPos) <= 1.0
             && isStandable(activeHole)
             && Math.sqrt(self.distanceToSqr(Vec3.atCenterOf(activeHole))) <= 8.0) {
             return activeHole;
@@ -4323,53 +4336,136 @@ public class GodmodePvP extends Module {
         }
     }
 
-    /** Sucht/nutzt aktiv die beste nahe Position (Deckung und/oder Hoehen-Vorteil) als Kampfposition,
-     *  statt frei/hoehengleich zu stehen. Berechnet die Ziel-Position JEDEN TICK frisch neu (folgt damit
-     *  einem sich bewegenden Gegner kontinuierlich), setzt Baritones Pfad aber nur bei tatsaechlicher
-     *  Aenderung neu - sonst wuerde ein unveraendertes Ziel den laufenden Pfad jeden Tick sinnlos
-     *  verwerfen. Findet sich nichts Natuerliches, wird notfalls selbst Deckung gebaut. Liefert true,
-     *  solange Baritones CustomGoalProcess unterwegs ist - dann soll updateFollow() diesen Tick pausieren. */
+    /** Beendet einen alten Kampf-/Escape-Pfad, bevor der direkte FollowProcess wieder uebernimmt. */
+    private void clearHoleGoal() {
+        var customGoal = BaritoneAPI.getProvider().getPrimaryBaritone().getCustomGoalProcess();
+        if (customGoal.isActive()) customGoal.onLostControl();
+        activeHole = null;
+        heightCalcOrigin = null;
+        holeEscapeActive = false;
+        holeEscapeStartedTick = -1;
+        holeEscapeLastPosition = null;
+    }
+
+    /** Sucht aus einer eingeschlossenen Zelle eine offene Nachbarzelle als Ausstieg.
+     *  Die bisherige Hole-Suche bevorzugte genau das Gegenteil (maximal viele Waende); wenn der
+     *  Gegner sein Loch verlassen hat, blieb der Bot dadurch in der alten Kampfposition stehen. */
+    private BlockPos findEscapePosition(Player self, LivingEntity target) {
+        if (mc.level == null || target == null) return null;
+        BlockPos origin = self.blockPosition();
+        int currentSides = countBoxedSides(self);
+        BlockPos best = null;
+        double bestScore = Double.MAX_VALUE;
+
+        for (int dx = -2; dx <= 2; dx++) {
+            for (int dz = -2; dz <= 2; dz++) {
+                for (int dy = -1; dy <= 2; dy++) {
+                    BlockPos candidate = origin.offset(dx, dy, dz);
+                    if (!isStandable(candidate) || self.getBoundingBox().intersects(new AABB(candidate))) continue;
+                    int sides = countBoxedSidesAt(candidate);
+                    if (sides >= currentSides) continue;
+
+                    double targetDistance = Math.sqrt(candidate.distSqr(target.blockPosition()));
+                    // Offene Seiten zuerst, dann naeher am Gegner; leichtes Hoehengewicht verhindert,
+                    // dass der Bot in ein weiter entferntes, aber ebenfalls offenes Feld springt.
+                    double score = sides * 10.0 + targetDistance + Math.abs(dy) * 0.35;
+                    if (score < bestScore) {
+                        bestScore = score;
+                        best = candidate;
+                    }
+                }
+            }
+        }
+        return best;
+    }
+
+    /** Sucht und nutzt eine nahe Kampfposition, bevor der direkte FollowProcess laeuft.
+     *  Bei einer eingeschlossenen Zelle wird zuerst ein Ausstieg gesucht; ein verlassenes
+     *  gegnerisches Loch loest den alten Pfad sofort, damit der Bot wieder verfolgt. */
     private boolean updateHolePositioning(LivingEntity target, double dist) {
         if (buildCoverCooldown > 0) buildCoverCooldown--;
 
-        if ((!holeAwareness.get() && !heightAdvantage.get()) || dist > 8) {
-            activeHole = null;
+        BlockPos targetFeet = target.blockPosition();
+        Player self = mc.player;
+
+        // Ein Escape-Ziel hat Vorrang vor der normalen Hole-Suche. Wenn der Gegner sein Loch
+        // verlassen hat, darf der Bot nicht weiter auf die alte Kampfzelle pathen.
+        if (holeEscapeActive) {
+            if (activeHole == null || targetFeet.distSqr(activeHole) > 16.0
+                || self.blockPosition().distSqr(activeHole) <= 1) {
+                clearHoleGoal();
+                return false;
+            }
+
+            if (holeEscapeStartedTick < 0) holeEscapeStartedTick = tickCounter;
+            if (holeEscapeLastPosition == null || self.position().distanceTo(holeEscapeLastPosition) > 0.12) {
+                holeEscapeLastPosition = self.position();
+            } else if (tickCounter - holeEscapeStartedTick > 30) {
+                // Baritone kommt nicht aus der Zelle heraus: Pfad aufgeben, damit der direkte
+                // FollowProcess bzw. eine ballistische Perle den Ausweg uebernehmen kann.
+                clearHoleGoal();
+                return false;
+            }
+            currentAction = "hole-escape";
+            return true;
+        }
+
+        if (activeHole != null && targetFeet.distSqr(activeHole) > 9.0) {
+            clearHoleGoal();
             return false;
         }
 
-        BlockPos best = findBestPosition(mc.player, target);
+        if ((!holeAwareness.get() && !heightAdvantage.get()) || dist > 8.0) {
+            clearHoleGoal();
+            return false;
+        }
+
+        // Bot selbst in einer 1x1-/Eingeschlossenen-Zelle und Gegner mehr als drei Bloecke weg:
+        // zuerst eine offene Nachbarzelle suchen, statt weiterhin eine zweite Deckungszelle zu waehlen.
+        if (countBoxedSides(self) >= 3 && dist > 3.0) {
+            BlockPos escape = findEscapePosition(self, target);
+            if (escape != null) {
+                activeHole = escape;
+                holeEscapeActive = true;
+                holeEscapeStartedTick = tickCounter;
+                holeEscapeLastPosition = self.position();
+                BaritoneAPI.getProvider().getPrimaryBaritone().getCustomGoalProcess()
+                    .setGoalAndPath(new baritone.api.pathing.goals.GoalBlock(escape));
+                currentAction = "hole-escape";
+                return true;
+            }
+            clearHoleGoal();
+            return false;
+        }
+
+        BlockPos best = findBestPosition(self, target);
 
         if (best == null) {
-            activeHole = null;
+            clearHoleGoal();
             // Cooldown, statt jeden Tick neu zu versuchen: ohne ihn rief updateHolePositioning() das
             // hier JEDEN Tick auf, solange kein natuerliches Loch gefunden wurde - der Bot hat sich damit
-            // Seite fuer Seite komplett selbst eingemauert (jede Platzierung eine eigene Rotation +
-            // Block-Paket), was sich als Lag bemerkbar machte UND ihn am Ende blind/bewegungsunfaehig
-            // in seiner eigenen Kiste stehen liess.
+            // Seite fuer Seite komplett selbst eingemauert.
             boolean outOfExplosives = totalItem(Items.END_CRYSTAL) <= 0
                 && !(anchorsExplodeHere() && totalItem(Items.RESPAWN_ANCHOR) > 0 && totalItem(Items.GLOWSTONE) > 0)
                 && !(useBeds.get() && bedsExplodeHere() && totalItem(GodmodePvP::isBed) > 0);
-            // Echte Notdeckung heisst: NICHTS Explosives mehr verfuegbar - solange noch Crystals/Anchor+
-            // Glowstone/Betten da sind, soll der Bot damit kaempfen (Block neben dem GEGNER fuer die
-            // Crystal-Unterlage, schlagen, crystaln, verfolgen), statt sich staendig ohne echten Grund
-            // selbst einzumauern, nur weil kein natuerliches Loch in der Naehe lag (auf offenem Feld quasi
-            // immer der Fall - das liess den Bot bislang WAEHREND aktiver Gefechte pausenlos Deckung um
-            // sich selbst bauen statt zu kaempfen).
             if (buildCover.get() && dist <= 4.5 && buildCoverCooldown <= 0 && outOfExplosives) {
-                buildOwnCover(mc.player, target);
+                buildOwnCover(self, target);
                 buildCoverCooldown = 30;
                 currentAction = "deckung-bauen";
             }
             return false;
         }
 
-        if (mc.player.blockPosition().distSqr(best) <= 1) {
-            activeHole = null; // angekommen - normale Verfolgung/Kampf uebernimmt wieder
+        if (self.blockPosition().distSqr(best) <= 1) {
+            clearHoleGoal(); // angekommen - normale Verfolgung/Kampf uebernimmt wieder
             return false;
         }
 
         if (!best.equals(activeHole)) {
             activeHole = best;
+            holeEscapeActive = false;
+            holeEscapeStartedTick = -1;
+            holeEscapeLastPosition = null;
             BaritoneAPI.getProvider().getPrimaryBaritone().getCustomGoalProcess()
                 .setGoalAndPath(new baritone.api.pathing.goals.GoalBlock(best));
         }
@@ -4671,6 +4767,98 @@ public class GodmodePvP extends Module {
         });
     }
 
+    /** Prueft die komplette berechnete Perlenbahn gegen die aktuelle Blockumgebung. */
+    private boolean pearlTrajectoryClear(Vec3 origin, double yaw, double pitch, Vec3 extraVel, double ticks) {
+        if (mc.level == null || mc.player == null) return false;
+        int maxTicks = Math.max(4, Math.min(80, (int) Math.ceil(ticks) + 2));
+        return PvpMath.trajectoryClear(origin, yaw, pitch, extraVel, (from, to) -> {
+            if (from.distanceTo(to) < 1e-6) return true;
+            ClipContext context = new ClipContext(from, to, ClipContext.Block.COLLIDER,
+                ClipContext.Fluid.NONE, mc.player);
+            return mc.level.clip(context).getType() == HitResult.Type.MISS;
+        }, maxTicks);
+    }
+
+    /** Erzeugt Zielpunkte aus Gegner-Vorhersage, Hitbox-Hoehen und tatsaechlich begehbaren Zellen
+     *  in der Umgebung. Dadurch kann eine Perle nicht nur geometrisch, sondern auch entlang der
+     *  realen Blockumgebung auf einen offenen Rand neben dem Gegner zielen. */
+    private List<Vec3> pearlCandidatePoints(LivingEntity target, Vec3 from) {
+        Vec3 centerOffset = target.getBoundingBox().getCenter().subtract(target.position());
+        Vec3 current = target.getBoundingBox().getCenter();
+        Vec3 predicted = predictOverTicks(target, leadTicks.get() + pingTicks()).add(centerOffset);
+        List<Vec3> points = new ArrayList<>();
+        points.add(predicted);
+        points.add(current);
+
+        for (Vec3 base : List.of(predicted, current)) {
+            points.add(base.add(0, -0.65, 0));
+            points.add(base.add(0, 0.65, 0));
+            for (int i = 0; i < 8; i++) {
+                double angle = i * Math.PI / 4.0;
+                points.add(base.add(Math.cos(angle) * 0.7, 0, Math.sin(angle) * 0.7));
+            }
+        }
+
+        BlockPos targetFeet = target.blockPosition();
+        for (int dx = -2; dx <= 2; dx++) {
+            for (int dz = -2; dz <= 2; dz++) {
+                for (int dy = -1; dy <= 2; dy++) {
+                    BlockPos cell = targetFeet.offset(dx, dy, dz);
+                    if (!isStandable(cell)) continue;
+                    Vec3 landing = Vec3.atBottomCenterOf(cell).add(0, 0.9, 0);
+                    if (landing.distanceTo(from) <= 28.0) points.add(landing);
+                }
+            }
+        }
+        return points;
+    }
+
+    /** Loest Zielbewegung, eigene Bewegung und Blockumgebung gemeinsam auf. Ein Wurf wird nur
+     *  zurueckgegeben, wenn die berechnete Bahn im aktuellen Level tatsaechlich frei ist. */
+    private double[] solvePearlAtTarget(LivingEntity target) {
+        if (target == null || mc.player == null || mc.level == null) return null;
+        Vec3 from = mc.player.getEyePosition().subtract(0, 0.1, 0);
+        Vec3 own = mc.player.getKnownMovement();
+        Vec3 extraVel = new Vec3(own.x, mc.player.onGround() ? 0 : own.y, own.z);
+        Vec3 targetCenter = target.getBoundingBox().getCenter();
+        Vec3 predicted = predictOverTicks(target, leadTicks.get() + pingTicks())
+            .add(target.getBoundingBox().getCenter().subtract(target.position()));
+
+        double bestScore = Double.MAX_VALUE;
+        double[] best = null;
+        for (Vec3 candidate : pearlCandidatePoints(target, from)) {
+            Vec3 aimPoint = candidate;
+            for (int round = 0; round < 3; round++) {
+                double[] aim = PvpMath.solvePearlAim(from, aimPoint, extraVel);
+                if (aim == null) break;
+                if (pearlTrajectoryClear(from, aim[0], aim[1], extraVel, aim[2])) {
+                    double score = candidate.distanceTo(predicted);
+                    if (score < bestScore) {
+                        bestScore = score;
+                        best = aim;
+                    }
+                    break;
+                }
+                // Nur echte Gegnerpunkte mit der Flugzeit nachfuehren; eine begehbare
+                // Umgebungszelle bleibt als feste Ausweichzelle erhalten.
+                if (candidate.distanceTo(targetCenter) < 1.5) {
+                    aimPoint = predictOverTicks(target, (int) Math.round(aim[2]))
+                        .add(target.getBoundingBox().getCenter().subtract(target.position()));
+                } else {
+                    break;
+                }
+            }
+        }
+        return best;
+    }
+
+    private boolean throwPearlAtTarget(LivingEntity target) {
+        if (tickCounter - lastPearlScanTick < 8) return false;
+        lastPearlScanTick = tickCounter;
+        double[] aim = solvePearlAtTarget(target);
+        return aim != null && throwPearlAt(aim[0], aim[1]);
+    }
+
     private void throwPearl(LivingEntity aimAt, boolean away) {
         if (drinkingFireRes) return; // s.o. - Swap-Merkposten waehrend des Trinkens nicht anfassen
         FindItemResult pearl = InvHelper.find(Items.ENDER_PEARL);
@@ -4681,44 +4869,18 @@ public class GodmodePvP extends Module {
             yaw = Rotations.getYaw(aimAt) + 180.0;
             pitch = -35; // steilerer Bogen als vorher (-20 war zu flach - Perle blieb oft am Boden/Hindernis haengen)
         } else if (aimAt != null) {
-            // Zwei Fehlerquellen, die beide eingerechnet werden muessen:
-            // 1. Zielbewegung: die Perle braucht je nach Distanz 0.5-2s Flugzeit. Deshalb wird abwechselnd
-            //    der Wurf fuer den aktuellen Zielpunkt geloest und der Zielpunkt mit der dabei berechneten
-            //    Flugzeit neu vorhergesagt (konvergiert nach 2-3 Runden).
-            // 2. EIGENbewegung: Minecraft addiert die Geschwindigkeit des Werfers auf die Perle
-            //    (getKnownMovement(), Y nur wenn nicht am Boden). Der Bot wirft praktisch immer im Sprint,
-            //    das sind bis zu 0.3 Bloecke/Tick gegen eine Wurfgeschwindigkeit von 1.5 - nachgerechnet
-            //    im Mittel 2.68 Bloecke Zielfehler, 82% der Wuerfe mehr als einen Block daneben. Genau das
-            //    war die Ursache der "Perlen liegen nicht akkurat"-Meldung; solvePearlAim korrigiert
-            //    dafuer sowohl Pitch als auch Yaw.
-            Vec3 from = mc.player.getEyePosition().subtract(0, 0.1, 0);
-            Vec3 own = mc.player.getKnownMovement();
-            Vec3 extraVel = new Vec3(own.x, mc.player.onGround() ? 0 : own.y, own.z);
-            // predictOverTicks() arbeitet mit der rohen Entity-Position (Fuesse) - dieselbe Referenz wie
-            // fuer D-Tap/Crystal-Bodensuche anderswo im File. Ohne diesen Offset wuerde jede verfeinerte
-            // Iteration nach der ersten leise auf Fusshoehe statt Koerpermitte zielen (~0.9 Bloecke zu
-            // niedrig) - genau das machte auch schon den ERSTEN Wurf (keine Zielbewegung noetig, aber die
-            // Iteration laeuft trotzdem) systematisch zu flach/kurz.
-            Vec3 centerOffset = aimAt.getBoundingBox().getCenter().subtract(aimAt.position());
-            Vec3 aimPoint = aimAt.getBoundingBox().getCenter();
-            double[] aim = PvpMath.solvePearlAim(from, aimPoint, extraVel);
-            for (int i = 0; i < 2 && aim != null; i++) {
-                aimPoint = predictOverTicks(aimAt, (int) Math.round(aim[2])).add(centerOffset);
-                aim = PvpMath.solvePearlAim(from, aimPoint, extraVel);
-            }
+            // Zielbewegung, eigene Bewegung und die tatsaechliche Blockumgebung werden gemeinsam
+            // geloest; ein Kandidat wird nur gewaehlt, wenn seine Bahn im Level frei ist.
+            double[] aim = solvePearlAtTarget(aimAt);
             if (aim == null) return; // ausserhalb der physischen Perlenreichweite - Perle sparen
             yaw = aim[0];
             pitch = aim[1];
-            // Restliche Streuung ist Vanilla, kein Bug hier: Minecraft wirft EnderPearlItem serverseitig
-            // mit shootFromRotation(..., inaccuracy=1.0F) - jeder Wurf bekommt eine kleine Zufallsstreuung
-            // vom Server, unabhaengig vom Client-Aim.
         } else {
             return;
         }
 
         throwPearlAt(yaw, pitch);
     }
-
     /** Wirft eine Perle mit der aktuellen Blick-Yaw und dem angegebenen Pitch. Positive Werte zeigen
      *  nach unten, negative nach oben. */
     private boolean throwPearlAtCurrentYaw(double pitch) {
@@ -4728,7 +4890,7 @@ public class GodmodePvP extends Module {
     private boolean throwPearlAt(double yaw, double pitch) {
         if (drinkingFireRes) return false;
         FindItemResult pearl = InvHelper.find(Items.ENDER_PEARL);
-        if (!pearl.found()) return false;
+        if (!pearl.found() || (!pearl.isOffhand() && !pearl.isHotbar())) return false;
 
         InteractionHand hand = pearl.isOffhand() ? InteractionHand.OFF_HAND : InteractionHand.MAIN_HAND;
         boolean queued = queueWithCombatSlot(pearl, yaw, pitch, PRIORITY_PEARL,

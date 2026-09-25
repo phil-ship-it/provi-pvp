@@ -179,4 +179,28 @@ class PvpMathTest {
         // Extrem hoch UND extrem nah: selbst der steilste erlaubte Wurf erreicht die Zielhoehe nicht.
         assertNull(PvpMath.solvePearlAim(new Vec3(0, 64, 0), new Vec3(1, 200, 1), Vec3.ZERO));
     }
+
+    @Test
+    void simulatePearlNormalizesDirectionVector() {
+        PvpMath.PearlArrival unit = PvpMath.simulatePearl(0, -12, Vec3.ZERO, 12, 0, 1);
+        PvpMath.PearlArrival scaled = PvpMath.simulatePearl(0, -12, Vec3.ZERO, 12, 0, 2);
+        assertNotNull(unit);
+        assertNotNull(scaled);
+        assertEquals(unit.height(), scaled.height(), 1e-9);
+        assertEquals(unit.lateral(), scaled.lateral(), 1e-9);
+        assertEquals(unit.ticks(), scaled.ticks(), 1e-9);
+    }
+
+    @Test
+    void solvePearlAimRejectsUnreachableNearVerticalTarget() {
+        assertNull(PvpMath.solvePearlAim(new Vec3(0, 64, 0), new Vec3(0.4, 94, 0), Vec3.ZERO));
+    }
+
+    @Test
+    void trajectoryClearDelegatesEverySegmentToEnvironmentCheck() {
+        assertTrue(PvpMath.trajectoryClear(Vec3.ZERO, 0, -10, Vec3.ZERO,
+            (from, to) -> true, 20));
+        assertFalse(PvpMath.trajectoryClear(Vec3.ZERO, 0, -10, Vec3.ZERO,
+            (from, to) -> false, 20));
+    }
 }

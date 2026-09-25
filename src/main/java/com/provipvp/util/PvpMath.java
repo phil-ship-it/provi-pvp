@@ -1,6 +1,7 @@
 package com.provipvp.util;
 
 import net.minecraft.world.phys.Vec3;
+import java.util.function.BiPredicate;
 
 /** Reine, zustandslose Berechnungen ohne jeden Zugriff auf den laufenden Client (kein {@code mc.*}) -
  *  bewusst hier statt als private Methode in den Modulen, aus zwei Gruenden: (1) die Pfeil-/Pearl-
@@ -46,6 +47,12 @@ public final class PvpMath {
      *  @return null, wenn die Perle die Distanz in 300 Ticks nie erreicht (viel zu steil geworfen). */
     public static PearlArrival simulatePearl(double yaw, double pitch, Vec3 extraVel,
                                              double targetDistXZ, double dirX, double dirZ) {
+        if (!Double.isFinite(targetDistXZ) || targetDistXZ <= 0) return null;
+        double dirLength = Math.hypot(dirX, dirZ);
+        if (dirLength < 1e-9) return null;
+        dirX /= dirLength;
+        dirZ /= dirLength;
+
         double yawRad = Math.toRadians(yaw), pitchRad = Math.toRadians(pitch);
         double vx = -Math.sin(yawRad) * Math.cos(pitchRad);
         double vy = -Math.sin(pitchRad);
@@ -80,6 +87,40 @@ public final class PvpMath {
         return null;
     }
 
+    /** Prueft die berechnete Flugbahn abschnittsweise gegen ein frei uebergebenes Kollisions- oder
+     *  Sichtbarkeitspruefverfahren. Dadurch bleibt die Ballistik rein, waehrend das Modul pro Tick
+     *  Bloecke, Wasser und die tatsaechliche Umgebung des Werfers einbeziehen kann. */
+    public static boolean trajectoryClear(Vec3 origin, double yaw, double pitch, Vec3 extraVel,
+                                          BiPredicate<Vec3, Vec3> segmentClear, int maxTicks) {
+        if (origin == null || extraVel == null || segmentClear == null || maxTicks <= 0) return false;
+
+        double yawRad = Math.toRadians(yaw), pitchRad = Math.toRadians(pitch);
+        double vx = -Math.sin(yawRad) * Math.cos(pitchRad);
+        double vy = -Math.sin(pitchRad);
+        double vz = Math.cos(yawRad) * Math.cos(pitchRad);
+        double len = Math.sqrt(vx * vx + vy * vy + vz * vz);
+        if (len < 1e-9) return false;
+        vx = vx / len * 1.5 + extraVel.x;
+        vy = vy / len * 1.5 + extraVel.y;
+        vz = vz / len * 1.5 + extraVel.z;
+
+        double x = 0, y = 0, z = 0;
+        Vec3 previous = origin;
+        for (int tick = 0; tick < maxTicks; tick++) {
+            vy -= 0.03;
+            vx *= 0.99;
+            vy *= 0.99;
+            vz *= 0.99;
+            x += vx;
+            y += vy;
+            z += vz;
+            Vec3 current = origin.add(x, y, z);
+            if (!segmentClear.test(previous, current)) return false;
+            previous = current;
+        }
+        return true;
+    }
+
     /** Loest Yaw UND Pitch fuer einen Perlenwurf auf einen Punkt, inklusive der Eigenbewegung des
      *  Werfers. Pitch kommt aus einer Bisektion ueber die Ankunftshoehe (die faellt monoton mit
      *  steigendem Pitch), der Yaw aus dem verbleibenden Querversatz - beides abwechselnd, bis der
@@ -90,18 +131,16 @@ public final class PvpMath {
      *  Flugbahn auch seitlich weg, dagegen hilft ausschliesslich eine Yaw-Korrektur.
      *  @return {yaw, pitch, Flugzeit in Ticks} oder null, wenn das Ziel physisch nicht erreichbar ist. */
     public static double[] solvePearlAim(Vec3 from, Vec3 to, Vec3 extraVel) {
+        if (from == null || to == null || extraVel == null) return null;
         double dx = to.x - from.x, dz = to.z - from.z, dy = to.y - from.y;
-        double distXZ = Math.sqrt(dx * dx + dz * dz);
-        double yaw = Math.toDegrees(Math.atan2(-dx, dz));
-        if (distXZ < 0.5) { // praktisch am eigenen Fuss - keine Ballistik noetig
-            return new double[] { yaw, Math.toDegrees(-Math.atan2(dy, Math.max(distXZ, 1e-6))), 0 };
-        }
+        double distXZ = Math.hypot(dx, dz);
+        if (!Double.isFinite(distXZ) || distXZ < 1e-6) return null;
 
         double dirX = dx / distXZ, dirZ = dz / distXZ;
+        double yaw = Math.toDegrees(Math.atan2(-dx, dz));
         double pitch = Math.toDegrees(-Math.atan2(dy, distXZ));
-        PearlArrival hit = null;
 
-        for (int round = 0; round < 6; round++) {
+        for (int round = 0; round < 8; round++) {
             // Pitch ist auf [-90,90] begrenzt; die Ankunftshoehe faellt monoton mit steigendem Pitch,
             // deshalb reicht eine simple Bisektion ueber den gesamten erlaubten Bereich.
             double lo = -89, hi = 89;
@@ -112,14 +151,15 @@ public final class PvpMath {
                 if (probe == null || probe.height() > dy) lo = mid; else hi = mid;
             }
             pitch = (lo + hi) / 2;
-            hit = simulatePearl(yaw, pitch, extraVel, distXZ, dirX, dirZ);
+            PearlArrival hit = simulatePearl(yaw, pitch, extraVel, distXZ, dirX, dirZ);
             if (hit == null) return null;
-            // Selbst der steilste erlaubte Wurf erreicht die Zielhoehe nicht (Ziel sehr hoch und nah,
-            // z.B. gerade explosionsgeschleudert) - lieber die Perle sparen als sicher danebenwerfen.
+            // Selbst der steilste erlaubte Wurf erreicht die Zielhoehe nicht (nahe und sehr hoch) -
+            // lieber die Perle sparen als sicher danebenwerfen.
             if (Math.abs(hit.height() - dy) > 1.0) return null;
             if (Math.abs(hit.lateral()) < 0.02) break;
-            yaw += Math.toDegrees(Math.atan2(hit.lateral(), distXZ));
+            yaw += Math.toDegrees(Math.atan2(hit.lateral(), Math.max(distXZ, 1e-6)));
         }
-        return new double[] { yaw, pitch, hit.ticks() };
+        PearlArrival finalHit = simulatePearl(yaw, pitch, extraVel, distXZ, dirX, dirZ);
+        return finalHit == null ? null : new double[] { yaw, pitch, finalHit.ticks() };
     }
 }

@@ -482,6 +482,7 @@ public class HumanPvP extends Module {
     private final Random rng = new Random();
     private final Map<UUID, Vec3> lastPositions = new HashMap<>();
     private double targetSpeed;
+    private int lastPearlScanTick = -999;
     private int tickCounter;
     private int lastErrorWarnTick = -999;
     private int lastPearlTick = -999;
@@ -587,6 +588,7 @@ public class HumanPvP extends Module {
         // Beide PvP-Profile verwalten dieselben globalen Meteor-/Baritone-Ressourcen. Beim
         // Aktivieren wird das andere Profil daher sofort und rueckstandsfrei deaktiviert.
         GodmodePvP godmode = Modules.get().get(GodmodePvP.class);
+        lastPearlScanTick = -999;
         if (godmode != null && godmode.isActive()) godmode.disable();
         tickCounter = 0;
         lastPearlTick = -999;
@@ -926,12 +928,13 @@ public class HumanPvP extends Module {
 
         handleTrap(target);
 
-        // Schwelle an attack-range gekoppelt (nie kleiner als Nahkampf-Reichweite+0.5) und Sichtlinie
-        // Pflicht - sonst fliegt die Perle nur gegen die Wand/den Huegel dazwischen statt zum Gegner.
+        // Die Perlenbahn wird gegen die aktuelle Umgebung geprueft; ein straight-line LOS-Gate
+        // wuerde Lochrand und kurze Kanten faelschlich als "nicht werfbar" behandeln.
         double pearlReachThreshold = Math.max(pearlMinDist.get(), attackRange.get() + 0.5);
-        if (pearlThrow.get() && dist > pearlReachThreshold && pursuing && self.hasLineOfSight(target)
-            && tickCounter - lastPearlTick > pearlCooldown(dist) && !guiOpen) {
-            if (throwPearl(target, false)) currentAction = "pearl-gapclose";
+        if (pearlThrow.get() && dist > pearlReachThreshold && pursuing
+            && tickCounter - lastPearlTick > pearlCooldown(dist) && !guiOpen
+            && throwPearlAtTarget(target)) {
+            currentAction = "pearl-gapclose";
         }
 
         selectAura(target);
@@ -1913,6 +1916,67 @@ public class HumanPvP extends Module {
         if (swapped) InvUtils.swapBack();
     }
 
+    private boolean pearlTrajectoryClear(Vec3 origin, double yaw, double pitch, Vec3 extraVel, double ticks) {
+        if (mc.level == null || mc.player == null) return false;
+        int maxTicks = Math.max(4, Math.min(80, (int) Math.ceil(ticks) + 2));
+        return PvpMath.trajectoryClear(origin, yaw, pitch, extraVel, (from, to) -> {
+            if (from.distanceTo(to) < 1e-6) return true;
+            ClipContext context = new ClipContext(from, to, ClipContext.Block.COLLIDER,
+                ClipContext.Fluid.NONE, mc.player);
+            return mc.level.clip(context).getType() == HitResult.Type.MISS;
+        }, maxTicks);
+    }
+
+    private boolean isPearlLanding(BlockPos cell) {
+        return mc.level != null && mc.level.getBlockState(cell).isAir()
+            && mc.level.getBlockState(cell.above()).isAir()
+            && mc.level.getBlockState(cell.below()).blocksMotion();
+    }
+
+    private double[] solvePearlAtTarget(LivingEntity target) {
+        if (target == null || mc.player == null || mc.level == null) return null;
+        Vec3 from = mc.player.getEyePosition().subtract(0, 0.1, 0);
+        Vec3 own = mc.player.getKnownMovement();
+        Vec3 extraVel = new Vec3(own.x, mc.player.onGround() ? 0 : own.y, own.z);
+        Vec3 center = target.getBoundingBox().getCenter();
+        List<Vec3> points = new ArrayList<>();
+        points.add(center);
+        points.add(center.add(0, -0.65, 0));
+        points.add(center.add(0, 0.65, 0));
+        for (int i = 0; i < 8; i++) {
+            double angle = i * Math.PI / 4.0;
+            points.add(center.add(Math.cos(angle) * 0.7, 0, Math.sin(angle) * 0.7));
+        }
+        BlockPos feet = target.blockPosition();
+        for (int dx = -1; dx <= 1; dx++) {
+            for (int dz = -1; dz <= 1; dz++) {
+                for (int dy = -1; dy <= 1; dy++) {
+                    BlockPos cell = feet.offset(dx, dy, dz);
+                    if (isPearlLanding(cell)) points.add(Vec3.atBottomCenterOf(cell).add(0, 0.9, 0));
+                }
+            }
+        }
+
+        double[] best = null;
+        double bestScore = Double.MAX_VALUE;
+        for (Vec3 point : points) {
+            double[] aim = PvpMath.solvePearlAim(from, point, extraVel);
+            if (aim == null || !pearlTrajectoryClear(from, aim[0], aim[1], extraVel, aim[2])) continue;
+            double score = point.distanceTo(center);
+            if (score < bestScore) {
+                bestScore = score;
+                best = aim;
+            }
+        }
+        return best;
+    }
+
+    private boolean throwPearlAtTarget(LivingEntity target) {
+        if (tickCounter - lastPearlScanTick < 8) return false;
+        lastPearlScanTick = tickCounter;
+        return throwPearl(target, false);
+    }
+
     private boolean throwPearl(LivingEntity aimAt, boolean away) {
         if (drinkingFireRes) return false;
         FindItemResult pearl = InvHelper.find(Items.ENDER_PEARL);
@@ -1922,9 +1986,7 @@ public class HumanPvP extends Module {
             yaw = Rotations.getYaw(aimAt) + 180.0;
             pitch = -35;
         } else {
-            Vec3 own = mc.player.getKnownMovement();
-            double[] aim = PvpMath.solvePearlAim(mc.player.getEyePosition().subtract(0, 0.1, 0),
-                aimAt.getBoundingBox().getCenter(), new Vec3(own.x, mc.player.onGround() ? 0 : own.y, own.z));
+            double[] aim = solvePearlAtTarget(aimAt);
             if (aim == null) return false;
             yaw = aim[0];
             pitch = aim[1];
