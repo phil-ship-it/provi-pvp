@@ -21,7 +21,7 @@ is for you:
 3. Extract every `.jar` from that zip straight into `%appdata%\.minecraft\mods` (press Win+R, type
    `%appdata%\.minecraft\mods`, create the `mods` folder if it doesn't exist yet, drop the files in).
 4. Open the Minecraft Launcher, select the new Fabric 26.2 profile, play. In-game, **Right Shift** opens Meteor's
-   menu — `GodmodePvP` and `HumanPvP` are under **Combat**.
+   menu — `GodmodePvP` and `HumanPvP` are under **ProviPvP**.
 
 Everything past this point is for anyone who wants to understand the settings, add more addons, or build from
 source.
@@ -45,7 +45,7 @@ source.
     - [Baritone](https://github.com/cabaletta/baritone/releases) (standalone Fabric release)
 3. Download the latest `provi-pvp-*.jar` from the [Releases](../../releases) page and drop it into the same
    `mods` folder.
-4. Launch the game. Two new modules appear in Meteor's **Combat** category: `GodmodePvP` and `HumanPvP`.
+4. Launch the game. Two new modules appear in Meteor's **ProviPvP** category: `GodmodePvP` and `HumanPvP`.
 
 ## Full Addon Stack
 
@@ -143,7 +143,7 @@ A standalone module that spawns a fake player with configurable HP (including li
 active, or an invincible mode) to test attack, knockback, and combat-timing changes without needing a second
 account or a live server.
 
-### AutoArmor
+### ProviPvP Auto Armor (`provi-auto-armor`)
 
 Automatically equips the strongest available armor piece per slot from your entire inventory, scored by real
 armor/toughness attribute value rather than guessing from material name — an enchanted Diamond piece correctly
@@ -160,7 +160,7 @@ grid) - the module opens or places one automatically before attempting the explo
 server-side race condition is still unpatched is unverified - the original was last confirmed working in May
 2025. Test with the `single` setting on a worthless item first.
 
-### PacketLogger, BrandSpoof, ExploitGuard, PacketFilter, MacroTrigger
+### ProviPvP Packet Logger (`provi-packet-logger`), BrandSpoof, ExploitGuard, PacketFilter, MacroTrigger
 
 Small, honestly-scoped debug/OpSec/automation modules:
 

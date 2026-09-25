@@ -74,21 +74,24 @@ import static meteordevelopment.meteorclient.MeteorClient.mc;
  */
 public class HumanPvP extends Module {
     private final SettingGroup sgGeneral = settings.getDefaultGroup();
-    private final SettingGroup sgCombat = settings.createGroup("Kampf");
-    private final SettingGroup sgDefense = settings.createGroup("Schutz");
-    private final SettingGroup sgInv = settings.createGroup("Inventar");
-    private final SettingGroup sgPearl = settings.createGroup("Enderperlen");
-    private final SettingGroup sgHeal = settings.createGroup("Heilung");
+    private final SettingGroup sgCombat = settings.createGroup("1 · Angriff & Auras");
+    private final SettingGroup sgDefense = settings.createGroup("2 · Schutz & Recovery");
+    private final SettingGroup sgNavigation = settings.createGroup("3 · Navigation");
+    private final SettingGroup sgInv = settings.createGroup("4 · Inventar");
+    private final SettingGroup sgHuman = settings.createGroup("5 · Human-Profil");
+    private final SettingGroup sgPearl = settings.createGroup("6 · Perlen & Flucht");
+    private final SettingGroup sgHeal = settings.createGroup("7 · Heilung");
+    private final SettingGroup sgQA = settings.createGroup("8 · QA & Erweitert");
 
     // General
-    public final Setting<Boolean> follow = sgGeneral.add(new BoolSetting.Builder()
+    public final Setting<Boolean> follow = sgNavigation.add(new BoolSetting.Builder()
         .name("follow")
         .description("Verfolgt das Ziel mit Baritone - vorsichtige, menschentaugliche Pfade.")
         .defaultValue(true)
         .build()
     );
 
-    public final Setting<Integer> followRange = sgGeneral.add(new IntSetting.Builder()
+    public final Setting<Integer> followRange = sgNavigation.add(new IntSetting.Builder()
         .name("follow-range")
         .description("Maximale Distanz, ab der ein Spieler ueberhaupt als Ziel erkannt/beobachtet wird.")
         .defaultValue(20)
@@ -97,7 +100,7 @@ public class HumanPvP extends Module {
         .build()
     );
 
-    public final Setting<Integer> engageDistance = sgGeneral.add(new IntSetting.Builder()
+    public final Setting<Integer> engageDistance = sgNavigation.add(new IntSetting.Builder()
         .name("engage-distance")
         .description("Erst ab dieser Distanz laeuft/perlt der Bot aktiv auf das Ziel zu. Darueber hinaus (bis follow-range) wird nur beobachtet, ohne loszurennen.")
         .defaultValue(14)
@@ -117,7 +120,7 @@ public class HumanPvP extends Module {
 
     public final Setting<Boolean> smartTargeting = sgGeneral.add(new BoolSetting.Builder()
         .name("smart-targeting")
-        .description("Bevorzugt bei der Zielwahl einen isolierten Gegner (ohne Mitspieler in Rueckendeckungs-Reichweite) vor reiner Distanz. Wirkt nur auf die ANFANGS-Zielwahl, ein bereits engagiertes Ziel wird nicht mehr gewechselt.")
+        .description("Bevorzugt bei der Zielwahl einen isolierten Gegner (ohne Mitspieler in Rueckendeckungs-Reichweite) vor reiner Distanz. Die Zielwahl wird regelmaessig neu bewertet; ein laufender Kampf bleibt bis zum naechsten sauberen Wechsel gebunden.")
         .defaultValue(true)
         .build()
     );
@@ -132,7 +135,7 @@ public class HumanPvP extends Module {
         .build()
     );
 
-    public final Setting<Integer> reactionMinTicks = sgGeneral.add(new IntSetting.Builder()
+    public final Setting<Integer> reactionMinTicks = sgHuman.add(new IntSetting.Builder()
         .name("reaction-min")
         .description("Minimale Reaktionszeit (Ticks) auf ein neues Ziel, bevor angegriffen wird.")
         .defaultValue(3)
@@ -141,7 +144,7 @@ public class HumanPvP extends Module {
         .build()
     );
 
-    public final Setting<Integer> reactionMaxTicks = sgGeneral.add(new IntSetting.Builder()
+    public final Setting<Integer> reactionMaxTicks = sgHuman.add(new IntSetting.Builder()
         .name("reaction-max")
         .description("Maximale Reaktionszeit (Ticks) auf ein neues Ziel.")
         .defaultValue(9)
@@ -150,7 +153,7 @@ public class HumanPvP extends Module {
         .build()
     );
 
-    public final Setting<Boolean> freeLook = sgGeneral.add(new BoolSetting.Builder()
+    public final Setting<Boolean> freeLook = sgQA.add(new BoolSetting.Builder()
         .name("free-look")
         .description("Silent-Rotations: der Bot zielt weiterhin korrekt (das Server-Paket bekommt die richtige Blickrichtung), aber deine eigene Kamera bleibt frei drehbar. ACHTUNG: separate Rotations-Pakete ohne dazu passende Kamerabewegung sind eines der klassischsten Anti-Cheat-Erkennungsmuster ueberhaupt - auf Servern mit aktivem Anti-Cheat kann das zu Bewegungs-Korrekturen/Rubberbanding fuehren. Deshalb standardmaessig aus.")
         .defaultValue(false)
@@ -199,7 +202,7 @@ public class HumanPvP extends Module {
         .build()
     );
 
-    public final Setting<Integer> minSupportDelay = sgCombat.add(new IntSetting.Builder()
+    public final Setting<Integer> minSupportDelay = sgQA.add(new IntSetting.Builder()
         .name("min-support-delay")
         .description("Mindest-Tickabstand zwischen Obsidian-Unterbau und dem folgenden Crystal-Platzieren (CrystalAuras 'support-delay'). Beide Aktionen nutzen Minecrafts eigenes sequenznummer-basiertes Block-Vorhersage-System (seit 1.19) - schickt man beide zu dicht hintereinander raus, bevor die erste Sequenz vom Server bestaetigt ist, kann die Vorhersage durcheinanderkommen. Auf Servern mit spuerbarer Latenz oder Versions-Uebersetzung (z.B. ViaVersion) braucht es mehr Puffer als den Meteor-Standard.")
         .defaultValue(4)
@@ -222,7 +225,7 @@ public class HumanPvP extends Module {
         .build()
     );
 
-    public final Setting<Boolean> knockbackPearl = sgCombat.add(new BoolSetting.Builder()
+    public final Setting<Boolean> knockbackPearl = sgPearl.add(new BoolSetting.Builder()
         .name("knockback-pearl")
         .description("Wenn der Bot durch Knockback in die Luft geschleudert wird ODER generell gerade in einem gefaehrlichen Fall steckt (z.B. von einer Kante), sofort senkrecht nach unten perlen.")
         .defaultValue(true)
@@ -252,7 +255,7 @@ public class HumanPvP extends Module {
         .build()
     );
 
-    public final Setting<Double> attackChance = sgCombat.add(new DoubleSetting.Builder()
+    public final Setting<Double> attackChance = sgHuman.add(new DoubleSetting.Builder()
         .name("attack-chance")
         .description("Wahrscheinlichkeit, dass ein bereiter Schlag wirklich ausgefuehrt wird (menschliches Verklicken).")
         .defaultValue(0.9)
@@ -261,7 +264,7 @@ public class HumanPvP extends Module {
         .build()
     );
 
-    public final Setting<Double> aimTolerance = sgCombat.add(new DoubleSetting.Builder()
+    public final Setting<Double> aimTolerance = sgHuman.add(new DoubleSetting.Builder()
         .name("aim-tolerance")
         .description("Ziel-Toleranz in Grad, bevor geschlagen oder platziert wird.")
         .defaultValue(4.0)
@@ -270,7 +273,7 @@ public class HumanPvP extends Module {
         .build()
     );
 
-    public final Setting<Double> maxTurnPerTick = sgCombat.add(new DoubleSetting.Builder()
+    public final Setting<Double> maxTurnPerTick = sgHuman.add(new DoubleSetting.Builder()
         .name("max-turn-speed")
         .description("Maximale Kamera-Drehung pro Tick in Grad (menschliches Tempo statt Sofort-Snap).")
         .defaultValue(18.0)
@@ -289,7 +292,7 @@ public class HumanPvP extends Module {
         .build()
     );
 
-    public final Setting<Boolean> escapePearl = sgDefense.add(new BoolSetting.Builder()
+    public final Setting<Boolean> escapePearl = sgPearl.add(new BoolSetting.Builder()
         .name("escape-pearl")
         .description("Perlen-Flucht bei kritischem HP und nahem Gegner.")
         .defaultValue(true)
@@ -355,7 +358,7 @@ public class HumanPvP extends Module {
     // Inventar
     public final Setting<Boolean> invManager = sgInv.add(new BoolSetting.Builder()
         .name("inv-manager")
-        .description("Legt knapp gewordene Combat-Items (Crystals, Anchors, Glowstone, Perlen, Obsidian, Web) aus dem Hauptinventar in die Hotbar nach.")
+        .description("Legt knapp gewordene Combat-Items (Crystals, Anker, Glowstone, Perlen, Obsidian, Web) aus dem Hauptinventar in die Hotbar nach und raeumt unbrauchbare Ballast-Slots frei.")
         .defaultValue(true)
         .build()
     );
@@ -442,7 +445,7 @@ public class HumanPvP extends Module {
 
     public final Setting<Double> pearlMinDist = sgPearl.add(new DoubleSetting.Builder()
         .name("pearl-min-dist")
-        .description("Ab dieser Distanz wird eine Perle geworfen.")
+        .description("Distanzschwelle fuer den Gap-Close-Wurf; der effektive Wert ist mindestens attack-range + 0.5 und benoetigt freie Sicht.")
         .defaultValue(10.0)
         .range(6.0, 40.0)
         .sliderRange(6.0, 30.0)
@@ -459,7 +462,7 @@ public class HumanPvP extends Module {
 
     public final Setting<Double> healMinDamage = sgHeal.add(new DoubleSetting.Builder()
         .name("heal-min-damage")
-        .description("Mindestens so viel HP muessen seit dem letzten Tick verloren gegangen sein, damit ueberhaupt ein Trank geworfen wird - verhindert Trankverschwendung bei jedem winzigen Kratzer.")
+        .description("Mindestens so viel HP müssen im rollierenden Fenster (bis zu 8 Ticks) verloren gehen, damit ein Heiltrank geworfen wird; nach dem ersten qualifizierten Treffer wird bis zur vollen Health weiter geheilt.")
         .defaultValue(3.0)
         .range(0.5, 10.0)
         .sliderRange(0.5, 10.0)
@@ -502,6 +505,11 @@ public class HumanPvP extends Module {
     private float lastSelfHpForKnockback = -1;
     private Vec3 lastSelfPos;
     private int rubberbandCooldown;
+    private boolean followSuppressedUntilDecision;
+    private boolean autoMendEnabledByHuman;
+    private boolean autoEatEnabledByHuman;
+    private boolean noFallEnabledByHuman;
+    private boolean crystalAuraEnabledByHuman;
     private final Map<net.minecraft.world.item.Item, Boolean> warnedOutOfMisc = new HashMap<>();
     private String currentAction = "-";
     private boolean blocking;
@@ -517,6 +525,9 @@ public class HumanPvP extends Module {
     private CrystalAura.SupportMode savedSupport;
     private int savedSupportDelay = -1;
     private boolean supportSyncFailed;
+    private InteractionHand blockingHand = InteractionHand.MAIN_HAND;
+    private InteractionHand fireResHand = InteractionHand.MAIN_HAND;
+    private boolean fireResSwapBack;
     private boolean followActive;
     private UUID followedId;
 
@@ -573,7 +584,12 @@ public class HumanPvP extends Module {
 
     @Override
     public void onActivate() {
+        // Beide PvP-Profile verwalten dieselben globalen Meteor-/Baritone-Ressourcen. Beim
+        // Aktivieren wird das andere Profil daher sofort und rueckstandsfrei deaktiviert.
+        GodmodePvP godmode = Modules.get().get(GodmodePvP.class);
+        if (godmode != null && godmode.isActive()) godmode.disable();
         tickCounter = 0;
+        lastPearlTick = -999;
         supportSyncFailed = false;
         lastErrorWarnTick = -999;
         drinkingFireRes = false;
@@ -582,7 +598,7 @@ public class HumanPvP extends Module {
         lastSelfHpForKnockback = -1;
         lastSelfPos = null;
         rubberbandCooldown = 0;
-        blocking = false;
+        followSuppressedUntilDecision = false;
         blockingSwapBack = false;
         shieldUntil = 0;
         lastCrystalCount = -1;
@@ -592,7 +608,13 @@ public class HumanPvP extends Module {
         nextStrafeSwitchTick = -1;
         followActive = false;
         followedId = null;
-        engagedId = null;
+        autoMendEnabledByHuman = false;
+        autoEatEnabledByHuman = false;
+        noFallEnabledByHuman = false;
+        crystalAuraEnabledByHuman = false;
+        blockingHand = InteractionHand.MAIN_HAND;
+        fireResHand = InteractionHand.MAIN_HAND;
+        fireResSwapBack = false;
         lastRetargetCheck = 0;
         secondEnemyCooldown = 0;
         engageAtTick = 0;
@@ -648,9 +670,9 @@ public class HumanPvP extends Module {
         bs.enterPortal.value = false;
         bs.blocksToAvoid.value = new java.util.ArrayList<>(java.util.List.of(net.minecraft.world.level.block.Blocks.NETHER_PORTAL));
 
-        if (autoMendOn.get()) safeEnable(m, AutoMend.class);
-        if (autoEatOn.get()) safeEnable(m, AutoEat.class);
-        if (noFallOn.get()) safeEnable(m, NoFall.class);
+        if (autoMendOn.get()) autoMendEnabledByHuman = safeEnable(m, AutoMend.class);
+        if (autoEatOn.get()) autoEatEnabledByHuman = safeEnable(m, AutoEat.class);
+        if (noFallOn.get()) noFallEnabledByHuman = safeEnable(m, NoFall.class);
 
         MeteorClient.EVENT_BUS.subscribe(this);
 
@@ -662,11 +684,10 @@ public class HumanPvP extends Module {
         MeteorClient.EVENT_BUS.unsubscribe(this);
 
         Modules m = Modules.get();
-        safeDisable(m, CrystalAura.class);
-        safeDisable(m, AutoMend.class);
-        safeDisable(m, AutoEat.class);
-        safeDisable(m, NoFall.class);
-
+        if (crystalAuraEnabledByHuman) safeDisable(m, CrystalAura.class);
+        if (autoMendEnabledByHuman) safeDisable(m, AutoMend.class);
+        if (autoEatEnabledByHuman) safeDisable(m, AutoEat.class);
+        if (noFallEnabledByHuman) safeDisable(m, NoFall.class);
         CrystalAura ca = m.get(CrystalAura.class);
         if (ca != null && savedPlaceDelay >= 0) ca.placeDelay.set(savedPlaceDelay);
         if (ca != null) restoreSupport(ca);
@@ -680,8 +701,9 @@ public class HumanPvP extends Module {
             blockingSwapBack = false;
         }
         if (drinkingFireRes) {
-            InvUtils.swapBack();
+            if (fireResSwapBack) InvUtils.swapBack();
             drinkingFireRes = false;
+            fireResSwapBack = false;
         }
         warnedOutOfMisc.clear();
         Input.setKeyState(mc.options.keySprint, false);
@@ -736,11 +758,15 @@ public class HumanPvP extends Module {
 
         if (!guiOpen) {
             if (invManager.get() && tickCounter % 20 == 0) inventoryTick();
+            if (tickCounter % 20 == 0) {
+                CrystalAura ca = Modules.get().get(CrystalAura.class);
+                if (ca != null) syncSupportDelay(ca);
+            }
         }
 
         if (blocking) {
             if (tickCounter < shieldUntil) {
-                mc.gameMode.useItem(mc.player, InteractionHand.MAIN_HAND);
+                mc.gameMode.useItem(mc.player, blockingHand);
                 currentAction = "schild-block";
                 return;
             }
@@ -809,17 +835,18 @@ public class HumanPvP extends Module {
         } else if (antiRubberband.get() && tickCounter - lastPearlTick > 10
             && (selfMoved > 6.0 || (selfMoved > 2.5 && !tookHit))) {
             cancelFollow();
+            followSuppressedUntilDecision = true;
             rubberbandCooldown = 10;
             currentAction = "rubberband";
         }
         boolean launchedByHit = tookHit && self.getDeltaMovement().y > 0.35;
         boolean fallingDanger = !self.onGround() && self.fallDistance > 3.0f && self.getDeltaMovement().y < 0.05;
         if (knockbackPearl.get() && (launchedByHit || fallingDanger)
-            && tickCounter - lastPearlTick > 15
-            && (InvHelper.has(Items.ENDER_PEARL))) {
-            throwPearlDown();
-            currentAction = launchedByHit ? "pearl-knockback" : "pearl-fallschutz";
-            return;
+            && tickCounter - lastPearlTick > 15 && InvHelper.has(Items.ENDER_PEARL)) {
+            if (throwPearlDown()) {
+                currentAction = launchedByHit ? "pearl-knockback" : "pearl-fallschutz";
+                return;
+            }
         }
         manageSprintForKnockback(dist);
 
@@ -832,9 +859,10 @@ public class HumanPvP extends Module {
             && (InvHelper.has(Items.ENDER_PEARL));
         if (escapePearl.get() && self.getHealth() <= 8.0f && dist <= 6.0) {
             if (pearlReady) {
-                throwPearl(target, true);
-                currentAction = "escape-pearl";
-                return;
+                if (throwPearl(target, true)) {
+                    currentAction = "escape-pearl";
+                    return;
+                }
             }
             if (autoShield.get() && !blocking) {
                 shieldUntil = tickCounter + 20;
@@ -882,6 +910,9 @@ public class HumanPvP extends Module {
         if (tickCounter < explosionRetreatUntil) {
             cancelFollow();
             currentAction = "rueckzugsschritt";
+        } else if (followSuppressedUntilDecision) {
+            cancelFollow();
+            if (rubberbandCooldown <= 0) followSuppressedUntilDecision = false;
         } else if (follow.get() && pursuing) {
             updateFollow(target);
         } else {
@@ -900,8 +931,7 @@ public class HumanPvP extends Module {
         double pearlReachThreshold = Math.max(pearlMinDist.get(), attackRange.get() + 0.5);
         if (pearlThrow.get() && dist > pearlReachThreshold && pursuing && self.hasLineOfSight(target)
             && tickCounter - lastPearlTick > pearlCooldown(dist) && !guiOpen) {
-            throwPearl(target, false);
-            currentAction = "pearl-gapclose";
+            if (throwPearl(target, false)) currentAction = "pearl-gapclose";
         }
 
         selectAura(target);
@@ -1053,11 +1083,17 @@ public class HumanPvP extends Module {
     private void startBlock() {
         if (drinkingFireRes) return; // Feuerresistenz-Trank haelt gerade den gemeinsamen Swap-Merkposten - nicht ueberschreiben
         FindItemResult shield = InvHelper.find(Items.SHIELD);
-        if (!shield.found()) return;
+        if (!shield.found() || (!shield.isHotbar() && !shield.isOffhand())) return;
 
-        blockingSwapBack = InvUtils.swap(shield.slot(), true);
-        mc.gameMode.useItem(mc.player, InteractionHand.MAIN_HAND);
+        boolean swapped = false;
+        if (!shield.isOffhand() && !shield.isMainHand()) {
+            swapped = InvUtils.swap(shield.slot(), true);
+            if (!swapped) return;
+        }
+        blockingHand = shield.isOffhand() ? InteractionHand.OFF_HAND : InteractionHand.MAIN_HAND;
+        mc.gameMode.useItem(mc.player, blockingHand);
         blocking = true;
+        blockingSwapBack = swapped;
     }
 
     private void stopBlock() {
@@ -1171,15 +1207,21 @@ public class HumanPvP extends Module {
 
     /** Interagiert nur, wenn die (sichtbare, tempolimitierte) Rotation schon nah genug am Ziel ist. */
     private boolean interactAnchor(FindItemResult item) {
-        if (drinkingFireRes) return false; // s.o. - Swap-Merkposten waehrend des Trinkens nicht anfassen
+        if (drinkingFireRes || !item.found() || (!item.isOffhand() && !item.isHotbar())) return false;
         Vec3 center = Vec3.atCenterOf(anchorPos);
         smoothLookAt(center);
         if (currentAimError(center) > aimTolerance.get()) return false;
-
-        boolean swapped = InvUtils.swap(item.slot(), true);
-        BlockUtils.interact(new BlockHitResult(center, BlockUtils.getDirection(anchorPos), anchorPos, true), InteractionHand.MAIN_HAND, true);
+        boolean swapped = false;
+        if (!item.isOffhand() && !item.isMainHand()) {
+            swapped = InvUtils.swap(item.slot(), true);
+            if (!swapped) return false;
+        }
+        InteractionHand hand = item.isOffhand() ? InteractionHand.OFF_HAND : InteractionHand.MAIN_HAND;
+        boolean success = mc.gameMode.useItemOn(mc.player, hand,
+            new BlockHitResult(center, BlockUtils.getDirection(anchorPos), anchorPos, true)).consumesAction();
+        if (success) mc.player.swing(hand);
         if (swapped) InvUtils.swapBack();
-        return true;
+        return success;
     }
 
     private BlockPos nextAnchorCandidate() {
@@ -1267,17 +1309,15 @@ public class HumanPvP extends Module {
         // Wie in GodmodePvP: ohne Crystal UND ohne vollstaendige Anchor-Ausruestung UND ohne Bett (falls
         // aktiviert) gibt es nichts zu platzieren - Simulation und CrystalAura-Toggle komplett
         // ueberspringen statt sinnlos weiterzurechnen.
-        boolean hasCrystals = totalItem(Items.END_CRYSTAL) > 0;
-        // Dimensionsregel wie in GodmodePvP: ein Respawn Anchor explodiert NUR ausserhalb des Nethers,
-        // ein Bett NUR ausserhalb der Oberwelt. Ohne diese Pruefung waehlt die Aura eine Waffe, die in
-        // der aktuellen Dimension gar nicht zuenden kann, und der Bot fuehrt sie folgenlos vor.
-        boolean hasAnchorItem = mc.level != null && mc.level.dimension() != Level.NETHER
-            && totalItem(Items.RESPAWN_ANCHOR) > 0 && totalItem(Items.GLOWSTONE) > 0;
+        boolean hasCrystals = hasActionableItem(Items.END_CRYSTAL);
+        boolean hasAnchorItem = mc.level != null && mc.level.dimension() != Level.OVERWORLD
+            && hasActionableItem(Items.RESPAWN_ANCHOR) && hasActionableItem(Items.GLOWSTONE);
         boolean hasBedItem = useBeds.get() && mc.level != null && mc.level.dimension() != Level.OVERWORLD
-            && totalItem(HumanPvP::isBed) > 0;
+            && hasActionableItem(HumanPvP::isBed);
         Module ca = Modules.get().get(CrystalAura.class);
         if (!hasCrystals && !hasAnchorItem && !hasBedItem) {
-            if (ca != null && ca.isActive()) ca.toggle();
+            if (ca != null && crystalAuraEnabledByHuman && ca.isActive()) ca.toggle();
+            crystalAuraEnabledByHuman = false;
             auraMode = -1;
             return;
         }
@@ -1372,15 +1412,18 @@ public class HumanPvP extends Module {
         if (tickCounter - lastAuraSwitch < hysteresis) return;
 
         if (wantAnchor && auraMode != 1) {
-            if (ca.isActive()) ca.toggle();
+            if (ca.isActive() && crystalAuraEnabledByHuman) ca.toggle();
             auraMode = 1;
             lastAuraSwitch = tickCounter;
         } else if (wantBed && auraMode != 2) {
-            if (ca.isActive()) ca.toggle();
+            if (ca.isActive() && crystalAuraEnabledByHuman) ca.toggle();
             auraMode = 2;
             lastAuraSwitch = tickCounter;
         } else if (!wantAnchor && !wantBed && auraMode != 0) {
-            if (!ca.isActive()) ca.toggle();
+            if (!ca.isActive()) {
+                ca.toggle();
+                crystalAuraEnabledByHuman = true;
+            }
             auraMode = 0;
             lastAuraSwitch = tickCounter;
         }
@@ -1636,26 +1679,35 @@ public class HumanPvP extends Module {
     private void maintainFireResistance() {
         if (drinkingFireRes) {
             if (mc.player.hasEffect(MobEffects.FIRE_RESISTANCE) || tickCounter - fireResStartTick > 40) {
-                InvUtils.swapBack();
+                if (fireResSwapBack) InvUtils.swapBack();
                 drinkingFireRes = false;
+                fireResSwapBack = false;
+                fireResHand = InteractionHand.MAIN_HAND;
             } else {
-                mc.gameMode.useItem(mc.player, InteractionHand.MAIN_HAND);
+                mc.gameMode.useItem(mc.player, fireResHand);
             }
             return;
         }
 
-        if (blocking) return; // Schild-Swap laeuft gerade - nicht mit einem eigenen Trank-Swap ueberschreiben
-        if (!autoFireRes.get()) return;
-        if (mc.level == null || mc.level.dimension() != Level.NETHER) return;
-        if (mc.player.hasEffect(MobEffects.FIRE_RESISTANCE)) return;
-
+        if (blocking || !autoFireRes.get() || mc.level == null || mc.level.dimension() != Level.NETHER
+            || mc.player.hasEffect(MobEffects.FIRE_RESISTANCE)) return;
         FindItemResult potion = findFireResistancePotion();
-        if (!potion.found()) return;
+        if (!potion.found() || (!potion.isOffhand() && !potion.isHotbar())) return;
 
-        if (InvUtils.swap(potion.slot(), true)) {
-            mc.gameMode.useItem(mc.player, InteractionHand.MAIN_HAND);
+        InteractionHand hand = potion.isOffhand() ? InteractionHand.OFF_HAND : InteractionHand.MAIN_HAND;
+        boolean swapped = false;
+        if (!potion.isOffhand() && !potion.isMainHand()) {
+            swapped = InvUtils.swap(potion.slot(), true);
+            if (!swapped) return;
+        }
+        fireResHand = hand;
+        fireResSwapBack = swapped;
+        if (mc.gameMode.useItem(mc.player, hand).consumesAction()) {
             drinkingFireRes = true;
             fireResStartTick = tickCounter;
+        } else if (swapped) {
+            InvUtils.swapBack();
+            fireResSwapBack = false;
         }
     }
 
@@ -1861,67 +1913,52 @@ public class HumanPvP extends Module {
         if (swapped) InvUtils.swapBack();
     }
 
-    private void throwPearl(LivingEntity aimAt, boolean away) {
-        if (drinkingFireRes) return; // s.o. - Swap-Merkposten waehrend des Trinkens nicht anfassen
+    private boolean throwPearl(LivingEntity aimAt, boolean away) {
+        if (drinkingFireRes) return false;
         FindItemResult pearl = InvHelper.find(Items.ENDER_PEARL);
-        if (!pearl.found()) return;
-
+        if (!pearl.found() || (!pearl.isOffhand() && !pearl.isHotbar())) return false;
         double yaw, pitch;
         if (away) {
             yaw = Rotations.getYaw(aimAt) + 180.0;
-            pitch = -35; // steilerer Bogen als vorher (-20 war zu flach)
+            pitch = -35;
         } else {
-            // Eigenbewegung einrechnen: Minecraft addiert die Geschwindigkeit des Werfers auf die Perle
-            // (Y nur wenn nicht am Boden). Ohne das landet ein Wurf aus dem Lauf systematisch daneben.
             Vec3 own = mc.player.getKnownMovement();
             double[] aim = PvpMath.solvePearlAim(mc.player.getEyePosition().subtract(0, 0.1, 0),
-                aimAt.getBoundingBox().getCenter(),
-                new Vec3(own.x, mc.player.onGround() ? 0 : own.y, own.z));
-            // Ziel physisch ausserhalb der Perlen-Reichweite (z.B. gerade sehr hoch explosionsgeschleudert)
-            // - lieber die Perle sparen als sie sicher danebenzuwerfen.
-            if (aim == null) return;
+                aimAt.getBoundingBox().getCenter(), new Vec3(own.x, mc.player.onGround() ? 0 : own.y, own.z));
+            if (aim == null) return false;
             yaw = aim[0];
             pitch = aim[1];
         }
-
-        if (pearl.isOffhand()) {
-            if (rotateAndRun(yaw, pitch, PRIORITY_PEARL, () -> mc.gameMode.useItem(mc.player, InteractionHand.OFF_HAND))) {
-                lastPearlTick = tickCounter;
-            }
-        } else {
-            boolean swapped = InvUtils.swap(pearl.slot(), true);
-            if (rotateAndRun(yaw, pitch, PRIORITY_PEARL, () -> {
-                mc.gameMode.useItem(mc.player, InteractionHand.MAIN_HAND);
-                if (swapped) InvUtils.swapBack();
-            })) {
-                lastPearlTick = tickCounter;
-            } else if (swapped) {
-                InvUtils.swapBack();
-            }
+        InteractionHand hand = pearl.isOffhand() ? InteractionHand.OFF_HAND : InteractionHand.MAIN_HAND;
+        boolean swapped = false;
+        if (!pearl.isOffhand() && !pearl.isMainHand()) {
+            swapped = InvUtils.swap(pearl.slot(), true);
+            if (!swapped) return false;
         }
+        final boolean didSwap = swapped;
+        rotateAndRun(yaw, pitch, PRIORITY_PEARL, () -> {
+            if (mc.gameMode.useItem(mc.player, hand).consumesAction()) lastPearlTick = tickCounter;
+            if (didSwap) InvUtils.swapBack();
+        });
+        return true;
     }
 
-    /** Perle senkrecht nach unten - teleportiert bei Landung, kein unkontrolliertes Fallen nach Knockback. */
-    private void throwPearlDown() {
-        if (drinkingFireRes) return; // s.o. - Swap-Merkposten waehrend des Trinkens nicht anfassen
+    private boolean throwPearlDown() {
+        if (drinkingFireRes) return false;
         FindItemResult pearl = InvHelper.find(Items.ENDER_PEARL);
-        if (!pearl.found()) return;
-
-        if (pearl.isOffhand()) {
-            if (rotateAndRun(mc.player.getYRot(), 80, PRIORITY_PEARL, () -> mc.gameMode.useItem(mc.player, InteractionHand.OFF_HAND))) {
-                lastPearlTick = tickCounter;
-            }
-        } else {
-            boolean swapped = InvUtils.swap(pearl.slot(), true);
-            if (rotateAndRun(mc.player.getYRot(), 80, PRIORITY_PEARL, () -> {
-                mc.gameMode.useItem(mc.player, InteractionHand.MAIN_HAND);
-                if (swapped) InvUtils.swapBack();
-            })) {
-                lastPearlTick = tickCounter;
-            } else if (swapped) {
-                InvUtils.swapBack();
-            }
+        if (!pearl.found() || (!pearl.isOffhand() && !pearl.isHotbar())) return false;
+        InteractionHand hand = pearl.isOffhand() ? InteractionHand.OFF_HAND : InteractionHand.MAIN_HAND;
+        boolean swapped = false;
+        if (!pearl.isOffhand() && !pearl.isMainHand()) {
+            swapped = InvUtils.swap(pearl.slot(), true);
+            if (!swapped) return false;
         }
+        final boolean didSwap = swapped;
+        rotateAndRun(mc.player.getYRot(), 80, PRIORITY_PEARL, () -> {
+            if (mc.gameMode.useItem(mc.player, hand).consumesAction()) lastPearlTick = tickCounter;
+            if (didSwap) InvUtils.swapBack();
+        });
+        return true;
     }
 
     // ---------- Verfolgung ----------
@@ -2003,6 +2040,16 @@ public class HumanPvP extends Module {
         return r.found() ? r.count() : 0;
     }
 
+    private boolean hasActionableItem(net.minecraft.world.item.Item item) {
+        FindItemResult r = InvUtils.find(item);
+        return r.found() && (r.isHotbar() || r.isOffhand());
+    }
+
+    private boolean hasActionableItem(java.util.function.Predicate<ItemStack> pred) {
+        FindItemResult r = InvUtils.find(pred);
+        return r.found() && (r.isHotbar() || r.isOffhand());
+    }
+
     private static boolean isHealingSplash(ItemStack stack) {
         if (!stack.is(Items.SPLASH_POTION)) return false;
         PotionContents pc = stack.get(DataComponents.POTION_CONTENTS);
@@ -2056,20 +2103,20 @@ public class HumanPvP extends Module {
         double throwYaw = Rotations.getYaw(splashTarget);
         double throwPitch = Rotations.getPitch(splashTarget);
 
-        boolean thrown;
         if (potion.isOffhand()) {
-            thrown = rotateAndRun(throwYaw, throwPitch, () -> mc.gameMode.useItem(mc.player, InteractionHand.OFF_HAND));
-        } else {
-            boolean swapped = InvUtils.swap(potion.slot(), true);
-            thrown = rotateAndRun(throwYaw, throwPitch, () -> {
-                mc.gameMode.useItem(mc.player, InteractionHand.MAIN_HAND);
+            rotateAndRun(throwYaw, throwPitch, () -> {
+                if (mc.gameMode.useItem(mc.player, InteractionHand.OFF_HAND).consumesAction()) healPotionCooldown = healCooldown.get();
+            });
+        } else if (potion.isHotbar()) {
+            boolean swapped = !potion.isMainHand() && InvUtils.swap(potion.slot(), true);
+            if (!potion.isMainHand() && !swapped) return;
+            rotateAndRun(throwYaw, throwPitch, () -> {
+                if (mc.gameMode.useItem(mc.player, InteractionHand.MAIN_HAND).consumesAction()) healPotionCooldown = healCooldown.get();
                 if (swapped) InvUtils.swapBack();
             });
-            if (!thrown && swapped) InvUtils.swapBack();
+        } else {
+            return;
         }
-        if (!thrown) return;
-
-        healPotionCooldown = healCooldown.get();
         // hpAtHealWindowStart bewusst NICHT hier zuruecksetzen - healingUntilFull haelt den Heil-Modus
         // ueber mehrere Traenke hinweg aktiv, bis maxHealth-0.5 erreicht ist (siehe oben).
     }
@@ -2131,24 +2178,18 @@ public class HumanPvP extends Module {
     }
 
     private void refill(net.minecraft.world.item.Item item, int min) {
-        if (countHotbar(item) >= min) return;
-        if (totalItem(item) <= min) return;
-
+        if (countHotbar(item) >= min || totalItem(item) < min) return;
         int src = findMainSlotWith(item);
         int dst = hotbarTargetSlot(item);
         if (src < 0 || dst < 0) return;
-
         InvUtils.move().from(src).to(dst);
     }
 
     private void refill(java.util.function.Predicate<ItemStack> pred, int min) {
-        if (countHotbar(pred) >= min) return;
-        if (totalItem(pred) <= min) return;
-
+        if (countHotbar(pred) >= min || totalItem(pred) < min) return;
         int src = findMainSlotWith(pred);
         int dst = hotbarTargetSlot(pred);
         if (src < 0 || dst < 0) return;
-
         InvUtils.move().from(src).to(dst);
     }
 
@@ -2190,7 +2231,7 @@ public class HumanPvP extends Module {
             @SuppressWarnings("unchecked")
             Setting<CrystalAura.SupportMode> s = (Setting<CrystalAura.SupportMode>) f.get(ca);
             if (s != null) {
-                savedSupport = s.get();
+                if (savedSupport == null) savedSupport = s.get();
                 if (s.get() == CrystalAura.SupportMode.Disabled) s.set(CrystalAura.SupportMode.Fast);
                 supportSyncFailed = false;
             } else {
@@ -2201,23 +2242,21 @@ public class HumanPvP extends Module {
             supportSyncFailed = true;
             error("CrystalAura-Support-Mode konnte nicht gesetzt werden (Meteor-Version geaendert?) - Obsidian-Unterbau bei freier Luft laeuft evtl. nicht automatisch. Weiche auf Anchor-Vorzug aus, solange das so bleibt.");
         }
+        syncSupportDelay(ca);
+    }
 
-        // support-delay: Tickabstand zwischen Obsidian-Platzierung und dem folgenden Crystal-Versuch. Bei 0
-        // schickt CrystalAura beide Pakete im selben Tick - auf Servern mit spuerbarer Latenz kann der
-        // Crystal-Versuch dann ankommen, bevor der Server das Obsidian registriert hat, und wird lautlos
-        // abgelehnt. Nur anheben, nie senken.
+    private void syncSupportDelay(CrystalAura ca) {
         try {
             java.lang.reflect.Field f = CrystalAura.class.getDeclaredField("supportDelay");
             f.setAccessible(true);
             @SuppressWarnings("unchecked")
             Setting<Integer> s = (Setting<Integer>) f.get(ca);
             if (s != null) {
-                savedSupportDelay = s.get();
+                if (savedSupportDelay < 0) savedSupportDelay = s.get();
                 if (s.get() < minSupportDelay.get()) s.set(minSupportDelay.get());
             }
         } catch (Throwable t) {
-            savedSupportDelay = -1;
-            error("CrystalAura-Support-Delay konnte nicht gesetzt werden (Meteor-Version geaendert?) - Crystal-Platzierung nach Obsidian-Unterbau kann dadurch auf langsameren Servern manchmal fehlschlagen.");
+            if (savedSupportDelay < 0) error("CrystalAura-Support-Delay konnte nicht gesetzt werden (Meteor-Version geaendert?) - Crystal-Platzierung nach Obsidian-Unterbau kann dadurch auf langsameren Servern manchmal fehlschlagen.");
         }
     }
 
@@ -2247,9 +2286,13 @@ public class HumanPvP extends Module {
         }
     }
 
-    private void safeEnable(Modules m, Class<? extends Module> clazz) {
+    private boolean safeEnable(Modules m, Class<? extends Module> clazz) {
         Module mod = m.get(clazz);
-        if (mod != null && !mod.isActive()) mod.toggle();
+        if (mod != null && !mod.isActive()) {
+            mod.toggle();
+            return true;
+        }
+        return false;
     }
 
     private void safeDisable(Modules m, Class<? extends Module> clazz) {

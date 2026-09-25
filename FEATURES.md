@@ -5,6 +5,8 @@ nothing described in the [README](README.md) is hardcoded. Defaults are the valu
 
 ## GodmodePvP (`.pvp`)
 
+The ClickGUI groups are ordered as **Angriff & Auras**, **Schutz & Recovery**, **Stadt & Traps**, **Navigation**, **Inventar**, **Turtle-Master**, **Perlen & Flucht**, **Heilung**, **QA & Erweitert**, and **Mobs**. The default group contains the core target and prediction thresholds.
+
 ### General
 
 | Setting | Default | Description |
@@ -14,7 +16,7 @@ nothing described in the [README](README.md) is hardcoded. Defaults are the valu
 | `engage-distance` | `16` | Moving targets are only pursued within this distance. Beyond it (up to `follow-range`) the bot just watches, preventing it from sprinting across the map the instant it is activated. Engagement is sticky: a hard knockback that briefly throws the distance back out mid-fight will not cause it to give up, and once engaged it keeps fighting the *same* target (by identity, not just distance) until it dies, leaves, or goes out of `follow-range` — a third player briefly wandering closer no longer steals the fight. |
 | `pursue-stationary-targets` | `true` | Pursues a stationary target anywhere inside `follow-range`, including after a knockback has separated the fight. Moving targets retain the `engage-distance` cold-start brake. |
 | `attack-range` | `3.6` | Maximum distance for melee hits (pre-hit, melee-fallback, pop-burst). Some servers/anti-cheats tolerate more or less than the vanilla-ish default. |
-| `smart-targeting` | `true` | Prefers an isolated target (no other player within `backup-range`) over pure distance when first picking a target — a lone player is a safer, faster kill than one with backup nearby, even if slightly farther away. Only affects *initial* target choice; once actually engaged, the bot commits to that target (see below) rather than re-evaluating every tick and flip-flopping whenever a third player briefly looks closer/more isolated. |
+| `smart-targeting` | `true` | Prefers an isolated target (no other player within `backup-range`) over pure distance; a periodic 40-tick re-evaluation can switch to a safer candidate while engaged, with hysteresis preventing tick-by-tick flapping. |
 | `backup-range` | `10.0` | How close another player has to be to a candidate target to count as "has backup" for `smart-targeting`. |
 | `pop-threshold` | `8.0` | HP drop counted as a totem pop. |
 | `prediction-ticks` | `5` | How far ahead enemy movement is predicted for attacks. |
@@ -31,7 +33,7 @@ nothing described in the [README](README.md) is hardcoded. Defaults are the valu
 | `use-beds` | `false` | Bed Aura: places and detonates beds as an explosive (damage value 5.0, same as Anchor). Only works outside the Overworld (Nether/End — e.g. portal camping on 5b5t); the client can't verify this ahead of time, only the server decides. Off by default so beds aren't wasted in the Overworld (where using one just sleeps/sets your spawn point instead of exploding). When both an Anchor and a Bed are viable, whichever deals more damage wins — Anchor only needs 1 Glowstone, so it's usually the more efficient default on an exact tie. |
 | `no-delay` | `false` | Instant mode: strips out every remaining artificial wait — Anchor/Bed placement and maintenance pauses, D-Tap cooldown, all ender pearl throw cooldowns. Pure speed over caution: can burn through pearls/Anchors/Beds faster than the server can actually process the resulting actions. Two exceptions stay active regardless — the aura-switch hysteresis and the `min-support-delay` floor — because those aren't caution, they're technical requirements: removing them broke Crystal placement's sequence-number prediction entirely (0 damage from any source, confirmed in testing) rather than just making things faster. |
 | `pre-hit` | `false` | Melees the target right before the explosion for extra damage. Off by default — vanilla's attack cooldown (~0.5-0.6s depending on weapon) is pure wasted time against an Anchor/Crystal barrage; without this extra hit, Anchor and Crystal can fire back-to-back as fast as the server can process them. |
-| `melee-fallback` | `false` | Melees normally whenever no explosion is actually about to land (e.g. Crystal mode is on but there's no obsidian left for a support block in open air, or no valid spot at all). Off by default for the same reason as `pre-hit` — costs only the attack cooldown while Anchor/Crystal could immediately try again. Only enable if the bot is genuinely out of Crystals/Anchors/Beds and should still throw hands instead of just following. |
+| `melee-fallback` | `true` | Melees normally whenever no explosion is about to land, including when a valid Anchor/Crystal/Bed candidate is temporarily unavailable. Keeping this on prevents a close-range target from being ignored during a short geometry or resource gap; `pre-hit` is the separate redundant hit during a confirmed explosion. |
 | `prefer-axe-melee` | `true` | Automatically swaps to the axe for melee hits (axe-swap meta). |
 | `shield-breaker` | `true` | Swaps to the axe against a blocking target. |
 | `melee-strafe` | `true` | Faces the target and circle-strafes in melee — harder to hit, varies the explosion angle. Direction switches on a randomized interval, not a fixed period. |
@@ -43,7 +45,7 @@ nothing described in the [README](README.md) is hardcoded. Defaults are the valu
 | `elytra-combat` | `true` | Firework boost when gliding speed drops too low during elytra combat. |
 | `zero-delay` | `true` | Sets CrystalAura placement/break delays to 0 and enables Fast-Break. The attack uses the real server-provided End-Crystal entity ID from `EntityAdded`; the client does not guess an ID before the server has created the entity. |
 | `ghost-block-mitigation` | `true` | Tracks own block placements until a server block update arrives. After two round trips, a still-only-client prediction is removed locally and Baritone's world cache is reloaded; no fabricated network desync packet is sent. |
-| `min-support-delay` | `4` | Minimum tick gap between placing an obsidian support block and the following crystal placement (CrystalAura's `support-delay`). Both actions use Minecraft's own sequence-numbered block-prediction system (since 1.19) — sending them too close together, before the first sequence is server-acknowledged, can desync the prediction ("crystal hitbox appears, but no crystal actually spawns"). Needs more headroom on high-latency or cross-version-translated (e.g. ViaVersion) connections than Meteor's own default. Only ever raised, never lowered. |
+| `min-support-delay` | `1` | Minimum tick gap between an obsidian support block and the following crystal placement. This is the current Meteor-compatible floor; only raise it on high-latency or cross-version connections where block prediction desyncs. |
 | `kill-aura` | `false` | Also runs Meteor's KillAura for melee. Mob filter is shared with the `Mobs` group. Off by default since the built-in axe-melee logic already covers it. |
 | `escape-pearl` | `true` | Pearls away at low HP with an enemy nearby. |
 | `knockback-pearl` | `true` | Pearls straight down for a controlled landing whenever the bot is in real danger from a fall: either just launched by knockback (hit or explosion) with strong upward velocity, or generally airborne and already 3+ blocks into a fall (the same height Minecraft itself starts counting fall damage from) — not just the post-hit case, so walking off a ledge or getting launched by something else entirely still gets caught. |
@@ -67,7 +69,7 @@ nothing described in the [README](README.md) is hardcoded. Defaults are the valu
 | `auto-fire-res` | `true` | Drinks a Fire Resistance potion automatically whenever you're in the Nether and don't already have one active — makes lava contact, fire, and burning explosion damage irrelevant. Runs independently of whether a fight is happening. While a drink is in progress (up to 2s) or the shield is actively blocking, the other one is now prevented from starting, and every other action that briefly swaps hotbar items (melee axe/mace swap, shield-break, Anchor/Bed interaction, Crystal placement, pearl throws, elytra firework boost) skips itself for that tick instead of overwriting the drink's held swap-back slot — previously any of those firing mid-drink could leave the bot stuck holding the wrong item once the drink finished. |
 | `build-cover` | `true` | Places obsidian to close an open side when no natural hole is nearby. Never places it in the direction facing the target — a straightforward-sounding "wall myself in" used to occasionally brick the bot's own line of sight to the enemy right in the middle of a fight (no melee, no explosions, just standing there), if the only open neighboring block happened to be the one between the bot and its target. |
 | `peek-tactic` | `true` | Crouches in cover while nothing is actively happening, only standing up briefly to attack. |
-| `retreat-threshold` | `true` | Breaks off the fight (retreats) once totems drop below 2 **and** there are no Crystal/Anchor resources left. |
+| `retreat-threshold` | `true` | Breaks off only when totems are below 2 and no usable Crystal, Anchor/Glowstone, or dimension-valid Bed supply remains. |
 | `retreat-on-losing-trade` | `true` | Pearls away if the bot itself was just hard-hit (popped) but its own Crystal/Anchor explosions haven't damaged the target in a while — recognizes a losing trade instead of continuing pointlessly. |
 | `multi-target-alarm` | `true` | Warns and becomes briefly more cautious when a second player shows up nearby during a fight. |
 | `insta-city` | `true` | Breaks reachable enemy Obsidian surround with a hotbar pickaxe, waits for the authoritative block update, then places a Crystal into the confirmed gap. Vanilla survival cannot legally turn a hand-started break into a final-tick pickaxe break. |
@@ -82,7 +84,7 @@ nothing described in the [README](README.md) is hardcoded. Defaults are the valu
 
 | Setting | Default | Description |
 |---|---|---|
-| `inv-manager` | `true` | Moves combat items (Crystals, Anchors, Glowstone, Pearls, Obsidian, Cobweb) that are running low from the main inventory into the hotbar. |
+| `inv-manager` | `true` | Every 20 ticks, keeps combat resources in the hotbar, first evicting ballast such as useless Overworld beds or dimension-invalid anchors. It restocks Crystals, usable Anchors/Glowstone, Pearls, Obsidian, Cobweb, dimension-valid Beds, healing potions, and Turtle-Master arrows. |
 | `min-crystals` | `32` | Restock threshold for Crystals. |
 | `min-anchors` | `4` | Restock threshold for Respawn Anchors. |
 | `min-glowstone` | `8` | Restock threshold for Glowstone (Anchor fuel). |
@@ -105,17 +107,19 @@ nothing described in the [README](README.md) is hardcoded. Defaults are the valu
 | Setting | Default | Description |
 |---|---|---|
 | `pearl-gapclose` | `true` | Pearls toward the target when it's too far away to melee-hit or deal damage. The threshold is coupled to `attack-range` (never lower than `attack-range + 0.5`, regardless of `pearl-min-dist`) so it can't fire while melee could still connect, and requires a clear line of sight to the target — without it, this used to throw straight into whatever wall or hill was in between over long distances instead of holding the pearl for a clear shot. (The separate close-range "obstacle" pearl still deliberately throws through thin obstructions — that one's an intentional clip trick, not a mistake.) |
-| `pearl-min-dist` | `4.0` | Distance beyond which a pearl is thrown — acts as a floor on top of `attack-range` (see `pearl-gapclose`), not an independent value, so lowering it below your configured `attack-range` has no effect. |
+| `pearl-min-dist` | `4.0` | Distance floor for gap-close Pearls. The effective threshold is `max(pearl-min-dist, attack-range + 0.5)` and requires line of sight, so lowering it below the melee range cannot waste a Pearl while melee is still available. |
 
 ### Healing
 
 | Setting | Default | Description |
 |---|---|---|
 | `heal-potions` | `true` | Throws a Splash Potion of Healing/Strong Healing at your own feet the instant fresh damage is detected — it shatters on the ground right there and heals immediately. Works regardless of combat/engage state, so it also covers fall/fire/environmental damage, not just hits taken mid-fight. Needs a Splash Healing potion in inventory (works fine as a 64-stack on servers with expanded stack sizes). |
-| `heal-min-damage` | `3.0` | HP lost within a short rolling window (0.4s) must reach this before a potion is thrown — prevents wasting a potion on every tiny scratch, while still catching a hit whose damage/knockback ticks land a frame or two apart (which a strict single-tick comparison used to miss entirely, making throws feel late/skipped). |
+| `heal-min-damage` | `3.0` | HP loss accumulated over the current rolling window (up to 8 ticks) must reach this before a potion is thrown. After a qualifying hit, healing can continue until maximum health is reached, subject to the cooldown and shared slot mutex. |
 | `heal-cooldown` | `12` | Minimum ticks between two thrown potions — stops a single multi-hit combo from burning several potions at once, without stalling badly under sustained pressure (multiple pops in quick succession). Skipped entirely while actively shield-blocking or drinking Fire Resistance, since both hold Meteor's shared hotbar-swap-back slot for several ticks — throwing a potion in the middle would silently corrupt that slot and leave the module stuck on the wrong item once the block/drink ends. |
 
 ## HumanPvP (`.hpvp`)
+
+HumanPvP uses the parallel ClickGUI order **Angriff & Auras**, **Schutz & Recovery**, **Navigation**, **Inventar**, **Human-Profil**, **Perlen & Flucht**, **Heilung**, and **QA & Erweitert**. Its dependency ownership and action-slot checks are stricter than the shared Meteor module defaults, so main-inventory resources are not counted as immediately actionable.
 
 A deliberately slower, imperfect profile built to look like manual play. Shares the same Crystal/Anchor/defense
 core as `GodmodePvP`, with these differences:
@@ -125,7 +129,7 @@ core as `GodmodePvP`, with these differences:
 | `follow-range` | `20` | Smaller detection range than `GodmodePvP` by default. |
 | `engage-distance` | `14` | Same sticky-engagement behavior as `GodmodePvP`, tuned to a shorter range. |
 | `attack-range` | `3.4` | Same as `GodmodePvP`'s `attack-range`, tuned slightly shorter by default. |
-| `smart-targeting` / `backup-range` | `true` / `10.0` | Same isolated-target preference and target-identity stickiness as `GodmodePvP`. |
+| `smart-targeting` / `backup-range` | `true` / `10.0` | Same isolated-target preference as `GodmodePvP`, with periodic re-evaluation while engaged rather than a permanently frozen first choice. |
 | `free-look` | `false` | Same silent-rotation behavior as `GodmodePvP` — off by default for the same anti-cheat-detection reason. The continuous smoothed look-tracking now yields the shared per-tick rotation slot to any real action (pearl throw, Anchor interaction) instead of silently claiming it first, same fix as `GodmodePvP`. |
 | `reaction-min` / `reaction-max` | `3` / `9` ticks | Randomized reaction delay before engaging a newly acquired target — no instant snap-to-target. |
 | `attack-chance` | `0.9` | Probability that a "ready" hit is actually thrown, simulating human misclicks. |

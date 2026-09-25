@@ -38,7 +38,7 @@ public class AutoArmor extends Module {
     private int tickCounter;
 
     public AutoArmor() {
-        super(ProviPvPAddon.CATEGORY, "auto-armor", "Ruestet automatisch das staerkste gefundene Ruestungsteil pro Slot aus dem gesamten Inventar aus (Bewertung nach echtem Ruestungs-/Zaehigkeits-Attributwert, nicht nach Materialname).");
+        super(ProviPvPAddon.CATEGORY, "provi-auto-armor", "Ruestet automatisch das staerkste gefundene Ruestungsteil pro Slot aus dem gesamten Inventar aus (Bewertung nach echtem Ruestungs-/Zaehigkeits-Attributwert, nicht nach Materialname).");
     }
 
     @Override
@@ -85,7 +85,7 @@ public class AutoArmor extends Module {
 
         InvUtils.move().from(bestIndex).toArmor(slot.getIndex());
         if (announce.get()) {
-            ChatUtils.info("§7[AutoArmor] %s aufgeruestet: %s", slot.getName(), bestStack.getDisplayName().getString());
+            ChatUtils.info("§7[ProviAutoArmor] %s aufgeruestet: %s", slot.getName(), bestStack.getDisplayName().getString());
         }
     }
 

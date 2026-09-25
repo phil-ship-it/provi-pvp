@@ -444,3 +444,27 @@ Diese Dokumentation ist neu und muss separat committed werden, wenn sie dauerhaf
 - **Dynamischer Wall-Range:** `syncWallsRange()` läuft alle 20 Ticks und stellt bei deaktiviertem `through-walls` die gespeicherten Meteor-Wandreichweiten wieder her.
 
 Verifikation: `cmd.exe /c gradlew.bat test` und `cmd.exe /c gradlew.bat build` erneut `BUILD SUCCESSFUL`; Review-Retest `bottest-qa/logs/latest.log:32-35` zeigt beide Clients im finalen Jar, ohne internen ProviPvP-Fehler.
+
+---
+
+## 13. Addon- und GUI-Audit (2026-09-25)
+
+### Addon-Bestand und Konflikte
+
+- `TestBot_1` und `TestBot_2` enthalten jeweils 19 Jars und laden 119 Fabric-Mods. Meteor Client, Baritone, Fabric API und ProviPvP sind vorhanden; die Addon-Kette (Numby, Wurst, Meteor+, Trouser, Fumo, Nora, ViaFabricPlus, OpSec usw.) bringt konkurrierende Aura-, Slot-, Keybind-, Packet- und Baritone-Mixin-Pfade mit. Fuer eine attributierbare Combat-Messung ist nur Fabric API + Meteor + **eine** Baritone-Version + ProviPvP minimal.
+- `bottest-qa` ist der isoliertePfad (flat, peaceful, survival, keine Datapacks). `bottest-server` ist wegen `infinite_kit` (Teleport/Refill/Reset pro Tick) kein Isolations- oder Reproduktionsserver.
+- Eindeutige Modulnamen korrigiert: ProviPvP registriert jetzt `provi-auto-armor` und `provi-packet-logger` statt die Meteor-Kernnamen `auto-armor`/`packet-logger` zu ueberschreiben. Die Kernmodule bleiben dadurch im Meteor-UI erhalten.
+
+### GUI- und Laufzeitfixes
+
+- GodmodePvP-Gruppen: `1 · Angriff & Auras`, `2 · Schutz & Recovery`, `3 · Stadt & Traps`, `4 · Navigation`, `5 · Inventar`, `6 · Turtle-Master`, `7 · Perlen & Flucht`, `8 · Heilung`, `9 · QA & Erweitert`, `10 · Mobs`; Turtle-Schwellen/-Cooldowns sind nur sichtbar, wenn Turtle-Master aktiv ist.
+- HumanPvP-Gruppen: `1 · Angriff & Auras`, `2 · Schutz & Recovery`, `3 · Navigation`, `4 · Inventar`, `5 · Human-Profil`, `6 · Perlen & Flucht`, `7 · Heilung`, `8 · QA & Erweitert`.
+- `GodmodePvP` und `HumanPvP` schliessen sich nun auch nach dem Meteor-Config-Laden gegenseitig aus; das zuletzt aktivierte Profil bleibt aktiv, ein bereits laufendes Profil wird nicht blind umgeschaltet.
+- crystal/anchor/bed candidate paths, delegated CrystalAura damage/support settings, mob filters, piston stage confirmation, Human pearl/heal/fire-resistance/anchor hand handling, refill thresholds and anti-rubberband follow suppression wurden gegen die aktuellen Findings nachgezogen. Eigene Abhaengigkeiten werden nur deaktiviert, wenn das Modul sie selbst aktiviert hat.
+
+### Verifikation und Grenzen
+
+- `cmd.exe /c gradlew.bat test` und `cmd.exe /c gradlew.bat build`: **BUILD SUCCESSFUL**. Der finale Jar enthaelt `provi-pvp.mixins.json`/`AutoMendMixin.class`; Build-, Bot- und Main-Ordner haben denselben SHA-256.
+- Finaler Lauf auf `bottest-qa`: Client verband sich, lud den finalen Jar und aktivierte jeweils genau ein PvP-Profil; keine internen ProviPvP-Fehler. 401/Google-Translate/optionale ModMenu-/Baritone-/Litematica-Mixin-Meldungen bleiben Testumgebungs- bzw. Addon-Rauschen.
+- Die GUI-Pruefung wurde nur auf Monitor 2 durchgefuehrt (Monitor-Bounds `X=-1440,Y=-712,W=1440,H=2560`); der Minecraft-Client wurde dorthin verschoben und der Desktop-Screenshot geprueft. Die ClickGUI selbst liess sich in dieser Headless-/Second-Monitor-Umgebung nicht zuverlaessig per synthetischem Tastatureingang oeffnen; die Gruppen-/Sichtbarkeitsvertrage wurden deshalb statisch gegen den finalen Quellcode und die kompilierte Klasse geprueft, nicht als visueller KlickGUI-Screenshot.
+- Offene, bewusst nicht als erledigt behauptete Punkte: P2-Kanten in `PvpMath.simulatePearl`/`solvePearlAim`, einzelne Human-Global-Slot-/Offhand-Rennen, sowie die oben genannten externen Addon-Mixins. Diese brauchen eine separate isolierte Laufzeitmatrix mit minimalem Jar-Set.

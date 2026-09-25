@@ -39,7 +39,7 @@ public class PacketLogger extends Module {
     );
 
     public PacketLogger() {
-        super(ProviPvPAddon.CATEGORY, "packet-logger", "Loggt ein-/ausgehende Netzwerkpakete zum Debuggen - reines Beobachtungswerkzeug, veraendert nichts am Verhalten.");
+        super(ProviPvPAddon.CATEGORY, "provi-packet-logger", "Loggt ein-/ausgehende Netzwerkpakete zum Debuggen - reines Beobachtungswerkzeug, veraendert nichts am Verhalten.");
     }
 
     @EventHandler
@@ -56,6 +56,6 @@ public class PacketLogger extends Module {
         String name = packet.getClass().getSimpleName();
         String f = filter.get();
         if (!f.isEmpty() && !name.toLowerCase().contains(f.toLowerCase())) return;
-        ChatUtils.info("§7[Packet %s] %s", arrow, name);
+        ChatUtils.info("§7[ProviPacketLogger] %s %s", arrow, name);
     }
 }

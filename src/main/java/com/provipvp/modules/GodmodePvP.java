@@ -41,6 +41,7 @@ import net.minecraft.network.protocol.game.ClientboundBlockUpdatePacket;
 import net.minecraft.world.InteractionHand;
 import net.minecraft.world.entity.LivingEntity;
 import net.minecraft.world.entity.EntityType;
+import net.minecraft.world.entity.EntityTypes;
 import net.minecraft.world.effect.MobEffects;
 import net.minecraft.world.entity.boss.enderdragon.EndCrystal;
 import net.minecraft.world.entity.player.Player;
@@ -67,6 +68,7 @@ import net.minecraft.world.phys.Vec3;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.Map;
+import java.util.IdentityHashMap;
 import java.util.Random;
 import java.util.UUID;
 
@@ -74,22 +76,26 @@ import static meteordevelopment.meteorclient.MeteorClient.mc;
 
 public class GodmodePvP extends Module {
     private final SettingGroup sgGeneral = settings.getDefaultGroup();
-    private final SettingGroup sgCombat = settings.createGroup("Kampf");
-    private final SettingGroup sgDefense = settings.createGroup("Schutz");
-    private final SettingGroup sgInv = settings.createGroup("Inventar");
-    private final SettingGroup sgMobs = settings.createGroup("Mobs");
-    private final SettingGroup sgPearl = settings.createGroup("Enderperlen");
-    private final SettingGroup sgHeal = settings.createGroup("Heilung");
+    private final SettingGroup sgCombat = settings.createGroup("1 · Angriff & Auras");
+    private final SettingGroup sgDefense = settings.createGroup("2 · Schutz & Recovery");
+    private final SettingGroup sgCity = settings.createGroup("3 · Stadt & Traps");
+    private final SettingGroup sgNavigation = settings.createGroup("4 · Navigation");
+    private final SettingGroup sgInv = settings.createGroup("5 · Inventar");
+    private final SettingGroup sgTurtle = settings.createGroup("6 · Turtle-Master");
+    private final SettingGroup sgPearl = settings.createGroup("7 · Perlen & Flucht");
+    private final SettingGroup sgHeal = settings.createGroup("8 · Heilung");
+    private final SettingGroup sgQA = settings.createGroup("9 · QA & Erweitert");
+    private final SettingGroup sgMobs = settings.createGroup("10 · Mobs");
 
     // General
-    public final Setting<Boolean> follow = sgGeneral.add(new BoolSetting.Builder()
+    public final Setting<Boolean> follow = sgNavigation.add(new BoolSetting.Builder()
         .name("follow")
         .description("Verfolgt das Ziel automatisch mit Baritone, sobald es in Engage-Distanz ist oder dort stillsteht.")
         .defaultValue(true)
         .build()
     );
 
-    public final Setting<Integer> followRange = sgGeneral.add(new IntSetting.Builder()
+    public final Setting<Integer> followRange = sgNavigation.add(new IntSetting.Builder()
         .name("follow-range")
         .description("Maximale Distanz, ab der ein Spieler ueberhaupt als Ziel erkannt/beobachtet wird.")
         .defaultValue(40)
@@ -98,7 +104,7 @@ public class GodmodePvP extends Module {
         .build()
     );
 
-    public final Setting<Integer> engageDistance = sgGeneral.add(new IntSetting.Builder()
+    public final Setting<Integer> engageDistance = sgNavigation.add(new IntSetting.Builder()
         .name("engage-distance")
         .description("Erst ab dieser Distanz laeuft/perlt der Bot aktiv auf das Ziel zu. Darueber hinaus (bis follow-range) wird nur beobachtet/anvisiert, ohne loszurennen - verhindert, dass der Bot beim Aktivieren quer ueber die Karte auf jeden Spieler zusprintet.")
         .defaultValue(16)
@@ -107,7 +113,7 @@ public class GodmodePvP extends Module {
         .build()
     );
 
-    public final Setting<Boolean> pursueStationaryTargets = sgGeneral.add(new BoolSetting.Builder()
+    public final Setting<Boolean> pursueStationaryTargets = sgNavigation.add(new BoolSetting.Builder()
         .name("pursue-stationary-targets")
         .description("Schliesst die Distanz zu einem stillstehenden Ziel auch ausserhalb der Engage-Distanz. Bewegte Ziele behalten die Kaltstart-Bremse, damit der Bot beim Aktivieren nicht quer ueber die Karte sprintet.")
         .defaultValue(true)
@@ -125,7 +131,7 @@ public class GodmodePvP extends Module {
 
     public final Setting<Boolean> smartTargeting = sgGeneral.add(new BoolSetting.Builder()
         .name("smart-targeting")
-        .description("Bevorzugt bei der Zielwahl einen isolierten Gegner (ohne Mitspieler in Rueckendeckungs-Reichweite) vor reiner Distanz - ein alleine stehender Spieler ist ein sichereres, schnelleres Ziel als einer mit Unterstuetzung. Wirkt nur auf die ANFANGS-Zielwahl, ein bereits engagiertes Ziel wird nicht mehr gewechselt.")
+        .description("Bevorzugt bei der Zielwahl einen isolierten Gegner (ohne Mitspieler in Rueckendeckungs-Reichweite) vor reiner Distanz - ein alleine stehender Spieler ist ein sichereres, schnelleres Ziel als einer mit Unterstuetzung. Waehrend eines Engagements wird die Auswahl zusaetzlich alle 40 Ticks neu bewertet, damit ein neu hinzugekommener oder Deckung verlierender Gegner beruecksichtigt wird.")
         .defaultValue(true)
         .build()
     );
@@ -158,14 +164,14 @@ public class GodmodePvP extends Module {
         .build()
     );
 
-    public final Setting<Boolean> ignoreFire = sgGeneral.add(new BoolSetting.Builder()
+    public final Setting<Boolean> ignoreFire = sgNavigation.add(new BoolSetting.Builder()
         .name("ignore-fire")
         .description("Ignoriert Feuer am Boden im Nahbereich - laeuft geradewegs hindurch statt drumherum zu pathen. Baritone haelt Feuer sonst hart fuer unpassierbar (macht Umweg oder bleibt stehen).")
         .defaultValue(true)
         .build()
     );
 
-    public final Setting<Boolean> freeLook = sgGeneral.add(new BoolSetting.Builder()
+    public final Setting<Boolean> freeLook = sgQA.add(new BoolSetting.Builder()
         .name("free-look")
         .description("Silent-Rotations: der Bot zielt/dreht sich fuer Angriffe, Platzierungen und Ziel-Verfolgung weiterhin korrekt (das Server-Paket bekommt die richtige Blickrichtung), aber deine eigene Kamera bleibt frei drehbar - du kannst dich umsehen, waehrend der Bot kaempft. ACHTUNG: separate Rotations-Pakete ohne dazu passende Kamerabewegung sind eines der klassischsten Anti-Cheat-Erkennungsmuster ueberhaupt (Vulcan/Grim/Matrix/NCP haben alle explizite Rotation-Checks dafuer) - auf Servern mit aktivem Anti-Cheat kann das zu Bewegungs-Korrekturen/Rubberbanding fuehren. Deshalb standardmaessig aus.")
         .defaultValue(false)
@@ -244,7 +250,7 @@ public class GodmodePvP extends Module {
         .build()
     );
 
-    public final Setting<Boolean> throughWalls = sgCombat.add(new BoolSetting.Builder()
+    public final Setting<Boolean> throughWalls = sgQA.add(new BoolSetting.Builder()
         .name("through-walls")
         .description("Greift auch durch Waende/Deckung an: die eigenen Sichtlinien-Sperren fuer Crystal-, Anchor- und Bett-Plaetze entfallen, ebenso die Sichtpruefung vor dem Nahkampf. Vanilla prueft serverseitig NUR die Distanz (ca. 3 Bloecke fuer Nahkampf, 4.5 fuer Platzieren), keine Sichtlinie - ein Schlag oder eine Platzierung hinter einer duennen Wand geht also wirklich durch. Zusaetzlich werden Meteors CrystalAura und KillAura auf volle Reichweite-durch-Waende gestellt (walls-range = range), sonst bremst deren eigene, niedrigere Wanddistanz alles wieder aus. Wovon das bewusst NICHT gilt: Enderperlen - die fliegen physikalisch gegen die Wand, dort bleibt die Sichtpruefung aktiv.")
         .defaultValue(true)
@@ -328,21 +334,21 @@ public class GodmodePvP extends Module {
         .build()
     );
 
-    public final Setting<Boolean> zeroDelay = sgCombat.add(new BoolSetting.Builder()
+    public final Setting<Boolean> zeroDelay = sgQA.add(new BoolSetting.Builder()
         .name("zero-delay")
         .description("Setzt CrystalAuras Platzierungs- und Break-Delays auf 0 und aktiviert Fast-Break. Der Angriff erfolgt, sobald der Server die reale Entity-ID des neu gespawnten Crystals liefert; eine vorab geratene Server-ID waere nicht adressierbar.")
         .defaultValue(true)
         .build()
     );
 
-    public final Setting<Boolean> ghostBlockMitigation = sgCombat.add(new BoolSetting.Builder()
+    public final Setting<Boolean> ghostBlockMitigation = sgQA.add(new BoolSetting.Builder()
         .name("ghost-block-mitigation")
         .description("Verfolgt eigene Blockplatzierungen bis zum Server-Blockupdate. Bleibt die lokale Vorhersage nach zweimaligem Roundtrip sichtbar, wird nur die falsche Client-Hitbox entfernt und Baritones Weltcache neu geladen; es wird kein erfundenes Desync-Paket gesendet.")
         .defaultValue(true)
         .build()
     );
 
-    public final Setting<Integer> minSupportDelay = sgCombat.add(new IntSetting.Builder()
+    public final Setting<Integer> minSupportDelay = sgQA.add(new IntSetting.Builder()
         .name("min-support-delay")
         .description("Mindest-Tickabstand zwischen Obsidian-Unterbau und dem folgenden Crystal-Platzieren (CrystalAuras 'support-delay'). Beide Aktionen nutzen Minecrafts eigenes sequenznummer-basiertes Block-Vorhersage-System (seit 1.19) - schickt man beide zu dicht hintereinander raus, bevor die erste Sequenz vom Server bestaetigt ist, kann die Vorhersage durcheinanderkommen ('Crystal-Hitbox erscheint, aber kein Crystal kommt'). Steht auf Meteors eigenem Standard (1), weil dieser Wert der schaerfste Aggressions-Hebel ueberhaupt ist: live A/B ueber je drei 90s-Fenster hat 4 -> 1 die Explosionen pro Sekunde im Nether von 3.3-4.3 auf 5.3 und in der Oberwelt von 3.2 auf 4.3 gehoben (+33 bis +60%), bei ~+31% ausgeteiltem Schaden. Auf Servern mit spuerbarer Latenz oder Versions-Uebersetzung (z.B. ViaVersion) bei Fehlplatzierungen wieder hochdrehen - der Wert wird nur angehoben, nie unter diesen Mindestwert gesenkt.")
         .defaultValue(1)
@@ -351,42 +357,42 @@ public class GodmodePvP extends Module {
         .build()
     );
 
-    public final Setting<Boolean> instantMode = sgCombat.add(new BoolSetting.Builder()
+    public final Setting<Boolean> instantMode = sgQA.add(new BoolSetting.Builder()
         .name("no-delay")
         .description("Sofort-Modus: hebelt alle verbleibenden kuenstlichen Wartezeiten aus (Anchor/Bett-Platzierungs- und Wartungspausen, D-Tap-Cooldown, alle Perlwurf-Cooldowns). Reine Geschwindigkeit statt Vorsicht - kann Perlen/Anchors/Betten verschwenden, wenn Aktionen schneller abgefeuert werden als der Server sie verarbeitet. Zwei Ausnahmen BLEIBEN aktiv, weil sie keine Vorsicht sondern technische Notwendigkeit sind: die Aura-Umschalt-Traegheit (ohne sie faengt sich CrystalAura nie ein stabiles Fenster zum tatsaechlichen Platzieren, wurde beim Testen zu 0 Schaden in JEDER Form) und min-support-delay (ohne die Untergrenze schlaegt die Server-Sequenznummer-Vorhersage fehl, Crystal kommt nie an - selbes Symptom).")
         .defaultValue(false)
         .build()
     );
 
-    public final Setting<Boolean> killAuraOn = sgCombat.add(new BoolSetting.Builder()
+    public final Setting<Boolean> killAuraOn = sgQA.add(new BoolSetting.Builder()
         .name("kill-aura")
         .description("Zusaetzlich KillAura fuer Nahkampf. Mob-Filter wird automatisch aus 'Mobs' uebernommen. Standard aus - eigener Axt-Nahkampf aktiv.")
         .defaultValue(false)
         .build()
     );
 
-    public final Setting<Boolean> escapePearl = sgCombat.add(new BoolSetting.Builder()
+    public final Setting<Boolean> escapePearl = sgPearl.add(new BoolSetting.Builder()
         .name("escape-pearl")
         .description("Perlen-Flucht bei niedrigem HP und nahem Gegner.")
         .defaultValue(true)
         .build()
     );
 
-    public final Setting<Boolean> knockbackPearl = sgCombat.add(new BoolSetting.Builder()
+    public final Setting<Boolean> knockbackPearl = sgPearl.add(new BoolSetting.Builder()
         .name("knockback-pearl")
         .description("Wenn der Bot durch Knockback (Schlag/Explosion) in die Luft geschleudert wird ODER generell gerade in einem gefaehrlichen Fall steckt (z.B. von einer Kante), sofort senkrecht nach unten perlen - kommt kontrolliert runter statt Fallschaden zu nehmen oder als Ziel in der Luft zu haengen.")
         .defaultValue(true)
         .build()
     );
 
-    public final Setting<Boolean> antiAnchorDisengage = sgCombat.add(new BoolSetting.Builder()
+    public final Setting<Boolean> antiAnchorDisengage = sgPearl.add(new BoolSetting.Builder()
         .name("anti-anchor-disengage")
         .description("Erkennt mindestens drei schadenswirksame Anchor-Explosionen innerhalb einer Sekunde. Steckt der Bot dabei in einem offenen 1x1-Loch, wirft er eine fast senkrechte Perle nach oben, um aus dem Blast-Radius zu kommen.")
         .defaultValue(true)
         .build()
     );
 
-    public final Setting<Boolean> explosionFloorSnap = sgCombat.add(new BoolSetting.Builder()
+    public final Setting<Boolean> explosionFloorSnap = sgPearl.add(new BoolSetting.Builder()
         .name("explosion-floor-snap")
         .description("Bei einer Explosion mit mehr als 0.45 vertikalem Delta wirft die Perle mit 88.5 Grad fast senkrecht vor die eigenen Fuesse, um schnell wieder Boden fuer Platzierungen zu erreichen.")
         .defaultValue(true)
@@ -401,28 +407,30 @@ public class GodmodePvP extends Module {
         .build()
     );
 
-    public final Setting<Boolean> turtleMasterDefense = sgDefense.add(new BoolSetting.Builder()
+    public final Setting<Boolean> turtleMasterDefense = sgTurtle.add(new BoolSetting.Builder()
         .name("turtle-master-defense")
         .description("Unter der Health-Schwelle eine bereits mit Turtle-Master-Pfeilen geladene Armbrust in die Offhand nehmen und die Pfeile im selben Tick direkt vor die eigenen Fuesse schiessen. Die Offhand bleibt whilend Turtle-Master aktiv; Totem-Manager und Combat-Slot werden fuer diesen Schuss exklusiv pausiert.")
         .defaultValue(true)
         .build()
     );
 
-    public final Setting<Double> turtleMasterHealth = sgDefense.add(new DoubleSetting.Builder()
+    public final Setting<Double> turtleMasterHealth = sgTurtle.add(new DoubleSetting.Builder()
         .name("turtle-master-health")
         .description("Anteil der maximalen Health, unter dem Turtle-Master aktiv wird.")
         .defaultValue(0.4)
         .range(0.1, 0.8)
         .sliderRange(0.1, 0.8)
+        .visible(turtleMasterDefense::get)
         .build()
     );
 
-    public final Setting<Integer> turtleMasterCooldown = sgDefense.add(new IntSetting.Builder()
+    public final Setting<Integer> turtleMasterCooldown = sgTurtle.add(new IntSetting.Builder()
         .name("turtle-master-cooldown")
         .description("Ticks zwischen zwei Turtle-Master-Fussschuessen. Ein Schuss gewaehrt normalerweise 5 Sekunden Resistenz.")
         .defaultValue(10)
         .range(1, 40)
         .sliderRange(1, 20)
+        .visible(turtleMasterDefense::get)
         .build()
     );
 
@@ -510,7 +518,7 @@ public class GodmodePvP extends Module {
         .build()
     );
 
-    public final Setting<Boolean> instaCity = sgDefense.add(new BoolSetting.Builder()
+    public final Setting<Boolean> instaCity = sgCity.add(new BoolSetting.Builder()
         .name("insta-city")
         .description("Bricht erreichbares gegnerisches Obsidian-Surround mit der Hotbar-Spitzhacke und setzt in die bestaetigte Luecke einen Crystal. In Survival berechnet Vanilla den Abbaufortschritt mit dem jeweils gehaltenen Werkzeug; ein legaler Client-Trick,_obsidian erst ohne Werkzeug anzufangen und exakt im letzten Tick mit der Pickaxe fertigzustellen, existiert nicht.")
         .defaultValue(true)
@@ -584,7 +592,7 @@ public class GodmodePvP extends Module {
         .build()
     );
 
-    public final Setting<Boolean> antiEscapeTrap = sgDefense.add(new BoolSetting.Builder()
+    public final Setting<Boolean> antiEscapeTrap = sgCity.add(new BoolSetting.Builder()
         .name("anti-escape-trap")
         .description("Erkennt ein 1x1-Loch bis drei Bloecke in der aktuellen Laufrichtung des Gegners und fuellt es bevorzugt mit Cobweb, sonst Obsidian. Cobweb stoppt die Bewegung, laesst Crystal-/Anchorsplash aber durch.")
         .defaultValue(true)
@@ -787,10 +795,18 @@ public class GodmodePvP extends Module {
     private int shieldUntil;
     private CrystalAura.SupportMode savedSupport;
     private int savedSupportDelay = -1;
+    private Double savedCrystalMinDamage;
+    private Double savedCrystalMaxDamage;
+    private final Map<Module, java.util.Set<EntityType<?>>> savedEntityFilters = new IdentityHashMap<>();
     /** Gemerkte Original-Werte der walls-range-Einstellungen (0 = CrystalAura place, 1 = CrystalAura
      *  break, 2 = KillAura); -1 = nichts veraendert. Siehe syncWallsRange(). */
     private final double[] savedWallsRange = { -1, -1, -1 };
     private boolean supportSyncFailed;
+    private boolean crystalAuraOwned;
+    private boolean autoMendOwned;
+    private boolean autoEatOwned;
+    private boolean noFallOwned;
+    private boolean killAuraOwned;
     private int lastCrystalCount = -1;
     private int lastAnchorBlockCount = -1;
     private int lastBedBlockCount = -1;
@@ -957,16 +973,25 @@ public class GodmodePvP extends Module {
 
     @Override
     public void onActivate() {
+        // GodmodePvP und HumanPvP teilen sich globale Baritone-/CrystalAura-Zustaende und duerfen
+        // daher niemals gleichzeitig aktiv sein. Sonst wuerde das spaeter aktivierte Profil die
+        // Rotationen, Slot-Lease und Cooldowns des anderen ueberschreiben.
+        HumanPvP human = Modules.get().get(HumanPvP.class);
+        if (human != null && human.isActive()) human.disable();
         tickCounter = 0;
         supportSyncFailed = false;
         auraMode = -1;
         java.util.Arrays.fill(auraUsage, 0);
         java.util.Arrays.fill(lastResourceCount, -1);
         lastErrorWarnTick = -999;
-        savedPlaceDelay = -1;
-        savedBreakDelay = -1;
-        savedTicksExisted = -1;
-        savedFastBreak = null;
+        savedCrystalMinDamage = null;
+        savedCrystalMaxDamage = null;
+        crystalAuraOwned = false;
+        autoMendOwned = false;
+        autoEatOwned = false;
+        noFallOwned = false;
+        killAuraOwned = false;
+        savedEntityFilters.clear();
         popBurstUntil = 0;
         lastPearlTick = -999;
         anchorPlaceCooldown = 0;
@@ -1073,6 +1098,7 @@ public class GodmodePvP extends Module {
         if (ca != null) {
             syncZeroDelaySettings(ca);
             syncSupport(ca);
+            syncCrystalDamageSettings(ca);
         } else {
             // CrystalAura nicht geladen/verfuegbar - denselben Fallback-Pfad wie ein fehlgeschlagener
             // Reflection-Zugriff in syncSupport() nehmen: Obsidian-Unterbau ueber freier Luft kann so
@@ -1120,12 +1146,12 @@ public class GodmodePvP extends Module {
         bs.blocksToAvoid.value = new java.util.ArrayList<>(java.util.List.of(net.minecraft.world.level.block.Blocks.NETHER_PORTAL));
 
         if (autoMendOn.get()) {
-            safeEnable(m, AutoMend.class);
+            autoMendOwned = safeEnable(m, AutoMend.class);
             tuneAutoMend();
         }
-        if (autoEatOn.get()) safeEnable(m, AutoEat.class);
-        if (noFallOn.get()) safeEnable(m, NoFall.class);
-        if (killAuraOn.get()) safeEnable(m, KillAura.class);
+        if (autoEatOn.get()) autoEatOwned = safeEnable(m, AutoEat.class);
+        if (noFallOn.get()) noFallOwned = safeEnable(m, NoFall.class);
+        if (killAuraOn.get()) killAuraOwned = safeEnable(m, KillAura.class);
         syncMobFilter();
         syncWallsRange();
 
@@ -1142,19 +1168,25 @@ public class GodmodePvP extends Module {
         turtleModeActive = false;
 
         Modules m = Modules.get();
-        safeDisable(m, CrystalAura.class);
-        safeDisable(m, AutoMend.class);
-        safeDisable(m, AutoEat.class);
-        safeDisable(m, NoFall.class);
-        safeDisable(m, KillAura.class);
-
+        if (crystalAuraOwned) safeDisable(m, CrystalAura.class);
+        if (autoMendOwned) safeDisable(m, AutoMend.class);
+        if (autoEatOwned) safeDisable(m, AutoEat.class);
+        if (noFallOwned) safeDisable(m, NoFall.class);
+        if (killAuraOwned) safeDisable(m, KillAura.class);
+        crystalAuraOwned = false;
+        autoMendOwned = false;
+        autoEatOwned = false;
+        noFallOwned = false;
+        killAuraOwned = false;
         CrystalAura ca = m.get(CrystalAura.class);
         if (ca != null) {
             restoreZeroDelaySettings(ca);
             restoreSupport(ca);
+            restoreCrystalDamageSettings(ca);
         }
         pendingBlockConfirmations.clear();
         restoreWallsRange();
+        restoreEntityFilters();
         dtapStage = 0;
         cancelFollow();
 
@@ -1186,6 +1218,8 @@ public class GodmodePvP extends Module {
     @EventHandler
     public void onTick(TickEvent.Pre event) {
         if (!Utils.canUpdate()) return;
+        HumanPvP human = Modules.get().get(HumanPvP.class);
+        if (human != null && human.isActive()) human.disable();
 
         tickCounter++;
 
@@ -1199,6 +1233,14 @@ public class GodmodePvP extends Module {
             }
         }
         syncMobFilter(); // rein clientseitiger Reflection-Sync (keine Serverpakete) - so schnell wie moeglich statt gedrosselt
+        if (tickCounter % 20 == 0) {
+            CrystalAura ca = Modules.get().get(CrystalAura.class);
+            if (ca != null) {
+                syncZeroDelaySettings(ca);
+                syncSupport(ca);
+                syncCrystalDamageSettings(ca);
+            }
+        }
 
         try {
             doTick();
@@ -1344,6 +1386,7 @@ public class GodmodePvP extends Module {
 
         // Ziel weg -> Baritone stoppen
         if (target == null) {
+            stopOwnedCrystalAura();
             engaged = false;
             dtapStage = 0;
             cancelFollow();
@@ -1356,6 +1399,10 @@ public class GodmodePvP extends Module {
             mc.player.setShiftKeyDown(false);
             Input.setKeyState(mc.options.keyJump, false);
             currentAction = "beobachten";
+            auraMode = -1;
+            bestCrystalDmgCache = 0;
+            bestAnchorDmgCache = 0;
+            bestBedDmgCache = 0;
             return null;
         }
 
@@ -1521,7 +1568,10 @@ public class GodmodePvP extends Module {
      *  AddEntity-ID erst nach Verarbeitung des Use-Item-Pakets. CrystalAuras eigener EntityAdded-Handler
      *  greift deshalb ausschliesslich die reale, vom Server vergebene Entity-ID ab. */
     private void syncZeroDelaySettings(CrystalAura ca) {
-        if (!zeroDelay.get() && !instantMode.get()) return;
+        if (!zeroDelay.get() && !instantMode.get()) {
+            restoreZeroDelaySettings(ca);
+            return;
+        }
 
         if (savedPlaceDelay < 0) savedPlaceDelay = ca.placeDelay.get();
         ca.placeDelay.set(0);
@@ -1545,6 +1595,35 @@ public class GodmodePvP extends Module {
         }
     }
 
+    /** CrystalAura's real damage gates must match this module's imminent/self-damage policy. */
+    private void syncCrystalDamageSettings(CrystalAura ca) {
+        Setting<Double> minDamage = crystalSetting(ca, "minDamage");
+        if (minDamage != null) {
+            if (savedCrystalMinDamage == null) savedCrystalMinDamage = minDamage.get();
+            minDamage.set(MIN_MEANINGFUL_DAMAGE);
+        }
+
+        Setting<Double> maxDamage = crystalSetting(ca, "maxDamage");
+        if (maxDamage != null) {
+            if (savedCrystalMaxDamage == null) savedCrystalMaxDamage = maxDamage.get();
+            maxDamage.set(maxSelfDamage.get());
+        }
+    }
+
+    private void restoreCrystalDamageSettings(CrystalAura ca) {
+        if (savedCrystalMinDamage != null) {
+            Setting<Double> minDamage = crystalSetting(ca, "minDamage");
+            if (minDamage != null) minDamage.set(savedCrystalMinDamage);
+        }
+        savedCrystalMinDamage = null;
+
+        if (savedCrystalMaxDamage != null) {
+            Setting<Double> maxDamage = crystalSetting(ca, "maxDamage");
+            if (maxDamage != null) maxDamage.set(savedCrystalMaxDamage);
+        }
+        savedCrystalMaxDamage = null;
+    }
+
     @SuppressWarnings("unchecked")
     private <T> Setting<T> crystalSetting(CrystalAura ca, String name) {
         try {
@@ -1564,6 +1643,10 @@ public class GodmodePvP extends Module {
         if (ticksExisted != null && savedTicksExisted >= 0) ticksExisted.set(savedTicksExisted);
         Setting<Boolean> fastBreak = crystalSetting(ca, "fastBreak");
         if (fastBreak != null && savedFastBreak != null) fastBreak.set(savedFastBreak);
+        savedPlaceDelay = -1;
+        savedBreakDelay = -1;
+        savedTicksExisted = -1;
+        savedFastBreak = null;
     }
 
     /** Zentraler Blockplatzierungs-Einstieg. Nur erfolgreich lokalisierte Platzierungen werden
@@ -1809,7 +1892,10 @@ public class GodmodePvP extends Module {
 
         if (killAuraOn.get()) {
             Module ka = Modules.get().get(KillAura.class);
-            if (ka != null && !ka.isActive()) ka.toggle();
+            if (ka != null && !ka.isActive()) {
+                ka.toggle();
+                killAuraOwned = ka.isActive();
+            }
         }
 
         // Feindlicher Crystal frisch platziert (in 5 m)? -> kurzes Schild-Block-Fenster
@@ -1989,10 +2075,12 @@ public class GodmodePvP extends Module {
             } else if (auraMode == 0) {
                 // Selbstheilung: falls CrystalAura extern/durch einen Fehler ausgegangen ist, wieder anschalten
                 Module ca = Modules.get().get(CrystalAura.class);
-                if (ca != null && !ca.isActive()) ca.toggle();
+                if (ca != null && !ca.isActive()) {
+                    ca.toggle();
+                    crystalAuraOwned = ca.isActive();
+                }
             }
         }
-
         if (shieldBreaker.get() && target instanceof Player p && p.isBlocking()) {
             breakShield(p);
             currentAction = "schild-brechen";
@@ -2046,6 +2134,13 @@ public class GodmodePvP extends Module {
      *  Reine Platzierungs-Entscheidung - laden/zuenden uebernimmt maintainNearbyAnchors() separat und
      *  unabhaengig vom Aura-Modus, damit ein platzierter Anchor nie unfertig liegen bleibt. */
     private void tryPlaceAnchor() {
+        if (!useAnchors.get() || anchorMode.get() == 2) {
+            anchorCandidates.clear();
+            anchorCandidateIndex = 0;
+            anchorPlaceCooldown = 0;
+            anchorsChargedByUs.clear();
+            return;
+        }
         if (anchorPlaceCooldown > 0) {
             anchorPlaceCooldown--;
             return;
@@ -2080,13 +2175,12 @@ public class GodmodePvP extends Module {
         // rotate=true - so kann die Erstladung (Glowstone) direkt im Erfolgsfall-Callback nachgeschoben
         // werden und feuert dank Mehrfachaktionen-pro-Tick (siehe rotateAndRun-Dokumentation) noch im
         // SELBEN Tick, statt bis zum naechsten Tick zu warten: maintainNearbyAnchors() scannt VOR
-        // diesem Aufruf im selben Tick und sieht den frisch platzierten Anchor daher noch nicht -
-        // ohne dieses Nachschieben blieb ein frisch platzierter Anchor bis zum naechsten Tick ungeladen.
         Vec3 center = Vec3.atCenterOf(spot);
         rotateAndRun(Rotations.getYaw(center), Rotations.getPitch(center), PRIORITY_ANCHOR, () -> {
+            if (!useAnchors.get() || anchorMode.get() == 2) return;
             if (placeTrackedBlock(spot, anchor, false, 50)) {
                 anchorPlaceFails = 0;
-                anchorPlaceCooldown = delay(6); // kurze Pause, damit maintainNearbyAnchors weitere Ladungen/Zuendung uebernimmt
+                anchorPlaceCooldown = delay(6);
                 lastAnchorProgressTick = tickCounter;
 
                 FindItemResult gs = InvHelper.find(Items.GLOWSTONE);
@@ -2212,8 +2306,8 @@ public class GodmodePvP extends Module {
         return false;
     }
 
-    /** @return true, wenn die Rotation+Interaktion tatsaechlich eingereiht wurde (Rotations-Slot frei war). */
     private boolean interactAnchorAt(BlockPos pos, FindItemResult item) {
+        if (!useAnchors.get() || anchorMode.get() == 2) return false;
         if (drinkingFireRes) return false;
         Vec3 center = Vec3.atCenterOf(pos);
         InteractionHand hand = item.isOffhand() ? InteractionHand.OFF_HAND : InteractionHand.MAIN_HAND;
@@ -2290,12 +2384,12 @@ public class GodmodePvP extends Module {
         // dabei rauskam - genau das erzeugte spuerbares Ruckeln/Stottern im Movement, waehrend "Platzierung"
         // nach aussen einfach nichts tat.
         boolean hasCrystals = hasActionableItem(Items.END_CRYSTAL);
-        boolean hasAnchorItem = anchorsExplodeHere() && hasActionableItem(Items.RESPAWN_ANCHOR)
+        boolean hasAnchorItem = useAnchors.get() && anchorsExplodeHere() && hasActionableItem(Items.RESPAWN_ANCHOR)
             && hasActionableItem(Items.GLOWSTONE);
         boolean hasBedItem = useBeds.get() && bedsExplodeHere() && hasActionableItem(GodmodePvP::isBed);
         Module ca = Modules.get().get(CrystalAura.class);
         if (!hasCrystals && !hasAnchorItem && !hasBedItem) {
-            if (ca != null && ca.isActive()) ca.toggle();
+            stopOwnedCrystalAura();
             auraMode = -1;
             bestCrystalDmgCache = 0;
             bestAnchorDmgCache = 0;
@@ -2429,17 +2523,17 @@ public class GodmodePvP extends Module {
         }
 
         if (wantAnchor && auraMode != 1) {
-            if (ca.isActive()) ca.toggle();
+            setCrystalAuraActive(ca, false);
             auraMode = 1;
             lastAnchorProgressTick = tickCounter;
             lastAuraSwitch = tickCounter;
         } else if (wantBed && auraMode != 2) {
-            if (ca.isActive()) ca.toggle();
+            setCrystalAuraActive(ca, false);
             auraMode = 2;
             lastBedProgressTick = tickCounter;
             lastAuraSwitch = tickCounter;
         } else if (!wantAnchor && !wantBed && auraMode != 0) {
-            if (!ca.isActive()) ca.toggle();
+            setCrystalAuraActive(ca, true);
             auraMode = 0;
             lastAuraSwitch = tickCounter;
         }
@@ -2561,7 +2655,7 @@ public class GodmodePvP extends Module {
         // Stabile Sortierung mit deterministischem Tie-Break (BlockPos-Hash) statt manuellem Bubble-Sort
         // ohne Tie-Break - bei exakt gleichem Schaden konnten zwei Kandidaten sonst bei aufeinander-
         // folgenden Neuberechnungen ihre Position tauschen und so unentschlossen zwischen zwei
-        // gleichwertigen Optionen hin- und herwechseln, statt konsequent bei einer zu bleiben.
+        // gleichwertigen Optionen hin und herwechseln, statt konsequent in der einen zu bleiben.
         java.util.List<Integer> order = new java.util.ArrayList<>();
         for (int i = 0; i < found.size(); i++) order.add(i);
         order.sort((a, b) -> {
@@ -2570,9 +2664,6 @@ public class GodmodePvP extends Module {
         });
         for (int i : order) anchorCandidates.add(found.get(i));
     }
-
-    /** Crystal: Obsidian/Bedrock-Basis ODER offene Luft-Tasche (CrystalAura setzt dort im Support-Modus
-     *  selbst Obsidian als Unterlage). Anchor: fester Boden, Luft darueber. */
     private boolean validExplosionSpot(BlockPos cell, boolean crystal) {
         if (mc.level == null) return false;
         if (!mc.level.getBlockState(cell).isAir()) return false;
@@ -2582,16 +2673,12 @@ public class GodmodePvP extends Module {
         BlockState below = mc.level.getBlockState(cell.below());
         if (crystal) {
             if (below.is(Blocks.OBSIDIAN) || below.is(Blocks.BEDROCK)) return true;
-            // Freie Luft als Unterlage ist nur gueltig, wenn tatsaechlich noch Obsidian zum
-            // Unterbauen da ist - sonst waehlt bestDamageAround() eine Stelle, die CrystalAura nie
-            // wirklich bespielen kann. Das liess bestCrystalDmgCache faelschlich > 0 stehen, was
-            // explosionImminent() "true" zurueckgeben und melee-fallback komplett blockieren liess,
-            // obwohl der Bot regungslos neben einem voll treffbaren Gegner stand.
-            return below.isAir() && (InvHelper.has(Items.OBSIDIAN));
+            // Freie Luft als Unterlage ist nur gueltig, wenn Obsidian direkt in Hotbar/Offhand liegt;
+            // ein Main-Inventar-Stack kann CrystalAuras Support-Platzierung nicht ausfuehren.
+            return below.isAir() && hasActionableItem(Items.OBSIDIAN);
         }
         return below.blocksMotion() && mc.level.getBlockState(cell.above()).isAir();
     }
-
     /** Zelle selbst oder einer der 6 Nachbarn ist Lava - typisch fuer Nether-Seen/Bedrock-Pools. Verhindert,
      *  dass eine Explosion dort eine Feuerflut auslaesst oder der Bot direkt neben kochender Lava landet. */
     private boolean isNearLava(BlockPos cell) {
@@ -2758,15 +2845,15 @@ public class GodmodePvP extends Module {
     private boolean selfDamageAllowed(Vec3 explosionPos, double selfDamage) {
         if (selfDamage <= 0 || mc.level == null || mc.player == null) return true;
         AABB box = mc.player.getBoundingBox();
-        return blastRayClear(explosionPos, box.getCenter())
-            || blastRayClear(explosionPos, new Vec3(box.minX, box.minY, box.minZ))
-            || blastRayClear(explosionPos, new Vec3(box.maxX, box.minY, box.minZ))
-            || blastRayClear(explosionPos, new Vec3(box.minX, box.maxY, box.minZ))
-            || blastRayClear(explosionPos, new Vec3(box.maxX, box.maxY, box.minZ))
-            || blastRayClear(explosionPos, new Vec3(box.minX, box.minY, box.maxZ))
-            || blastRayClear(explosionPos, new Vec3(box.maxX, box.minY, box.maxZ))
-            || blastRayClear(explosionPos, new Vec3(box.minX, box.maxY, box.maxZ))
-            || blastRayClear(explosionPos, new Vec3(box.maxX, box.maxY, box.maxZ));
+        return !blastRayClear(explosionPos, box.getCenter())
+            && !blastRayClear(explosionPos, new Vec3(box.minX, box.minY, box.minZ))
+            && !blastRayClear(explosionPos, new Vec3(box.maxX, box.minY, box.minZ))
+            && !blastRayClear(explosionPos, new Vec3(box.minX, box.maxY, box.minZ))
+            && !blastRayClear(explosionPos, new Vec3(box.maxX, box.maxY, box.minZ))
+            && !blastRayClear(explosionPos, new Vec3(box.minX, box.minY, box.maxZ))
+            && !blastRayClear(explosionPos, new Vec3(box.maxX, box.minY, box.maxZ))
+            && !blastRayClear(explosionPos, new Vec3(box.minX, box.maxY, box.maxZ))
+            && !blastRayClear(explosionPos, new Vec3(box.maxX, box.maxY, box.maxZ));
     }
 
     private boolean blastRayClear(Vec3 explosionPos, Vec3 hitPoint) {
@@ -4086,39 +4173,44 @@ public class GodmodePvP extends Module {
                     pistonStageTick = tickCounter;
                     return false;
                 }
+                if (tickCounter - pistonStageTick < 2) return false;
                 FindItemResult crystal = InvHelper.find(Items.END_CRYSTAL);
                 if (!crystal.found()) {
                     resetPistonAura();
                     return false;
                 }
-                if (!crystalPlacementSafe(self, pistonCrystalCell, 1.0)) { resetPistonAura(); return false; }
+                if (!crystalPlacementSafe(self, pistonCrystalCell, 1.0)) {
+                    resetPistonAura();
+                    return false;
+                }
                 Vec3 base = Vec3.atCenterOf(pistonCrystalCell.below());
                 rotateAndRun(Rotations.getYaw(base), Rotations.getPitch(base), PRIORITY_CRYSTAL,
-                    () -> withCombatSlot(crystal, () -> BlockUtils.interact(
-                        new BlockHitResult(base, Direction.UP, pistonCrystalCell.below(), false),
-                        InteractionHand.MAIN_HAND, true)));
-                pistonStage = 3;
-                pistonStageTick = tickCounter;
+                    () -> {
+                        if (withCombatSlot(crystal, () -> BlockUtils.interact(
+                            new BlockHitResult(base, Direction.UP, pistonCrystalCell.below(), false),
+                            InteractionHand.MAIN_HAND, true))) {
+                            pistonStageTick = tickCounter;
+                        }
+                    });
             }
             case 3 -> {
-                FindItemResult piston = InvHelper.find(Items.PISTON);
-                if (!piston.found()) piston = InvHelper.find(Items.STICKY_PISTON);
-                if (!piston.found() || !mc.level.getBlockState(pistonBodyCell).isAir()) {
+                FindItemResult pistonItem = InvHelper.find(Items.PISTON);
+                if (!pistonItem.found()) pistonItem = InvHelper.find(Items.STICKY_PISTON);
+                if (!pistonItem.found() || !mc.level.getBlockState(pistonBodyCell).isAir()) {
                     resetPistonAura();
                     return false;
                 }
                 // Vom Ziel WEG schauen, damit der Kolbenkopf zum Ziel zeigt (siehe Javadoc oben).
                 float awayYaw = (float) (Rotations.getYaw(target.position()) + 180.0);
-                boolean queued = rotateAndRun(awayYaw, 0, PRIORITY_CRYSTAL, () -> {
-                    FindItemResult p = InvHelper.find(Items.PISTON).found()
-                        ? InvHelper.find(Items.PISTON) : InvHelper.find(Items.STICKY_PISTON);
-                    placeTrackedBlock(pistonBodyCell, p, false, PRIORITY_CRYSTAL);
+                final FindItemResult piston = pistonItem;
+                final BlockPos bodyCell = pistonBodyCell;
+                rotateAndRun(awayYaw, 0, PRIORITY_CRYSTAL, () -> {
+                    if (placeTrackedBlock(bodyCell, piston, false, PRIORITY_CRYSTAL)) {
+                        pistonPartsByUs.add(bodyCell);
+                        pistonStage = 4;
+                        pistonStageTick = tickCounter;
+                    }
                 });
-                if (queued) {
-                    pistonPartsByUs.add(pistonBodyCell);
-                    pistonStage = 4;
-                    pistonStageTick = tickCounter;
-                }
             }
             case 4 -> {
                 FindItemResult redstone = InvHelper.find(Items.REDSTONE_BLOCK);
@@ -4133,7 +4225,7 @@ public class GodmodePvP extends Module {
                 }
                 if (placeTrackedBlock(power, redstone, true, PRIORITY_CRYSTAL)) {
                     pistonPartsByUs.add(power);
-                    pistonCooldown = delay(60); // ausgefahren - CrystalAura uebernimmt das Zuenden
+                    pistonCooldown = delay(60);
                     resetPistonAura();
                 }
             }
@@ -4150,10 +4242,8 @@ public class GodmodePvP extends Module {
         // ALLE Bauteile vorab pruefen, nicht erst in der jeweiligen Stufe: sonst setzt der Automat
         // Obsidian und einen Crystal und bricht danach mangels Kolben ab - ein verschenkter Crystal
         // pro Versuch (live so beobachtet, bevor diese Pruefung da war).
-        if (!InvHelper.has(Items.END_CRYSTAL) || !InvHelper.has(Items.REDSTONE_BLOCK)) return false;
-        if (!InvHelper.has(Items.PISTON) && !InvHelper.has(Items.STICKY_PISTON)) return false;
-
-        // Schubziel von unten nach oben suchen: bei einem 1 Block tiefen Loch ist die Kopfzelle selbst
+        if (!hasActionableItem(Items.END_CRYSTAL) || !hasActionableItem(Items.REDSTONE_BLOCK)) return false;
+        if (!hasActionableItem(Items.PISTON) && !hasActionableItem(Items.STICKY_PISTON)) return false;
         // seitlich offen, bei einem 2 Bloecke tiefen liegt die erste seitlich erreichbare Zelle eine
         // Ebene HOEHER (auf Hoehe des umgebenden Bodens). Tiefer ist immer besser - naeher am Kopf.
         for (int level = 1; level <= 2; level++) {
@@ -5080,7 +5170,6 @@ public class GodmodePvP extends Module {
     // ---------- Kopplung mit Meteor-Modulen ----------
 
     private void syncMobFilter() {
-        if (mobTypes.get().isEmpty()) return;
         syncEntityFilter(Modules.get().get(KillAura.class));
         syncEntityFilter(Modules.get().get(CrystalAura.class));
     }
@@ -5093,10 +5182,34 @@ public class GodmodePvP extends Module {
             java.lang.reflect.Field f = mod.getClass().getDeclaredField("entities");
             f.setAccessible(true);
             Setting<java.util.Set<EntityType<?>>> s = (Setting<java.util.Set<EntityType<?>>>) f.get(mod);
-            if (s != null) s.set(new HashSet<>(mobTypes.get()));
+            if (s != null) {
+                java.util.Set<EntityType<?>> original = s.get();
+                if (original != null && !savedEntityFilters.containsKey(mod)) {
+                    savedEntityFilters.put(mod, new HashSet<>(original));
+                }
+                java.util.Set<EntityType<?>> filter = new HashSet<>();
+                filter.add(EntityTypes.PLAYER);
+                if (attackMobs.get()) filter.addAll(mobTypes.get());
+                s.set(filter);
+            }
         } catch (NoSuchFieldException ignored) {
         } catch (Throwable ignored) {
         }
+    }
+
+    @SuppressWarnings("unchecked")
+    private void restoreEntityFilters() {
+        for (var entry : savedEntityFilters.entrySet()) {
+            try {
+                java.lang.reflect.Field f = entry.getKey().getClass().getDeclaredField("entities");
+                f.setAccessible(true);
+                Setting<java.util.Set<EntityType<?>>> setting =
+                    (Setting<java.util.Set<EntityType<?>>>) f.get(entry.getKey());
+                if (setting != null) setting.set(new HashSet<>(entry.getValue()));
+            } catch (Throwable ignored) {
+            }
+        }
+        savedEntityFilters.clear();
     }
 
 
@@ -5107,7 +5220,7 @@ public class GodmodePvP extends Module {
             @SuppressWarnings("unchecked")
             Setting<CrystalAura.SupportMode> s = (Setting<CrystalAura.SupportMode>) f.get(ca);
             if (s != null) {
-                savedSupport = s.get();
+                if (savedSupport == null) savedSupport = s.get();
                 if (s.get() == CrystalAura.SupportMode.Disabled) s.set(CrystalAura.SupportMode.Fast);
                 supportSyncFailed = false;
             } else {
@@ -5137,7 +5250,7 @@ public class GodmodePvP extends Module {
             @SuppressWarnings("unchecked")
             Setting<Integer> s = (Setting<Integer>) f.get(ca);
             if (s != null) {
-                savedSupportDelay = s.get();
+                if (savedSupportDelay < 0) savedSupportDelay = s.get();
                 if (s.get() < minSupportDelay.get()) s.set(minSupportDelay.get());
             }
         } catch (Throwable t) {
@@ -5251,13 +5364,32 @@ public class GodmodePvP extends Module {
         }
     }
 
-    private void safeEnable(Modules m, Class<? extends Module> clazz) {
+    private boolean safeEnable(Modules m, Class<? extends Module> clazz) {
         Module mod = m.get(clazz);
-        if (mod != null && !mod.isActive()) mod.toggle();
+        if (mod == null || mod.isActive()) return false;
+        mod.toggle();
+        return mod.isActive();
     }
 
     private void safeDisable(Modules m, Class<? extends Module> clazz) {
         Module mod = m.get(clazz);
         if (mod != null && mod.isActive()) mod.toggle();
+    }
+
+    private void setCrystalAuraActive(Module ca, boolean active) {
+        if (ca == null) return;
+        if (active) {
+            if (!ca.isActive()) {
+                ca.toggle();
+                crystalAuraOwned = ca.isActive();
+            }
+        } else if (crystalAuraOwned && ca.isActive()) {
+            ca.toggle();
+            crystalAuraOwned = false;
+        }
+    }
+
+    private void stopOwnedCrystalAura() {
+        setCrystalAuraActive(Modules.get().get(CrystalAura.class), false);
     }
 }
