@@ -46,8 +46,12 @@ jobs:
       - name: Determine tag
         id: tag
         run: |
+          # Wochenlauf: ein Tag pro Datum. Manueller Dispatch: eigener Tag, sonst schlaegt
+          # ein zweiter Lauf am selben Tag mit "GitHub Releases requires a tag" fehl.
           if [ "${GITHUB_REF_TYPE}" = "tag" ]; then
             echo "tag=${GITHUB_REF_NAME}" >> "$GITHUB_OUTPUT"
+          elif [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "tag=manual-$(date -u +'%Y-%m-%d')-${{ github.run_number }}" >> "$GITHUB_OUTPUT"
           else
             echo "tag=weekly-$(date -u +'%Y-%m-%d')" >> "$GITHUB_OUTPUT"
           fi
