@@ -3,7 +3,10 @@
   "minVersion": "0.8",
   "package": "com.provipvp.mixin",
   "client": [
-    "AutoMendMixin"
+    "AutoMendMixin",
+    "GuiThemeMixin",
+    "ModulesSearchMixin",
+    "ModulesTabMixin"
   ],
   "injectors": {
     "defaultRequire": 1

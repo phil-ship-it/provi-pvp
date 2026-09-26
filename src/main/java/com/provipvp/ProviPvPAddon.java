@@ -9,6 +9,7 @@ import com.provipvp.modules.HumanPvP;
 import com.provipvp.modules.MacroTriggerModule;
 import com.provipvp.modules.PacketFilter;
 import com.provipvp.modules.PacketLogger;
+import com.provipvp.modules.ProviClickGui;
 import com.provipvp.modules.TrainingDummy;
 import meteordevelopment.meteorclient.addons.MeteorAddon;
 import com.provipvp.commands.HumanPvpCommand;
@@ -38,6 +39,7 @@ public class ProviPvPAddon extends MeteorAddon {
         Modules.get().add(new PacketFilter());
         Modules.get().add(new MacroTriggerModule());
         Modules.get().add(new AutoArmor());
+        Modules.get().add(new ProviClickGui());
         Commands.add(new PvpCommand());
         Commands.add(new HumanPvpCommand());
         Commands.add(new NbtCommand());

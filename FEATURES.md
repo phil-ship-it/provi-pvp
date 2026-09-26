@@ -212,6 +212,25 @@ Small, standalone debug/OpSec modules - honestly scoped, no silent-fail claims.
 | MacroTrigger | `announce` | `true` | Chats when a macro fires. |
 
 
+## ProviClickGui
+
+ClickGUI-Overhaul. The module only *carries the settings* - it does not have to be enabled, the
+mixins read the values directly. `enabled` off = Meteor's original ClickGUI, unchanged.
+
+| Module | Setting | Default | Description |
+|---|---|---|---|
+| ProviClickGui | `enabled` | `true` | Master switch. Off = Meteor's original ClickGUI including its search. |
+| ProviClickGui | `settings-pane` | `true` | Persistent settings pane on the right. Right click on a module selects it into the pane instead of opening a separate screen; the pane's *Volle Ansicht* button still opens Meteor's full module screen. |
+| ProviClickGui | `pane-width` | `240` | Minimum width of the pane. Wider settings texts widen it further - Meteor windows size to their content. |
+| ProviClickGui | `smart-search` | `true` | Replaces Meteor's search. Meteor sorts *all* modules by raw Levenshtein distance and filters nothing, which is why a better match can end up hidden behind unrelated ones. This filters and ranks instead. |
+| ProviClickGui | `search-descriptions` | `true` | Also searches setting *descriptions*, not just names; hits are annotated `Beschreibung: xyz`. |
+| ProviClickGui | `typo-tolerance` | `2` | Allowed edit distance for typo hits. Typo hits always rank last and disappear entirely when real matches exist. |
+| ProviClickGui | `max-results` | `40` | Maximum number of displayed hits. |
+
+Search ranking order: exact name → name prefix → name contains → all query words in name →
+alias → all query words in one setting name → category → addon → single word → typo.
+Single-word and typo hits are fallback-only, so unrelated modules don't flood the list.
+
 ## Commands
 
 | Command | Effect |

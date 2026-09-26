@@ -479,3 +479,37 @@ Verifikation: `cmd.exe /c gradlew.bat test` und `cmd.exe /c gradlew.bat build` e
 - GodmodePvP verlassen veraltete Kampf-/Lochziele jetzt sofort. Ist der Bot selbst eingeschlossen, sucht `findEscapePosition()` eine offene Nachbarzelle priorisiert nach weniger Waenden und naeher am Gegner; ein 30-Tick-Stillstands-Timeout gibt den Weg fuer FollowProcess oder Perlenwurf frei.
 - Live-Smoke auf dem Arena-Server: `TestBot_1` wurde in eine 1x1-Zelle bei `1010.5, -59, 1010.5` gesetzt, `TestBot_2` stand draussen bei `1016.5, -59, 1010.5`; nach etwa 16 Sekunden war `TestBot_1` bei `1032.67, -59, 996.53` und hatte die Zelle verlassen. Beide Clients liefen mit dem finalen Jar ohne internen ProviPvP-Fehler. Der Arena-Reset/Refill des Test-Datapacks bleibt eine externe Stoergroesse.
 - `cmd.exe /c gradlew.bat test` und `cmd.exe /c gradlew.bat build`: **BUILD SUCCESSFUL**; finaler Jar-SHA-256 `1d35f9457337427d4a1fea0c469b583e6b06cf70b426c0b1252439560c4d6402`. Testclients und Arena-Server wurden danach beendet.
+
+## 15. ClickGUI-Kombi-Layout und Ranking-Suche (2026-09-26)
+
+### Befund zur Meteorsuche
+
+Meteors `Modules.searchTitles()` / `searchSettingTitles()` **filtern nicht** – sie berechnen fuer *jedes* Modul eine Levenshtein-Distanz zum Suchbegriff und sortieren nur. `ModulesScreen.createSearchW()` blendet dann die naechsten `moduleSearchCount` Treffer ein. Daraus folgt exakt die gemeldete Symptomatik: sachfremde Module mit zufaellig aehnlich langen Namen stehen vor inhaltlich passenden, und Setting-Beschreibungen werden gar nicht durchsucht (nur `Setting.title`).
+
+### Umsetzung
+
+- `util/SmartSearch.java`: MC-freie Ranglisten-Logik (exakter Name → Praefix → Enthalten → alle Begriffe → Alias → alle Begriffe in einem Setting → Kategorie → Addon → Einzelbegriff → Tippfehler). Einzelbegriffs- und Tippfehler-Treffer sindRueckfall und verschwinden, sobald es echte Treffer gibt. Tippfehler vergleichen ueber gleitende Teilfenster, sonst kaeme ein langer Modulname nie als Tippfehler-Treffer durch.
+- `gui/ProviModulesScreen.java`: erweitert `ModulesScreen` um ein Einstellungs-Pane rechts (Modultitel, Addon, Beschreibung, Aktiv-Knopf, Keybind, komplette Settings, Knopf *Volle Ansicht*). Rechtsklick waehlt aus statt zu oeffnen (`GuiThemeMixin` auf `moduleScreen`, theme-agnostisch, mit Bypass-Flag fuer den Pane-Knopf). Spalten werden links angeordnet und vom Pane weggeklemmt.
+- `mixin/ModulesTabMixin` leitet den Module-Tab auf unseren Screen um – bewusst dort statt an `GuiTheme.modulesScreen()`, weil Themes wie Catppuccin diese Methode ueberschreiben.
+- `mixin/ModulesSearchMixin` ersetzt beide Meteors Suchprimitiven, damit auch der Modul-Screen und fremde Themes profitieren.
+- `modules/ProviClickGui.java` (`.pvp click-gui`) traegt die Einstellungen; das Modul muss nicht aktiviert sein, `enabled` schaltet das ganze Overlay ab.
+
+### Stolpersteine, die Zeit gekostet haben
+
+- Ein als Mixin-Paket registriertes Paket (`com.provipvp.gui`) **sperrt alle eigenen Klassen dieses Pakets** fuer direkte Referenzen (`IllegalClassLoadError`). Accessor muss in ein anderes Paket.
+- Mixin-`@Accessor` verlangt den **exakten** Feldtyp. `ModulesScreen.controller` ist vom Typ der protected verschachtelten `WCategoryController`, die von aussen nicht benennbar ist – weder `WContainer` noch `Object` werden akzeptiert. Loesung: genau diese zwei Felder reflektieren (`CONTROLLER_FIELD`, `ROOT_FIELD`).
+- `WWindow.add(...)` wirft NPE, solange `init()` nicht lief: erst `controller.add(pane)` (das ruft `init()` auf und erzeugt View/Header), **dann** Inhalt einfuegen.
+- Der Kategorie-Controller legt seine Fenster erst beim ersten Layout an, also **nach** `initWidgets()`. Deshalb werden Spalten-Anordnung und Zeichnenreihenfolge des Panes ueber `MeteorClient.mc.execute(...)` eine Tick spaeter erledigt.
+- `GuiTheme.modulesHelpText()` ist **abstrakt** und damit kein Mixin-Ziel. Meteors irrefuehrender Hilfetext ("Right click - Open module settings") wird stattdessen anhand seines Textes im Wurzel-Container ausgeblendet – wirkt in jedem Theme.
+
+### Verifikation
+
+- `cmd.exe /c gradlew.bat build`: **BUILD SUCCESSFUL**, 36 Tests gruen (davon 15 neue in `SmartSearchTest`: Filter, Rangfolge, Settings-/Beschreibungstreffer mit Begruendung, Mehrbegriff-Fallback, Tippfehler-Fenstervergleich, Limit, Aliase, Levenshtein).
+- Live im 26.2-Client auf Monitor 2 (Screenshots): Kategorie-Spalten rendern, Einstellungs-Pane liegt ueber den Spalten und zeigt GodmodePvPs Settings, eigene Bedienhinweise ersetzen Meteors Block, Suche `crys` liefert *10 Treffer* inklusive `Godmode Pvp` mit der Begruendung `Setting: Min Crystals` – genau der vorher fehlende Fall.
+- Temporaere Verifikations-Sonde (`TempGuiProbe`, oeffnete das GUI und fuelle die Suche programmatisch, weil dem Bot-Fenster ohne Fokuswechsel keine Eingaben zugefuehrt werden koennen) wurde entfernt; `jar tf` bestaetigt 0 Rest-Treffer. Finaler Jar-SHA-256 `8e5efe571831d909790afc5b3f5746b8c17c8ad54d6865abf5fae995f00cbaa8`.
+
+### Offen / nicht automatisiert geprueft
+
+- Der Server laeuft mit 26.2 auch auf dem Fenster `1100x680` des Bots, deshalb brechen die Spalten dort frueher um als auf einem breiteren Fenster. Auf einem schmalen Fenster ist die Pane-Breite durch den Inhalt (lange Beschreibungen) breiter als `pane-width`.
+- Meteors Fenster sind standardmaessig halbtransparent, hinter dem Pane sind Spalten durchscheinend sichtbar. Das ist Theme-Standard, kein Fehler; opake Panels liefert das Catppuccin-Theme.
+- Mausbedienung (Rechtsklick-Auswahl, Pane-Knoepfe) wurde **nicht** per Klick getestet – nur per direktem Aufruf derselben Codepfade. Der Nutzer kann das beim ersten Start in Sekunden selbst pruefen.
