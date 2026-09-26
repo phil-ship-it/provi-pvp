@@ -8,6 +8,24 @@ slower, more human-like variant for situations where blatant automation would st
 > Built as a personal anarchy-server project. Read the [Disclaimer](#disclaimer) before using this on any server
 > that isn't rule-free.
 
+## Screenshots
+
+**ClickGUI: category columns, settings pane on the right, no screen switching**
+
+<img src="docs/images/clickgui-categories.png" width="49%" alt="ClickGUI category columns">
+<img src="docs/images/clickgui-settings-pane.png" width="49%" alt="ClickGUI settings pane">
+
+**Module search that ranks by *how* a module matched — including setting names and descriptions**
+
+<img src="docs/images/clickgui-search.png" width="70%" alt="Ranked module search">
+
+**In game**
+
+<img src="docs/images/gameplay.png" width="70%" alt="Gameplay">
+
+> Screenshots are taken in a test profile with 19 addons installed, which is why the category columns are
+> denser here than on a clean install.
+
 ## Quick Install (no modding experience needed)
 
 If the only two things you know how to do are "put a mod jar in the mods folder" and "extract a zip file", this

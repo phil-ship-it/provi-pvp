@@ -4,6 +4,8 @@ on:
   schedule:
     - cron: '0 6 * * 0' # every Sunday, 06:00 UTC
   workflow_dispatch: # allows manually triggering an off-cycle release from the Actions tab
+  push:
+    tags: ['v*'] # manual version releases
 
 permissions:
   contents: write
@@ -16,7 +18,7 @@ jobs:
       - name: Checkout Repository
         uses: actions/checkout@v7
         with:
-          fetch-depth: 0 # full history, needed for generate_release_notes to list commits since the last release
+          fetch-depth: 0 # full history, needed for the changelog link between tags
           persist-credentials: false
 
       - name: Set up Gradle
@@ -31,18 +33,73 @@ jobs:
       - name: Build with Gradle
         run: ./gradlew build
 
-      - name: Determine release tag
+      - name: Determine version and tag
         id: vars
         run: |
-          echo "date=$(date -u +'%Y-%m-%d')" >> "$GITHUB_OUTPUT"
+          jar=$(basename "$(ls build/libs/provi-pvp-*.jar | head -1)" .jar)
+          version="${jar#provi-pvp-}"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "jar=$jar" >> "$GITHUB_OUTPUT"
+          if [ "${GITHUB_REF_TYPE}" = "tag" ]; then
+            echo "tag=${GITHUB_REF_NAME}" >> "$GITHUB_OUTPUT"
+          else
+            echo "tag=weekly-$(date -u +'%Y-%m-%d')" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Compose release notes
+        run: |
+          cat > release-notes.md <<EOF
+          ## ProviPvP ${{ steps.vars.outputs.version }} — Minecraft 26.2 / Meteor Client addon
+
+          Fully automated Crystal/Anchor PvP bot: it finds the target, decides the optimal
+          explosion spot every tick, and plays the whole fight on its own.
+
+          ### Screenshots
+
+          | ClickGUI: category columns | ClickGUI: settings pane |
+          |---|---|
+          | ![categories](https://raw.githubusercontent.com/phil-ship-it/provi-pvp/master/docs/images/clickgui-categories.png) | ![pane](https://raw.githubusercontent.com/phil-ship-it/provi-pvp/master/docs/images/clickgui-settings-pane.png) |
+
+          **Settings search that actually matches** — modules are ranked by *how* they matched,
+          not by raw edit distance, and setting descriptions count:
+
+          ![search](https://raw.githubusercontent.com/phil-ship-it/provi-pvp/master/docs/images/clickgui-search.png)
+
+          ### Install
+          1. Minecraft **26.2**, Fabric Loader, **Java 25**
+          2. [Meteor Client 26.2](https://meteorclient.com/download)
+          3. Drop \`${{ steps.vars.outputs.jar }}\` into \`mods/\`
+          4. Start the game, Meteor loads ProviPvP automatically
+
+          Enable it in-game with **\`.pvp\`** (toggle \`.pvp on\` / \`.pvp off\`).
+          \`.hpvp\` does the same for the human-paced profile.
+          All settings: [FEATURES.md](https://github.com/phil-ship-it/provi-pvp/blob/master/FEATURES.md)
+
+          ### What it does
+          - Damage-optimized Crystal/Anchor/Bed placement, Obsidian under-build
+          - Axe-swap shield breaking, W-tap sprint reset, crit jumps, pre-hits
+          - Perle ballistics with shooter self-velocity and trajectory validation
+          - Turtle-Master and totem tracking, retreat when the trade is lost
+          - Resource balancing across Crystal/Anchor/Bed, inventory restock thresholds
+          - OpSec extras: brand spoof, packet filter, exploit guard, packet logger
+          - ClickGUI overhaul: category columns plus a persistent settings pane, ranked search
+
+          ### Honest scope
+          Baritone owns all movement — this addon configures and drives it, it does not
+          reimplement pathfinding. Damage math uses Meteor's own \`DamageUtils\`.
+          Public PvP is a rules category: check the rules of the server you play on.
+          You are responsible for how you use it.
+
+          GPL-3.0 — see [LICENSE](https://github.com/phil-ship-it/provi-pvp/blob/master/LICENSE).
+          EOF
 
       - name: Release
         uses: softprops/action-gh-release@v3
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
-          tag_name: weekly-${{ steps.vars.outputs.date }}
-          name: Weekly Build ${{ steps.vars.outputs.date }}
+          tag_name: ${{ steps.vars.outputs.tag }}
+          name: ProviPvP ${{ steps.vars.outputs.version }} (${{ steps.vars.outputs.tag }})
           prerelease: false
-          generate_release_notes: true
+          body_path: release-notes.md
           files: |
             ./build/libs/*.jar
