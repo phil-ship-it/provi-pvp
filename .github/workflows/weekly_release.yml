@@ -116,9 +116,8 @@ jobs:
       - name: Release
         uses: softprops/action-gh-release@v3
         with:
-          token: ${{ secrets.GITHUB_TOKEN }}
-          tag_name: ${{ steps.vars.outputs.tag }}
-          name: ProviPvP ${{ steps.vars.outputs.version }} (${{ steps.vars.outputs.tag }})
+          tag_name: ${{ steps.tag.outputs.tag }}
+          name: ProviPvP ${{ steps.vars.outputs.version }} (${{ steps.tag.outputs.tag }})
           prerelease: false
           body_path: release-notes.md
           files: |
