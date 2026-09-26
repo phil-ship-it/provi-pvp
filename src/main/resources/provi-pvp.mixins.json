@@ -4,6 +4,7 @@
   "package": "com.provipvp.mixin",
   "client": [
     "AutoMendMixin",
+    "GuiThemeCompatMixin",
     "GuiThemeMixin",
     "ModulesSearchMixin",
     "ModulesTabMixin"

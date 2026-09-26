@@ -231,6 +231,15 @@ Search ranking order: exact name → name prefix → name contains → all query
 alias → all query words in one setting name → category → addon → single word → typo.
 Single-word and typo hits are fallback-only, so unrelated modules don't flood the list.
 
+## Theme compatibility (Catppuccin and other third-party themes)
+
+`GuiTheme.modulesHelpText()` is abstract in Meteor 26.2. Themes built against an earlier 26.2
+snapshot (Catppuccin 2.2.0 among them) do not implement it and throw
+`AbstractMethodError` while the module list is being built — the addon looks simply broken and
+has to be disabled. `GuiThemeCompatMixin` supplies Meteor's standard answer (`true`) as a
+concrete base implementation, so such themes work. Themes that implement the method themselves
+still win, because a subclass definition overrides the inherited one.
+
 ## Commands
 
 | Command | Effect |
