@@ -36,15 +36,31 @@ jobs:
       - name: Determine version and tag
         id: vars
         run: |
-          jar=$(basename "$(ls build/libs/provi-pvp-*.jar | head -1)" .jar)
+          jarfile=$(ls build/libs/provi-pvp-*.jar | head -1)
+          jar=$(basename "$jarfile")
           version="${jar#provi-pvp-}"
+          version="${version%.jar}"
           echo "version=$version" >> "$GITHUB_OUTPUT"
           echo "jar=$jar" >> "$GITHUB_OUTPUT"
+
+      - name: Determine tag
+        id: tag
+        run: |
           if [ "${GITHUB_REF_TYPE}" = "tag" ]; then
             echo "tag=${GITHUB_REF_NAME}" >> "$GITHUB_OUTPUT"
           else
             echo "tag=weekly-$(date -u +'%Y-%m-%d')" >> "$GITHUB_OUTPUT"
           fi
+
+      - name: Stage screenshots as release assets
+        run: |
+          # Bilder als Release-Assets statt ueber raw.githubusercontent: die Auslieferung
+          # laeuft damit ueber releases/download und ist unabhaengig vom raw-CDN.
+          mkdir -p release-assets
+          for f in docs/images/*.png; do
+            [ -e "$f" ] || continue
+            cp "$f" "release-assets/"
+          done
 
       - name: Compose release notes
         run: |
@@ -58,12 +74,12 @@ jobs:
 
           | ClickGUI: category columns | ClickGUI: settings pane |
           |---|---|
-          | ![categories](https://raw.githubusercontent.com/phil-ship-it/provi-pvp/master/docs/images/clickgui-categories.png) | ![pane](https://raw.githubusercontent.com/phil-ship-it/provi-pvp/master/docs/images/clickgui-settings-pane.png) |
+          | ![categories](https://github.com/phil-ship-it/provi-pvp/releases/download/${{ steps.tag.outputs.tag }}/clickgui-categories.png) | ![pane](https://github.com/phil-ship-it/provi-pvp/releases/download/${{ steps.tag.outputs.tag }}/clickgui-settings-pane.png) |
 
           **Settings search that actually matches** — modules are ranked by *how* they matched,
           not by raw edit distance, and setting descriptions count:
 
-          ![search](https://raw.githubusercontent.com/phil-ship-it/provi-pvp/master/docs/images/clickgui-search.png)
+          ![search](https://github.com/phil-ship-it/provi-pvp/releases/download/${{ steps.tag.outputs.tag }}/clickgui-search.png)
 
           ### Install
           1. Minecraft **26.2**, Fabric Loader, **Java 25**
@@ -78,7 +94,7 @@ jobs:
           ### What it does
           - Damage-optimized Crystal/Anchor/Bed placement, Obsidian under-build
           - Axe-swap shield breaking, W-tap sprint reset, crit jumps, pre-hits
-          - Perle ballistics with shooter self-velocity and trajectory validation
+          - Pearl ballistics with shooter self-velocity and trajectory validation
           - Turtle-Master and totem tracking, retreat when the trade is lost
           - Resource balancing across Crystal/Anchor/Bed, inventory restock thresholds
           - OpSec extras: brand spoof, packet filter, exploit guard, packet logger
@@ -103,3 +119,4 @@ jobs:
           body_path: release-notes.md
           files: |
             ./build/libs/*.jar
+            ./release-assets/*.png
