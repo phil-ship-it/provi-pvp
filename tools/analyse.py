@@ -105,6 +105,38 @@ class Profile:
 def _share(part: list, whole: list) -> float:
     return len(part) / len(whole) if whole else 0.0
 
+# ---------------------------------------------------------------- Settings
+SETTING = re.compile(
+    r'\.name\("(?P<name>[a-z0-9-]+)"\)'
+    r'(?:(?!\.build\(\)).)*?\.defaultValue\((?P<def>[^)]+)\)',
+    re.S,
+)
+BOUND = re.compile(r'\.(?:range|min|max|sliderRange)\((?P<a>[^,()]+),\s*(?P<b>[^,()]+)\)')
+
+
+def load_settings(source: Path) -> dict[str, dict]:
+    """Liest die aktuellen Settings-Defaults direkt aus GodmodePvP.java.
+
+    Ohne das riet die Regel "balance-resources steht auf 0" oder schlug "pearl-min-dist senken"
+    vor, obwohl der Wert bereits am Minimum der Skala klebt. Vorschlage, die sich nicht aus dem
+    Code belegen lassen, sind schlimmer als keine.
+    """
+    out: dict[str, dict] = {}
+    if not source.exists():
+        return out
+    for m in SETTING.finditer(source.read_text(encoding="utf-8", errors="replace")):
+        body = source.read_text(encoding="utf-8", errors="replace")[m.start():m.end() + 200]
+        entry: dict = {"default": m.group("def").strip()}
+        b = BOUND.search(body)
+        if b:
+            try:
+                entry["min"] = float(b.group("a"))
+                entry["max"] = float(b.group("b"))
+            except ValueError:
+                pass
+        out[m.group("name")] = entry
+    return out
+
 
 def parse_trace(text: str) -> list[Sample]:
     out: list[Sample] = []
@@ -155,8 +187,20 @@ def _fmt(share: float) -> str:
     return f"{share * 100:.0f} %"
 
 
-def proposals(profiles: dict[str, Profile]) -> list[str]:
-    """Regelbasierte Vorschlaege. Jeder nennt die Zahl, die ihn ausgeloest hat."""
+def _lever(settings: dict[str, dict], name: str) -> str:
+    """Beschreibt einen Setting-Wert samt Skala, damit ein Vorschlag pruefbar ist."""
+    s = settings.get(name)
+    if not s:
+        return f"`{name}` (nicht in GodmodePvP.java gefunden)"
+    scale = ""
+    if "min" in s and "max" in s:
+        scale = f", Skala {s['min']:g}-{s['max']:g}"
+    return f"`{name}` steht auf {s['default']}{scale}"
+
+
+def proposals(profiles: dict[str, Profile], settings: dict[str, dict]) -> list[str]:
+    """Regelbasierte Vorschlaege. Jeder nennt die Zahl, die ihn ausgeloest hat, und nur
+    Aenderungen, die innerhalb der tatsaechlichen Skala liegen."""
     out: list[str] = []
     live = {n: p for n, p in profiles.items() if p.samples}
 
@@ -170,8 +214,9 @@ def proposals(profiles: dict[str, Profile]) -> list[str]:
                 f"`{name}`: engaged in {_fmt(p.engaged_share)} der Samples, aber "
                 f"{_fmt(p.engaged_but_far_share)} davon mit Abstand > 6 (Median {p.dist_median:.1f}, "
                 f"p90 {p.dist_p90:.1f}). Der Bot rennt, kommt aber nicht in Explosionsreichweite.\n"
-                f"  -> `pearl-min-dist` senken bzw. `engage-distance` pruefen: mit "
-                f"`pearl-min-dist` 4 greift die Perle erst ab 4 Bloecken, alles darueber laeuft der Bot leer."
+                f"  -> {_lever(settings, 'pearl-min-dist')}. Ein Absenken ist damit "
+                f"ausgeschlossen; der Hebel liegt beim Zulaeuern selbst (follow) oder beim "
+                f"Perlenwurf, nicht an dieser Einstellung."
             )
 
         # 2) Follow wird staendig gerissen, obwohl engagiert — Pfad-Konflikte.
@@ -191,9 +236,9 @@ def proposals(profiles: dict[str, Profile]) -> list[str]:
                 f"(beobachten/boden-sichern/rueckzugsschritt), obwohl im Fenster "
                 f"{p.usage.get('ik_used_crystal', 0)} Crystals und "
                 f"{p.usage.get('ik_used_anchor', 0)} Anker verbraucht wurden.\n"
-                f"  -> Der Bot arbeitet viel Positionierung, wenig Explosion. "
-                f"`balance-resources` ist die dokumentierte Stellschraube fuer den Mix, "
-                f"`min-support-delay` der dokumentierte Rate-Hebel."
+                f"  -> {_lever(settings, 'balance-resources')} — dokumentierte Stellschraube "
+                f"fuer den Mix. {_lever(settings, 'min-support-delay')}: bereits am "
+                f"aggressivsten Ende der Skala."
             )
 
         # 4) Aura-Mix stark einseitig.
@@ -206,16 +251,17 @@ def proposals(profiles: dict[str, Profile]) -> list[str]:
                     f"`{name}`: {share * 100:.0f} % aller Explosionen sind Crystals "
                     f"({cr} vs. {an}). Anker/Glowstone kommen praktisch nicht zum Einsatz "
                     f"({p.usage.get('ik_used_glowstone', 0)} Glowstone fuer {an} Anker).\n"
-                    f"  -> `balance-resources` steht auf 0 oder der Bot hat keine Anker im Inventar; "
-                    f"der Modul-Kommentar nennt 14-26 % Anker als realistischen Anteil."
+                    f"  -> {_lever(settings, 'balance-resources')}. Der Modul-Kommentar nennt "
+                    f"14-26 % Anker als realistischen Anteil; Testwert waere eine Erhoehung "
+                    f"im Bereich bis {settings.get('balance-resources', {}).get('max', '?')}."
                 )
             elif share < 0.55:
                 out.append(
                     f"`{name}`: nur {share * 100:.0f} % der Explosionen sind Crystals "
                     f"({cr} vs. {an}). Der Bot ist ankerlastig und damit langsamer — "
                     f"ein Anker-Zyklus dauert laenger als ein Crystal-Zyklus.\n"
-                    f"  -> `balance-resources` erhoehen (maximaler Schadensbonus in HP) oder "
-                    f"`min-support-delay` senken."
+                    f"  -> {_lever(settings, 'balance-resources')} erhoehen oder "
+                    f"{_lever(settings, 'min-support-delay')} pruefen."
                 )
 
         # 5) Perl-Einsatz auffaellig niedrig trotz grosser Distanz.
@@ -224,13 +270,14 @@ def proposals(profiles: dict[str, Profile]) -> list[str]:
                 f"`{name}`: p90-Distanz {p.dist_p90:.1f} Bloecke, aber nur "
                 f"{p.usage.get('ik_used_pearl', 0)} Perlen im Fenster. Der Bot bleibt auf Distanz "
                 f"und schiesst nicht.\n"
-                f"  -> `pearl-gapclose`/`pearl-min-dist` pruefen; die Distanz-Verteilung deutet "
-                f"darauf hin, dass die Perle gar nicht als loesende Option greift."
+                f"  -> {_lever(settings, 'pearl-min-dist')}, {_lever(settings, 'pearl-gapclose')} "
+                f"pruefen; die Distanz-Verteilung deutet darauf hin, dass die Perle als "
+                f"loesende Option gar nicht greift."
             )
     return out
 
 
-def report(profiles: dict[str, Profile]) -> str:
+def report(profiles: dict[str, Profile], settings: dict[str, dict]) -> str:
     lines = ["# ProviPvP — Auswertung eines aufgezeichneten Laufs", ""]
     lines.append("Nur Vorschlaege. Nichts davon ist angewendet.")
     lines.append("")
@@ -269,7 +316,7 @@ def report(profiles: dict[str, Profile]) -> str:
 
     lines.append("## Vorschlaege")
     lines.append("")
-    ps = proposals(profiles)
+    ps = proposals(profiles, settings)
     if not ps:
         lines.append("Keine Regel hat ausgeloest. Das kann bedeuten, dass die Laufzeit zu kurz war "
                      "oder dass kein Engpass auffaellt — dann taugen mehr Daten, nicht mehr Regeln.")
@@ -304,7 +351,9 @@ def main() -> int:
               "'<bot>.log' im Verzeichnis?", file=sys.stderr)
         return 1
 
-    text = report(profiles)
+    source = Path(__file__).resolve().parents[1] / 'src/main/java/com/provipvp/modules/GodmodePvP.java'
+    settings = load_settings(source)
+    text = report(profiles, settings)
     if args.out:
         args.out.write_text(text, encoding="utf-8")
         print(f"Bericht: {args.out}")

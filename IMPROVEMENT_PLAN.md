@@ -189,3 +189,28 @@ belastbar, also auch nicht enthalten.
 - Beide `dih-src`-UI-Fixes sind in `*.bak-sprint` gesichert (Stand 2026-09-30)
 - ProviPvP-Tests: 88 Testfaelle in 6 Klassen (`gradlew test`)
 - Tests: `PvpMathTest`, `SmartSearchTest` (ProviPvP) · `PanoramaRecolorTest`, `MisroutedPrefixTest`, `ClientCommandParsingTest` (dih-src)
+### A/B-Messung: `balance-resources` 1.5 → 3.0 — **nicht bestaetigt**
+
+Der Analyser schlug vor, `balance-resources` (Skala 0–5) zu erhoehen, weil nur 8 % der Explosionen
+Anker sind und der Modul-Kommentar 14–26 % nennt. Gegengeprüft, je 6 Minuten, Arena ohne Reset:
+
+| Profil | vorher (1.5) | nachher (3.0) |
+|---|---:|---:|
+| TestBot_1 | 8 % Anker (217/20) | **9 %** (355/36) |
+| TestBot_2 | 8 % Anker (262/23) | **12 %** (218/31) |
+
+**Ergebnis: die Hypothese ist nicht bestaetigt.** +1 bzw. +4 Prozentpunkte liegen innerhalb der
+Streuung — im selben Lauf lagen die beiden Bots mit identischer Einstellung bereits 3 Prozentpunkte
+auseinander, und die Explosionszahl schwankt zwischen Läufen stark (Bot 1: 217 → 355 Crystals,
+Bot 2: 262 → 218). Eine Wirkung dieser Größe lässt sich mit zwei Profilen und je einem Lauf nicht
+von der Streuung trennen. Erforderlich wären ≥ 5 Läufe je Arm.
+
+Der Wert bleibt bei **1.5**. Der Vorschlag des Analysers war begründet, aber falsch in der Stärke —
+genau der Fall, für den die Regeln jetzt den echten Skalenbereich aus `GodmodePvP.java` lesen
+statt zu raten: der Vorschlag „`pearl-min-dist` senken" war unmoeglich, der Wert stand bereits am
+Minimum der Skala.
+
+**Offen bleibt der eigentliche Befund:** 58–68 % der engaged-Samples liegen bei Abstand > 6
+(p90 ~21). Der Bot rennt, kommt nicht in Explosionsreichweite, und `follow` ist nur in 33–35 %
+der engaged-Samples aktiv. Das ist kein Settings-Problem, sondern der Baritone-Follow, der bei jeder
+`reserveCombatSlot` abgebrochen wird.
