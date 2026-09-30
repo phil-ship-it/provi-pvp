@@ -36,21 +36,36 @@ Add-on: `com.provipvp` (11 Module, 5 Commands, 2 Testklassen) auf Meteor Client 
 
 ---
 
-## ⬜ WEEK 2: Architecture Extraction — NICHT BEGONNEN
+## 🔶 WEEK 2: Architecture Extraction — IN ARBEIT
 
-Im `src`-Baum existiert **keine** der geplanten Klassen. `GodmodePvP.java` ist mit ~3000+ Zeilen weiterhin das Monolith.
+`GodmodePvP.java` ist mit ~5700 Zeilen weiterhin das Monolith, aber der Kern ist jetzt zerlegt.
+Aus `GodmodePvP.rotateAndRun` (:3072) und `queueWithCombatSlot` (:3130) hervorgegangen — der
+Rotations-Code war zwischen `GodmodePvP` und `HumanPvP` dupliziert, und genau dort sitzt der
+Starvation-Bug aus Woche 1.
 
-- [ ] `RotationQueue` als Modul
-- [ ] `PearlSolver` als Modul
-- [ ] `InventoryManager` als Modul
-- [ ] `TargetSelector` als Modul
-- [ ] `ExplosionScanner` als Modul
+- [x] `RotationQueue` als Modul (`exec/RotationQueue.java`) — Warteschlange, `clientSide`-Zaehlung,
+      `realActionThisTick` und alle Prioritaeten; 6 Tests in `RotationQueueTest`
+- [x] `PearlSolver` als Modul (`pearl/`)
+- [x] `InventoryManager` als Modul (`core/`)
+- [x] `TargetSelector` als Modul (`core/`)
+- [x] `ExplosionScanner` als Modul (`terrain/`)
 - [ ] `SelfDamagePolicy` als Modul
-- [ ] Abstrakte Basisklasse `CombatCore`
+- [x] Abstrakte Basisklasse `CombatCore` (`core/CombatCore.java`)
 - [ ] `GodmodePvP extends CombatCore` + aggressive Features
 - [ ] `HumanPvP extends CombatCore` + Human-Features
-- [ ] Event-getriebene Architektur (`TargetChangeEvent`, `ExplosionDetectedEvent`) — **es gibt aktuell kein `events`-Paket**
+- [x] Event-getriebene Architektur: `TargetChangeEvent` + `ExplosionDetectedEvent` in `core/events/`,
+      veroeffentlicht ueber `CombatCore` (Meteors Orbit-Bus)
 - [ ] Strukturiertes Logging mit SLFLog4J-Markern
+
+**Einschraenkung, die die Klassen-Zerlegung begrenzt:** `GodmodePvP` und `HumanPvP` muessen von
+Meteors `Module` erben, Java erlaubt keine Mehrfachvererbung — sie koennen also nicht gleichzeitig
+`CombatCore` erben. `CombatCore` ist deshalb abstrakte Basis der Kampf-*Logik*-Klassen; die Module
+halten eine `CombatPipeline` per Komposition. `CombatCore` als reine Dekoration zu lassen waere
+genau die Sorte tote Code, die diese Extraktion beseitigen soll.
+
+**Noch nicht verdrahtet:** `CombatPipeline` wird von `GodmodePvP` noch nicht benutzt. Der
+Slot-Mutex-Umstieg auf `InventoryManager` betrifft ~15 Aufrufstellen in nie im Kampf getestetem
+Code und ist ein eigener Schritt.
 
 ---
 
@@ -125,9 +140,17 @@ Der Code war nicht kompilierbar und ist repariert:
 `gradlew build` grün, 1221 Tests. Build-Artefakt `build/libs/Kui-5.0.1-26.2-dev.jar` ist installiert als `%APPDATA%/.minecraft-262pvp/mods/kui-5.0.1.jar`; das vorherige liegt als `kui-5.0.1.jar.bak` daneben.
 
 ### Offen aus dieser Session
-- `KuiDisconnectedScreenMixin` hängt den Auto-Reconnect-Knopf bei `height - 38` ein — er erscheint auf dem `DisconnectedScreen` nicht
-- `KuiWaypointsScreen:634` — Helfer nimmt einen `border`-Parameter, ignoriert ihn und setzt stattdessen einen fest codierten Wert
+- [x] `KuiDisconnectedScreenMixin` — der Auto-Reconnect-Knopf lag bei `height - 38` deckungsgleich ueber
+      der Vanilla-Button-Zeile (die sitzt bei `height - 32`) und war dadurch nicht zu sehen. Jetzt
+      oberhalb der Zeile, mit benannten Konstanten und Begrenzung gegen kleine Bildschirme.
+      Sichtbarkeit per Screenshot **nicht** verifiziert — der DisconnectedScreen ist ohne laufenden
+      Disconnect nicht erzeugbar.
+- [x] `KuiWaypointsScreen:634` — der Helfer `frame(...)` nahm einen `border`-Parameter, verwarf ihn und
+      setzte stattdessen fest `recolor(0x99585B70, OUTLINE)`. Beide Aufrufer reichen `THEME.borderSoft()`,
+      also war der Parameter wirkungslos und die Rahmenfarbe folgte nicht dem Theme. Wird jetzt benutzt.
 - `autism-client/` liegt als nicht getrackter Fork im Repo (entschieden: nicht löschen, nicht anfassen)
+
+**Sicherung:** beide `dih-src`-Dateien liegen als `*.bak-sprint` daneben (`dih-src` ist nicht in git).
 
 ---
 
@@ -138,4 +161,6 @@ Der Code war nicht kompilierbar und ist repariert:
 - Debug-Overlay per Keybind (Default: `RSHIFT + D`)
 - Team-System nutzt eigene Pakete, nicht Meteor-Party
 - `dih-src` ist **nicht** in git getrackt — vor jedem Ersetzen eines Jars sichern
+- Beide `dih-src`-UI-Fixes sind in `*.bak-sprint` gesichert (Stand 2026-09-30)
+- ProviPvP-Tests: 88 Testfaelle in 6 Klassen (`gradlew test`)
 - Tests: `PvpMathTest`, `SmartSearchTest` (ProviPvP) · `PanoramaRecolorTest`, `MisroutedPrefixTest`, `ClientCommandParsingTest` (dih-src)

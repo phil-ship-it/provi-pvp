@@ -3,6 +3,7 @@ package com.provipvp.core;
 import com.provipvp.core.TargetSelector.CandidateSource;
 import com.provipvp.exec.CombatExecutor;
 import com.provipvp.pearl.PearlSolver;
+import com.provipvp.exec.RotationQueue;
 import com.provipvp.terrain.ExplosionScanner;
 import meteordevelopment.orbit.IEventBus;
 import net.minecraft.core.BlockPos;
@@ -30,8 +31,12 @@ public final class CombatPipeline extends CombatCore {
 
     private final ExplosionScanner scanner;
     private final PearlSolver pearls;
+    private final RotationQueue rotations;
     private final CombatExecutor executor;
 
+    public RotationQueue rotations() {
+        return rotations;
+    }
     /**
      * @param bus             Meteors Event-Bus; {@code TargetChangeEvent} und
      *                        {@code ExplosionDetectedEvent} werden darueber veroeffentlicht
@@ -56,7 +61,8 @@ public final class CombatPipeline extends CombatCore {
 
         this.scanner = new ExplosionScanner();
         this.pearls = new PearlSolver(scanner);
-        this.executor = new CombatExecutor(inventory, rescueVariance, reservePriority, new Random());
+        this.rotations = new RotationQueue();
+        this.executor = new CombatExecutor(inventory, rotations, rescueVariance, reservePriority, new Random());
         setTerrain(scanner);
     }
 
@@ -91,7 +97,7 @@ public final class CombatPipeline extends CombatCore {
      * {@code terrainBypass} schaltet zwischen Ticks.
      */
     public void onTick(int tick) {
-        executor.onTick();
+        rotations.onTick();
         scanner.markTick(tick);
     }
 
