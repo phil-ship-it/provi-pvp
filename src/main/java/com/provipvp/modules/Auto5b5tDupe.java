@@ -68,6 +68,14 @@ public class Auto5b5tDupe extends Module {
     );
 
     private Phase phase = Phase.PREPARE;
+
+    /**
+     * Item, das beim Aktivieren in der Mainhand lag. Der Ablauf braucht vier Phasen und damit
+     * mehrere Ticks; in dieser Zeit kann ein PvP-Modul die Mainhand fuer Schild oder
+     * Feuerresistenz belegen. Ohne diese Merkung wuerde {@code drop()} das dann dort liegende
+     * Item werfen — bei aktivem GodmodePvP den Schild statt des Items.
+     */
+    private Item expectedItem;
     private RecipeDisplayEntry targetRecipe;
     private float oldPitch;
 
@@ -97,11 +105,13 @@ public class Auto5b5tDupe extends Module {
             return;
         }
 
-        if (mc.player.getInventory().getSelectedItem().isEmpty()) {
+        Item held = mc.player.getInventory().getSelectedItem().getItem();
+        if (held == net.minecraft.world.item.Items.AIR) {
             ChatUtils.error("Halte das Item in der Hand, das dupliziert werden soll.");
             toggle();
             return;
         }
+        expectedItem = held;
 
         phase = (mc.player.containerMenu instanceof CraftingMenu) ? Phase.PREPARE : Phase.OPEN_TABLE;
     }
@@ -126,6 +136,14 @@ public class Auto5b5tDupe extends Module {
                 phase = Phase.DROP;
             }
             case DROP -> {
+                Item inHand = mc.player.getInventory().getSelectedItem().getItem();
+                if (expectedItem == null || inHand != expectedItem) {
+                    // Zwischen den Phasen hat ein anderes Modul die Mainhand belegt. Abbrechen,
+                    // statt fremdes Eigentum zu werfen.
+                    ChatUtils.error("Mainhand wurde zwischenzeitlich gewechselt - Duplizieren abgebrochen.");
+                    toggle();
+                    return;
+                }
                 mc.player.drop(false);
                 ChatUtils.info("Item in der Hand fallen gelassen.");
                 phase = Phase.CRAFT;

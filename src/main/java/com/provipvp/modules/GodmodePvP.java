@@ -109,7 +109,7 @@ public class GodmodePvP extends Module {
     public final Setting<Integer> engageDistance = sgNavigation.add(new IntSetting.Builder()
         .name("engage-distance")
         .description("Erst ab dieser Distanz laeuft/perlt der Bot aktiv auf das Ziel zu. Darueber hinaus (bis follow-range) wird nur beobachtet/anvisiert, ohne loszurennen - verhindert, dass der Bot beim Aktivieren quer ueber die Karte auf jeden Spieler zusprintet.")
-        .defaultValue(16)
+        .defaultValue(40)
         .range(4, 64)
         .sliderRange(4, 40)
         .build()
@@ -226,6 +226,16 @@ public class GodmodePvP extends Module {
         .defaultValue(16.0)
         .range(2.0, 36.0)
         .sliderRange(2.0, 36.0)
+        .build()
+    );
+
+    public final Setting<Double> bedSelfDamageMultiplier = sgCombat.add(new DoubleSetting.Builder()
+        .name("bed-self-damage-multiplier")
+        .description("Multiplikator fuer den berechneten Eigenschaden bei Bett-Explosionen. Paper/Spigot-Server haben oft geaenderte Explosionsmechanik (2-3x hoeherer Self-Damage als Vanilla). Erhoehen, wenn Bed Aura kaum platziert, obwohl rechnerisch self-safe. 1.0 = Vanilla, 2.0-3.0 typisch fuer Paper/Spigot.")
+        .defaultValue(1.0)
+        .range(0.5, 5.0)
+        .sliderRange(0.5, 5.0)
+        .visible(useBeds::get)
         .build()
     );
 
@@ -398,6 +408,20 @@ public class GodmodePvP extends Module {
         .name("explosion-floor-snap")
         .description("Bei einer Explosion mit mehr als 0.45 vertikalem Delta wirft die Perle mit 88.5 Grad fast senkrecht vor die eigenen Fuesse, um schnell wieder Boden fuer Platzierungen zu erreichen.")
         .defaultValue(true)
+        .build()
+    );
+
+    /**
+     * +/- Spanne in Grad, um die der senkrechte Rettungswurf gestreut wird. Ohne diese Streuung
+     * geht der Wurf reproduzierbar bei exakt 80.0 Grad raus - ein Anti-Cheat, das nur auf den
+     * Wurfwinkel schaut, erkennt daran eine Maschine. Siehe {@link com.provipvp.exec.PitchVariance}.
+     */
+    public final Setting<Double> pearlPitchVariance = sgPearl.add(new DoubleSetting.Builder()
+        .name("pearl-pitch-variance")
+        .description("Zufallsstreuung des senkrechten Rettungswurfs in Grad. 0.75 ist ein guter Start; 0 schaltet die Streuung ab (dann exakt 80 Grad, nicht empfohlen).")
+        .defaultValue(0.75)
+        .min(0)
+        .max(10)
         .build()
     );
 
@@ -605,7 +629,6 @@ public class GodmodePvP extends Module {
         .name("max-self-damage")
         .description("Maximaler Eigenschaden pro Angriffsplatz.")
         .defaultValue(12.0)
-        .range(2.0, 14.0)
         .sliderRange(2.0, 12.0)
         .build()
     );
@@ -763,6 +786,39 @@ public class GodmodePvP extends Module {
     private final Map<UUID, Integer> pops = new HashMap<>();
     private final Map<UUID, Vec3> lastPositions = new HashMap<>();
     private final Map<UUID, Vec3> velocities = new HashMap<>();
+
+    /** Kleinster Positionssprung eines Ziels, der als echter Teleport gilt. Bewusst weit ueber dem,
+     *  was ein harter Crystal-Pop oder Vollnahkampf-Knockback in einem Tick erreicht (siehe Kommentar
+     *  am Geschwindigkeits-Cap: 3-5 Bloecke/Tick), und weit unter einer echten Perle (16-20 m). Der
+     *  alte Wert 6.0 lag direkt neben dem Pop-Bereich - jeder harte Treffer loeste dadurch den
+     *  Teleport-Zweig aus. */
+    private static final double TELEPORT_JUMP_BLOCKS = 10.0;
+
+    /** Mindestabstand zweier Pfad-Invalidierungen fuer dasselbe Ziel. Eine echte Perle teleportiert
+     *  einmal; serverseitige Positionskorrekturen ("moved wrongly") dagegen mehrere Male pro Sekunde.
+     *  Ohne diese Bremse hat der Bot im Arena-Test seinen eigenen Follow-Pfad abwaerts gerissen,
+     *  kam nie auf Angriffsdistanz und verbrauchte ueberhaupt keine Ressource. */
+    private static final int PATH_INVALIDATION_COOLDOWN_TICKS = 20;
+
+    private UUID lastPathInvalidationTarget;
+    private int lastPathInvalidationTick = Integer.MIN_VALUE;
+
+    /** Zuletzt in {@link #traceCombatState()} protokollierte Aktion - verhindert Spam bei Dauerkampf. */
+    private String lastTracedAction = "";
+
+    /** Ziel des aktuellen Ticks - nur fuer {@link #traceCombatState()}, weil handleTargeting() es lokal zurueckgibt. */
+    private LivingEntity tracedTarget;
+
+    /**
+     * Schreibt jeden Zustandswechsel der Kampf-KI ins Log. Standard aus, weil es pro Tick
+     * allokiert (String.format) — im Gefecht will man das nicht nebenbei bezahlen.
+     */
+    public final Setting<Boolean> debugTrace = sgQA.add(new BoolSetting.Builder()
+        .name("debug-trace")
+        .description("Schreibt den Kampf-Zustand (Aktion, Ziel, Distanz, engaged, Aura-Modus) ins Log — bei Wechsel und alle 100 Ticks. Zum Finden haengender Zweige, im normalen Betrieb aus.")
+        .defaultValue(false)
+        .build()
+    );
     private int tickCounter;
     private int auraMode = -1;
     /** Wie viele Einheiten jeder Ressource seit dem Einschalten tatsaechlich VERBRAUCHT wurden
@@ -857,6 +913,13 @@ public class GodmodePvP extends Module {
     private int combatSlotPreviousSlot = -1;
     private int combatSlotTargetSlot = -1;
 
+    /**
+     * Terrain-/Sichtbarkeitsschicht mit Raycast-Cache. Wird pro Tick ueber {@link #markScannerTick()}
+     * weitergezogen und bei jeder Blockaenderung invalidiert, sonst liefert {@code trajectoryClear}
+     * veraltete Treffer. Die Perlen-Szenarien ({@code com.provipvp.pearl.PearlSolver}) bauen darauf auf.
+     */
+    private final com.provipvp.terrain.ExplosionScanner scanner = new com.provipvp.terrain.ExplosionScanner();
+
     // Prioritaeten fuer rotateAndRun(): bei einer echten Kollision (mehrere Aktionen wollen im selben
     // Tick den primaeren Bewegungspaket-Rotationspfad, Index 0) gewinnt die hoehere Prioritaet - siehe
     // Rotations.rotate(), das die Warteschlange danach sortiert. PRIORITY_LOOK ist bewusst die
@@ -872,8 +935,16 @@ public class GodmodePvP extends Module {
     private int secondEnemyWarnCooldown;
     private boolean lowOnTotems;
     private boolean turtleModeActive;
+    /** true, sobald onActivate() vollstaendig durchlief; siehe onDeactivate(). */
+    private boolean lifecycleStarted;
     private int turtleSwitchReadyTick;
     private int turtleShotReadyTick = -999;
+    /** Ob in diesem Tick bereits eine "echte" Aktion (Priority > PRIORITY_LOOK) in die Rotations-Warteschlange
+     *  eingegeben wurde. Wird verwendet, um den free-look Tail-Flush (PRIORITY_LOOK) nur dann auszufuehren,
+     *  wenn KEINE echte Aktion (Crystal/Anchor/Bed/Pearl/Misc) die Rotation beansprucht hat. rotationsThisTick
+     *  allein reicht nicht, weil der Callback asynchron in Rotations.onSendMovementPacketsPost laeuft und
+     *  rotationsThisTick > 0 sein kann, bevor der erste Callback ueberhaupt ausgefuehrt wurde. */
+    private boolean realActionThisTick;
 
     // Surround / Anti-Bett / Anti-Piston / Bodensicherung / Piston-Aura
     private int surroundCooldown;
@@ -969,12 +1040,28 @@ public class GodmodePvP extends Module {
 
     // Eigener D-Tap-Executor (Knockback -> Obsidian in Flugbahn -> 2 Crystals im Immunitaets-Abstand)
     private BlockPos dtapSpot;
-    private int dtapStage; // 0 idle, 1 1.Crystal platzieren, 2 1.Crystal zuenden, 3 Immunitaet abwarten, 4 2.Crystal platzieren+zuenden
+    private int dtapStage; // 0 idle, 1 1.Crystal platzieren, 2 1.Crystal zuenden (warten auf Server-Bestätigung), 3 Immunitaet abwarten, 4 2.Crystal platzieren+zuenden
     private int dtapStageTick;
     private int dtapCooldown;
+    /** Entity-ID des ersten D-Tap Crystals, gesetzt sobald der Server das EntityAdded-Paket sendet.
+     *  Verhindert Race Condition: wir warten auf diese ID, bevor wir den Crystal angreifen. */
+    private int dtapFirstCrystalId = -1;
 
     public GodmodePvP() {
         super(com.provipvp.ProviPvPAddon.CATEGORY, "godmode-pvp", "ProviPvP v4: Kampf-KI mit eigenem Blitz-Anchor (1 Glowstone), Verfolgung ohne Limit. Befehl: .pvp");
+    }
+
+    /**
+     * Erzwingt die Profil-Exklusivitaet schon im Toggle-Pfad. Der Waechter in {@link #onActivate()} greift
+     * nicht, weil Meteor {@code onActivate()} <em>und</em> das Event-Bus-Subscribe ueberspringt, sobald
+     * {@code Utils.canUpdate()} false ist (Hauptmenue, Welt laedt). Dann waeren beide Profile aktiv
+     * und der {@code onTick}-Waechter koennte ebenfalls nicht laufen, weil er die Subscription
+     * braucht, die ebenfalls uebersprungen wurde.
+     */
+    @Override
+    public void toggle() {
+        if (!isActive()) com.provipvp.ProviPvPAddon.enforceExclusiveProfile(GodmodePvP.class);
+        super.toggle();
     }
 
     @Override
@@ -1025,6 +1112,7 @@ public class GodmodePvP extends Module {
         drinkingFireRes = false;
         fireResStartTick = -999;
         dtapStage = 0;
+        dtapFirstCrystalId = -1;
         dtapCooldown = 0;
         surroundCooldown = 0;
         hostileBlockCooldown = 0;
@@ -1165,17 +1253,34 @@ public class GodmodePvP extends Module {
         syncMobFilter();
         syncWallsRange();
 
-        MeteorClient.EVENT_BUS.subscribe(this);
+        // KEIN EVENT_BUS.subscribe(this): Meteor abonniert in Module.toggle() bereits selbst
+        // (autoSubscribe, Default true). Ein zweites Abonnieren setzt jeden @EventHandler zweimal in
+        // die Orbit-Liste — Orbit dedupliziert nicht — und doTick() laeuft dann zweimal pro
+        // TickEvent.Pre. Beim zweiten Durchlauf werden rotationsThisTick und realActionThisTick
+        // zurueckgesetzt und die Warteschlange des ersten verworfen.
+
+        lifecycleStarted = true;
 
         info("ProviPvP v4 aktiv. Rechtsklick auf das Modul im Meteor-Menue zum Keybind. Befehl: .pvp");
     }
 
+    /**
+     * Meteor kann {@code onDeactivate()} aufrufen, ohne dass {@code onActivate()} je lief: werden im
+     * Hauptmenue beide Profile eingeschaltet, ueberspringt {@code toggle()} das Aktivieren, und beim
+     * Weltbeitritt feuert die Aufraeumroutine an einem Lauf, den es nie gab. Der globale Abriss-Cleanup
+     * (Baritone-Follow abbrechen, Tasten loslassen) wuerde dann den Zustand eines ganz anderen
+     * Addons zerstoeren. Deshalb genau dieser Lauf nachgefuehrt.
+     */
     @Override
     public void onDeactivate() {
+        if (!lifecycleStarted) return;
+        lifecycleStarted = false;
+
         MeteorClient.EVENT_BUS.unsubscribe(this);
         releaseCombatSlot();
         releaseInstaCityTool();
         turtleModeActive = false;
+
 
         Modules m = Modules.get();
         if (crystalAuraOwned) safeDisable(m, CrystalAura.class);
@@ -1198,6 +1303,7 @@ public class GodmodePvP extends Module {
         restoreWallsRange();
         restoreEntityFilters();
         dtapStage = 0;
+        dtapFirstCrystalId = -1;
         cancelFollow();
 
         if (blocking) {
@@ -1254,6 +1360,7 @@ public class GodmodePvP extends Module {
 
         try {
             doTick();
+            traceCombatState();
         } catch (Exception e) {
             // Zeitbasiert statt fuer-immer-still: ein dauerhafter Fehler bleibt sichtbar, spammt aber nicht.
             if (tickCounter - lastErrorWarnTick > 100) {
@@ -1263,10 +1370,35 @@ public class GodmodePvP extends Module {
         }
     }
 
+    /**
+     * Schreibt den Kampf-Zustand in das Log, damit man sieht, an welchem Zweig der Bot haengenbleibt.
+     * Bisher war {@code currentAction} nur im ClickGui-Text sichtbar und damit im Server-/Bot-Log
+     * nirgends auffindbar — im Arena-Test blieb so die Ursage komplett unsichtbar.
+     *
+     * <p>Nur bei Wechsel und alle 100 Ticks, damit ein 5-Minuten-Lauf lesbar bleibt. Wirft bewusst
+     * nichts ab: Diagnose darf keinen Kampf verhindern.
+     */
+    private void traceCombatState() {
+        if (!debugTrace.get()) return;
+        boolean changed = !currentAction.equals(lastTracedAction);
+        if (!changed && tickCounter % 100 != 0) return;
+
+        LivingEntity foe = tracedTarget;
+        double dist = foe != null && mc.player != null ? Math.sqrt(mc.player.distanceToSqr(foe)) : -1.0;
+        MeteorClient.LOG.info("[ProviPvP] tick={} action={} target={} dist={} engaged={} follow={} auraMode={} dtap={} held={}",
+            tickCounter, currentAction, foe == null ? "-" : foe.getName().getString(),
+            String.format(java.util.Locale.ROOT, "%.1f", dist), engaged, followActive, auraMode, dtapStage,
+            mc.player == null || mc.player.getMainHandItem().isEmpty() ? "-"
+                : mc.player.getMainHandItem().getHoverName().getString());
+
+        lastTracedAction = currentAction;
+    }
+
     @EventHandler
     private void onPacketReceive(PacketEvent.Receive event) {
         if (event.packet instanceof ClientboundBlockUpdatePacket packet) {
             pendingBlockConfirmations.remove(packet.getPos());
+            scanner.onBlockUpdate(packet.getPos());
             if (instaCityBlock != null && packet.getPos().equals(instaCityBlock)) {
                 instaCityBreakConfirmed = packet.getBlockState().isAir();
             }
@@ -1277,6 +1409,12 @@ public class GodmodePvP extends Module {
     private void onEntityAdded(EntityAddedEvent event) {
         if (!(event.entity instanceof EndCrystal crystal) || mc.player == null) return;
         Vec3 position = crystal.position();
+
+        // D-Tap: erste Crystal-Entity-ID merken, damit runDtapTick weiss, wann der Server sie bestaetigt hat
+        if (dtapStage == 2 && dtapSpot != null && position.distanceTo(Vec3.atCenterOf(dtapSpot.above())) < 1.0) {
+            dtapFirstCrystalId = crystal.getId();
+        }
+
         double selfDamage = DamageUtils.crystalDamage(mc.player, position);
         if (selfDamage > maxSelfDamage.get() || !selfDamageAllowed(position, selfDamage)) {
             attackCrystal(crystal);
@@ -1301,14 +1439,14 @@ public class GodmodePvP extends Module {
         Input.setKeyState(mc.options.keySprint, false);
         Input.setKeyState(mc.options.keyJump, false);
         rotationsThisTick = 0;
+        realActionThisTick = false;
+        scanner.markTick(tickCounter);
         pendingFreeLook = false;
         sampleCombatMotion(self);
         reconcilePendingBlockConfirmations();
         if (handleExplosionEscape(self)) return;
-        // Verbrauchs-Delta jeden Tick messen (nicht nur im Kampf) - eine Explosion kann das Item auch
-        // dann aus dem Inventar nehmen, wenn dieser Tick spaeter fruehzeitig abbricht (Schild-Block,
-        // Rueckzug, kein Ziel).
-        trackResourceUsage();
+        // Verbrauchs-Delta nur alle 5 Ticks messen (12x/s statt 20x/s) - InvUtils.find() scanned gesamten Inventar
+        if (tickCounter % 5 == 0) trackResourceUsage();
         boolean turtleAction = handleTurtleDefense(self);
 
         boolean guiOpen = mc.gui.screen() != null;
@@ -1333,6 +1471,7 @@ public class GodmodePvP extends Module {
         }
 
         LivingEntity target = handleTargeting(self);
+        tracedTarget = target;
         if (target == null) return; // currentAction wurde bereits auf "beobachten" gesetzt
 
         double dist = Math.sqrt(self.distanceToSqr(target));
@@ -1353,21 +1492,14 @@ public class GodmodePvP extends Module {
 
         // Cosmetic Ziel-Verfolgung (free-look): laeuft am Tick-Ende, mit der niedrigsten Prioritaet -
         // ABER NUR, wenn diesen Tick noch KEINE echte Aktion (Perle, Nahkampf, Crystal/Anchor/Bett) die
-        // Rotation schon beansprucht hat (rotationsThisTick > 0). Vorher lief dieser Tail-Flush IMMER,
-        // unabhaengig davon - Rotations.rotate() haengt ihn dann als ZWEITE, separate
-        // ServerboundMovePlayerPacket.Rot-Nachricht direkt HINTER die der echten Aktion (siehe
-        // Rotations.onSendMovementPacketsPost: die Callback-Aktion feuert mit der ERSTEN/hoechst-
-        // priorisierten Rotation, aber danach schickt die for-Schleife trotzdem noch eine zweite
-        // Rotation fuer jeden weiteren Eintrag raus). Das war die Ursache der gemeldeten "Perlen landen
-        // immer am Kopf des Gegners statt in der berechneten Flugbahn": das kontinuierliche Ziel-Tracking
-        // (trackTarget, aktiv sobald dist > 3.6 - also in praktisch jedem Perlen-Gapclose-Fall) setzte
-        // pendingFreeLook auf die direkte Blickrichtung zum Ziel, und dieser Tail-Flush schickte sie als
-        // zusaetzliches Rotations-Paket direkt nach dem Perlwurf-Paket raus. Wenn diesen Tick schon eine
-        // echte Aktion lief, ist der Tail-Flush ohnehin ueberfluessig (naechster Tick berechnet
-        // pendingFreeLook frisch neu) - jetzt wird er dann komplett uebersprungen statt nur mit
-        // niedrigerer Prioritaet trotzdem ein zweites Rotations-Paket zu senden.
+        // Rotation schon beansprucht hat. rotationsThisTick wird in rotateAndRun() inkrementiert,
+        // ABER der Callback wird asynchron ausgefuehrt (in Rotations.onSendMovementPacketsPost).
+        // Deshalb reicht rotationsThisTick == 0 NICHT: eine echte Aktion koennte bereits gequeued sein
+        // (rotationsThisTick > 0), aber der Callback noch nicht gelaufen sein. Wir tracken deshalb
+        // explizit, ob eine "echte" Aktion (Priority > PRIORITY_LOOK) diesen Tick gerendert wurde.
+        // Siehe rotateAndRun() fuer die Erhoehung von realActionThisTick.
 
-        if (pendingFreeLook && rotationsThisTick == 0) {
+        if (pendingFreeLook && !realActionThisTick) {
             rotateAndRun(pendingFreeLookYaw, pendingFreeLookPitch, PRIORITY_LOOK, null);
         }
     }
@@ -1399,6 +1531,7 @@ public class GodmodePvP extends Module {
             stopOwnedCrystalAura();
             engaged = false;
             dtapStage = 0;
+            dtapFirstCrystalId = -1;
             cancelFollow();
             cancelInstaCity();
             resetFireWalkState();
@@ -1779,7 +1912,7 @@ public class GodmodePvP extends Module {
         if (knockbackPearl.get() && (launchedByHit || fallingDanger)
             && tickCounter - lastPearlTick > delay(15)
             && InvHelper.has(Items.ENDER_PEARL)
-            && throwPearlAtCurrentYaw(80.0)) {
+            && throwPearlAtCurrentYaw(rescuePitch())) {
             currentAction = launchedByHit ? "pearl-knockback" : "pearl-fallschutz";
             return true;
         }
@@ -1824,6 +1957,7 @@ public class GodmodePvP extends Module {
             cancelFollow();
             resetPositioningState();
             dtapStage = 0;
+            dtapFirstCrystalId = -1;
             anchorCandidates.clear();
             anchorCandidateIndex = 0;
             lastAuraSwitch = -999;
@@ -2126,7 +2260,7 @@ public class GodmodePvP extends Module {
         FindItemResult shield = InvHelper.find(Items.SHIELD);
         if (!shield.found()) return;
 
-        if (!shield.isHotbar() || !reserveCombatSlot(shield.slot())) return;
+        if (!InvHelper.isHotbarOrOffhand(shield) || !reserveCombatSlot(shield.slot())) return;
         blockingSwapBack = combatSlotPreviousSlot >= 0;
         mc.gameMode.useItem(mc.player, InteractionHand.MAIN_HAND);
         blocking = true;
@@ -3012,11 +3146,13 @@ public class GodmodePvP extends Module {
      *  harter Selbstmord-Schutz. Bett-PvP ist bewusst ein Trade - der Bot nimmt Schaden in Kauf und
      *  faengt ihn mit Totem/Heiltrank ab - aber eine Zuendung, die die eigenen AKTUELLEN HP (inkl.
      *  Absorption) toeten wuerde, ist nie ein guter Trade und wird unabhaengig vom eingestellten
-     *  Deckel verworfen (entspricht Meteors BedAura 'anti-suicide'). */
+     *  Deckel verworfen (entspricht Meteors BedAura 'anti-suicide').
+     *  Wendet bedSelfDamageMultiplier an (Paper/Spigot haben oft 2-3x hoeheren Self-Damage). */
     private boolean bedSelfDamageAcceptable(double selfDmg) {
-        if (selfDmg > bedMaxSelfDamage.get()) return false;
+        double adjustedDmg = selfDmg * bedSelfDamageMultiplier.get();
+        if (adjustedDmg > bedMaxSelfDamage.get()) return false;
         double effectiveHp = mc.player.getHealth() + mc.player.getAbsorptionAmount();
-        return selfDmg < effectiveHp - 1.0;
+        return adjustedDmg < effectiveHp - 1.0;
     }
 
     private static boolean isBed(ItemStack stack) {
@@ -3043,10 +3179,13 @@ public class GodmodePvP extends Module {
      *  clientSide=true ebenfalls kurzzeitig die echte Rotation gesetzt - exakt fuer die Dauer seines
      *  eigenen Callbacks (siehe Rotations.onSendMovementPacketsPost), danach zurueckgesetzt. Gibt
      *  jetzt immer true zurueck - bestehende Aufrufer, die frueher auf false pruefen mussten,
-     *  funktionieren unveraendert weiter (der Erfolgsfall greift jetzt einfach immer). */
+     *  funktionieren unveraendert weiter (der Erfolgsfall greift jetzt einfach immer).
+     *  @param priority Priorität der Aktion. Nur Aktionen mit Priority > PRIORITY_LOOK zählen als
+     *  "echte" Aktionen für realActionThisTick (verhindert free-look Tail-Flush). */
     private boolean rotateAndRun(double yaw, double pitch, int priority, Runnable callback) {
         Rotations.rotate(yaw, pitch, priority, rotationsThisTick > 0, callback);
         rotationsThisTick++;
+        if (priority > PRIORITY_LOOK) realActionThisTick = true;
         return true;
     }
 
@@ -3325,27 +3464,30 @@ public class GodmodePvP extends Module {
     private void runDtapTick(LivingEntity target) {
         switch (dtapStage) {
             case 1 -> { // Obsidian steht (oder gerade platziert) - 1. Crystal setzen
-                if (tickCounter - dtapStageTick > 15) { dtapStage = 0; return; } // Fenster verpasst
-                if (!mc.level.getBlockState(dtapSpot.above()).isAir()) { dtapStage = 0; return; } // besetzt
-                if (!crystalPlacementSafe(mc.player, dtapSpot.above(), 0.6)) { dtapStage = 0; return; }
+                if (tickCounter - dtapStageTick > 15) { dtapStage = 0; dtapFirstCrystalId = -1; return; } // Fenster verpasst
+                if (!mc.level.getBlockState(dtapSpot.above()).isAir()) { dtapStage = 0; dtapFirstCrystalId = -1; return; } // besetzt
+                if (!crystalPlacementSafe(mc.player, dtapSpot.above(), 0.6)) { dtapStage = 0; dtapFirstCrystalId = -1; return; }
 
                 FindItemResult crystal = InvHelper.find(Items.END_CRYSTAL);
-                if (!crystal.found()) { dtapStage = 0; return; }
+                if (!crystal.found()) { dtapStage = 0; dtapFirstCrystalId = -1; return; }
 
                 if (placeCrystal(dtapSpot, crystal)) {
                     dtapStage = 2;
                     dtapStageTick = tickCounter;
+                    dtapFirstCrystalId = -1; // wird in onEntityAdded gesetzt
                 } // sonst Rotations-Slot belegt - naechster Tick erneut versuchen, Fenster laeuft noch
             }
-            case 2 -> { // 1. Crystal steht - sofort zuenden
-                EndCrystal ec = findCrystalAbove(dtapSpot);
-                if (ec == null) {
-                    if (tickCounter - dtapStageTick > 4) dtapStage = 0; // nie angekommen
+            case 2 -> { // 1. Crystal platziert - auf Server-Bestaetigung (EntityAdded) warten, dann zuenden
+                if (dtapFirstCrystalId == -1) {
+                    if (tickCounter - dtapStageTick > 20) { dtapStage = 0; dtapCooldown = delay(30); } // Timeout: Entity nie angekommen
                     return;
                 }
+                var entity = mc.level.getEntity(dtapFirstCrystalId);
+                if (!(entity instanceof EndCrystal ec)) { dtapStage = 0; dtapFirstCrystalId = -1; dtapCooldown = delay(30); return; } // Entity schon wieder weg
                 if (attackCrystal(ec)) {
                     dtapStage = 3;
                     dtapStageTick = tickCounter;
+                    dtapFirstCrystalId = -1;
                 }
             }
             case 3 -> { // Trefferimmunitaet abwarten (~10 Ticks = 0.5s), dann 2. Crystal
@@ -3354,12 +3496,13 @@ public class GodmodePvP extends Module {
                     || !mc.level.getBlockState(dtapSpot.above()).isAir()
                     || !crystalPlacementSafe(mc.player, dtapSpot.above(), 0.6)) {
                     dtapStage = 0;
+                    dtapFirstCrystalId = -1;
                     dtapCooldown = delay(30);
                     return;
                 }
 
                 FindItemResult crystal = InvHelper.find(Items.END_CRYSTAL);
-                if (!crystal.found()) { dtapStage = 0; return; }
+                if (!crystal.found()) { dtapStage = 0; dtapFirstCrystalId = -1; return; }
 
                 if (placeCrystal(dtapSpot, crystal)) {
                     dtapStage = 4;
@@ -3369,15 +3512,16 @@ public class GodmodePvP extends Module {
             case 4 -> { // 2. Crystal steht - zuenden, fertig
                 EndCrystal ec = findCrystalAbove(dtapSpot);
                 if (ec == null) {
-                    if (tickCounter - dtapStageTick > 4) { dtapStage = 0; dtapCooldown = delay(30); }
+                    if (tickCounter - dtapStageTick > 4) { dtapStage = 0; dtapFirstCrystalId = -1; dtapCooldown = delay(30); }
                     return;
                 }
                 if (attackCrystal(ec)) {
                     dtapStage = 0;
+                    dtapFirstCrystalId = -1;
                     dtapCooldown = delay(40);
                 }
             }
-            default -> dtapStage = 0;
+            default -> { dtapStage = 0; dtapFirstCrystalId = -1; }
         }
     }
 
@@ -4475,7 +4619,13 @@ public class GodmodePvP extends Module {
 
     /** UUID-Positionswechsel invalidieren nicht nur die Vorhersage, sondern auch jeden Baritone-Pfad.
      *  Sonst bleibt ein CustomGoal auf der alten Zelle aktiv, waehrend pursue-stationary-targets den
-     *  FollowProcess bereits auf die neue teleportierte Position gesetzt hat. */
+     *  FollowProcess bereits auf die neue teleportierte Position gesetzt hat.
+     *
+     *  <p><b>Bewusst ohne {@code reloadAllFromDisk()}:</b> Baritones Welt-Cache enthaelt Bloecke, keine
+     *  Entities. Dass ein verfolgtes Ziel springt, aendert daran nichts - der Cache veraltet nur, wenn
+     *  sich Bloecke aendern, und darauf reagiert das Modul bereits ueber
+     *  {@code ClientboundBlockUpdatePacket}. Das Neuladen wurde im Arena-Test mehrfach pro Sekunde
+     *  ausgeloest und hat den Client bei jedem Durchlauf die Welt neu von der Platte gelesen. */
     private void invalidateTargetPath() {
         followActive = false;
         followedId = null;
@@ -4494,8 +4644,6 @@ public class GodmodePvP extends Module {
         baritone.getPathingBehavior().cancelEverything();
         var customGoal = baritone.getCustomGoalProcess();
         if (customGoal.isActive()) customGoal.onLostControl();
-        var worldData = baritone.getWorldProvider().getCurrentWorld();
-        if (worldData != null) worldData.getCachedWorld().reloadAllFromDisk();
     }
 
     private void updateTracking(LivingEntity target) {
@@ -4505,11 +4653,20 @@ public class GodmodePvP extends Module {
 
         if (prev != null) {
             double jump = cur.distanceTo(prev);
-            if (jump > 6.0) {
+            if (jump > TELEPORT_JUMP_BLOCKS) {
                 velocities.put(id, Vec3.ZERO);
-                invalidateTargetPath();
                 popBurstUntil = Math.max(popBurstUntil, tickCounter + 6);
-                ChatUtils.info("Pearl-Teleport erkannt (%.0f m) - verfolge neue Position.", jump);
+
+                // Nur der erste Sprung in kurzer Folge reisst den Pfad ab. Die Vorhersage wird oben in
+                // jedem Fall zurueckgesetzt - das ist der eigentliche Zweck dieses Zweigs.
+                boolean suppressed = id.equals(lastPathInvalidationTarget)
+                    && tickCounter - lastPathInvalidationTick < PATH_INVALIDATION_COOLDOWN_TICKS;
+                if (!suppressed) {
+                    lastPathInvalidationTarget = id;
+                    lastPathInvalidationTick = tickCounter;
+                    invalidateTargetPath();
+                    ChatUtils.info("Pearl-Teleport erkannt (%.0f m) - verfolge neue Position.", jump);
+                }
                 // FollowProcess verfolgt automatisch zur neuen Position
             } else {
                 // Cap knapp unter der Teleport-Schwelle statt bei 2.0: ein hartes Crystal-/Anchor-Pop
@@ -4885,6 +5042,18 @@ public class GodmodePvP extends Module {
      *  nach unten, negative nach oben. */
     private boolean throwPearlAtCurrentYaw(double pitch) {
         return throwPearlAt(mc.player.getYRot(), pitch);
+    }
+
+    /**
+     * Ziel-Pitch des Rettungswurfs, um {@link com.provipvp.exec.PitchVariance} gestreut.
+     *
+     * <p>Ohne diese Streuung ging jeder Rettungswurf reproduzierbar bei exakt 80 Grad raus. Das ist
+     * das perfekte Anti-Cheat-Fingerzeig: Menschen treffen eine Senkrechte nicht dreimal hintereinander
+     * auf zwei Nachkommastellen. {@code pearl-pitch-variance} auf 0 stellt das alte, exakte Verhalten
+     * wieder her.
+     */
+    private double rescuePitch() {
+        return com.provipvp.exec.PitchVariance.apply(80.0, pearlPitchVariance.get(), rng);
     }
 
     private boolean throwPearlAt(double yaw, double pitch) {
@@ -5391,7 +5560,10 @@ public class GodmodePvP extends Module {
                 supportSyncFailed = true;
             }
         } catch (Throwable t) {
-            savedSupport = null;
+            // savedSupport bewusst NICHT nullen: es ist der zuletzt GELESENE Wert von CrystalAura und
+            // damit der einzige Weg zurueck zum Original. Wird hier verwischt, sichert der naechste
+            // erfolgreiche Aufruf den selbst geschriebenen Wert als "Original" - der Nutzerwert
+            // waere dann endgueltig verloren. Ist noch nie gesichert worden, ist es ohnehin null.
             // Nicht nur einmalig chatten: solange die Sync fehlschlaegt, kann sich CrystalAura im
             // Crystal-Modus nicht selbst mit Obsidian unterbauen - freie-Luft-Zellen (siehe
             // validExplosionSpot) sind dann faktisch nie bespielbar. supportSyncFailed bleibt aktiv
@@ -5416,7 +5588,7 @@ public class GodmodePvP extends Module {
                 if (s.get() < minSupportDelay.get()) s.set(minSupportDelay.get());
             }
         } catch (Throwable t) {
-            savedSupportDelay = -1;
+            // dito: siehe oben, savedSupportDelay nicht verwischen.
             error("CrystalAura-Support-Delay konnte nicht gesetzt werden (Meteor-Version geaendert?) - Crystal-Platzierung nach Obsidian-Unterbau kann dadurch auf langsameren Servern manchmal fehlschlagen.");
         }
     }

@@ -1,0 +1,16 @@
+{
+  "module": "godmode-pvp",
+  "description": "Arena-Profil fuer Testkaempfe: rueckt ab follow-range an (greift aus jeder Distanz an statt nur zu beobachten), nimmt jeden Trade und legt KillAura zusaetzlich auf den Nahkampf. Entstanden aus der Bot-Messung am 2026-09-29.",
+  "settings": {
+    "4 · Navigation": {
+      "follow-range": "64",
+      "engage-distance": "40"
+    },
+    "2 · Schutz & Recovery": {
+      "max-self-damage": "14.0"
+    },
+    "9 · QA & Erweitert": {
+      "kill-aura": "true"
+    }
+  }
+}

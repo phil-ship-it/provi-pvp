@@ -1,0 +1,101 @@
+{
+  "name": "2b2t",
+  "description": "Optimized for 2b2t anarchy server - maximum aggression, crystal/anchor spam",
+  "module": "godmode-pvp",
+  "settings": {
+    "general": {
+      "follow": true,
+      "follow-range": 40,
+      "engage-distance": 16,
+      "pursue-stationary-targets": true,
+      "attack-range": 3.6,
+      "smart-targeting": true,
+      "backup-range": 10.0,
+      "pop-threshold": 8.0,
+      "prediction-ticks": 5,
+      "ignore-fire": true
+    },
+    "combat": {
+      "smart-auras": true,
+      "anchor-mode": 1,
+      "use-anchors": true,
+      "use-beds": false,
+      "bed-min-damage": 3.0,
+      "bed-max-self-damage": 16.0,
+      "balance-resources": 1.5,
+      "aggressive": true,
+      "piston-aura": true,
+      "through-walls": true,
+      "pre-hit": false,
+      "melee-fallback": true,
+      "prefer-axe-melee": true,
+      "shield-breaker": true,
+      "melee-strafe": true,
+      "sprint-reset": true,
+      "track-target": true,
+      "crit-jump": true,
+      "d-tap": true,
+      "use-mace": true,
+      "elytra-combat": true,
+      "zero-delay": true,
+      "ghost-block-mitigation": true,
+      "min-support-delay": 1,
+      "instant-mode": false,
+      "kill-aura": false
+    },
+    "defense": {
+      "fast-totem": true,
+      "turtle-master-defense": true,
+      "turtle-master-health": 0.4,
+      "turtle-master-cooldown": 10,
+      "auto-mend": true,
+      "auto-eat": true,
+      "no-fall": true,
+      "auto-shield": true,
+      "anti-rubberband": true,
+      "respect-friends": true,
+      "hole-awareness": true,
+      "height-advantage": true,
+      "avoid-lava": true,
+      "auto-fire-res": true,
+      "build-cover": true,
+      "surround": true,
+      "peek-tactic": true,
+      "watchdog-ticks": 30,
+      "retreat-threshold": true,
+      "retreat-on-losing-trade": true,
+      "multi-target-alarm": true,
+      "trap-mode": 1,
+      "anti-escape-trap": true,
+      "max-self-damage": 12.0
+    },
+    "inventory": {
+      "inv-manager": true,
+      "min-crystals": 32,
+      "min-anchors": 4,
+      "min-glowstone": 8,
+      "min-pearls": 8,
+      "min-obsidian": 16,
+      "min-web": 4,
+      "min-beds": 4,
+      "min-heal-potions": 8
+    },
+    "pearls": {
+      "escape-pearl": true,
+      "knockback-pearl": true,
+      "anti-anchor-disengage": true,
+      "explosion-floor-snap": true,
+      "pearl-gapclose": true,
+      "pearl-min-dist": 4.0
+    },
+    "healing": {
+      "heal-potions": true,
+      "heal-min-damage": 3.0,
+      "heal-cooldown": 12
+    },
+    "mobs": {
+      "attack-mobs": false,
+      "mob-range": 10
+    }
+  }
+}

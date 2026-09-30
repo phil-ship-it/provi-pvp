@@ -202,6 +202,16 @@ public class HumanPvP extends Module {
         .build()
     );
 
+    public final Setting<Double> bedSelfDamageMultiplier = sgCombat.add(new DoubleSetting.Builder()
+        .name("bed-self-damage-multiplier")
+        .description("Multiplikator fuer den berechneten Eigenschaden bei Bett-Explosionen. Paper/Spigot-Server haben oft geaenderte Explosionsmechanik (2-3x hoeherer Self-Damage als Vanilla). Erhoehen, wenn Bed Aura kaum platziert, obwohl rechnerisch self-safe. 1.0 = Vanilla, 2.0-3.0 typisch fuer Paper/Spigot.")
+        .defaultValue(1.0)
+        .range(0.5, 5.0)
+        .sliderRange(0.5, 5.0)
+        .visible(useBeds::get)
+        .build()
+    );
+
     public final Setting<Integer> minSupportDelay = sgQA.add(new IntSetting.Builder()
         .name("min-support-delay")
         .description("Mindest-Tickabstand zwischen Obsidian-Unterbau und dem folgenden Crystal-Platzieren (CrystalAuras 'support-delay'). Beide Aktionen nutzen Minecrafts eigenes sequenznummer-basiertes Block-Vorhersage-System (seit 1.19) - schickt man beide zu dicht hintereinander raus, bevor die erste Sequenz vom Server bestaetigt ist, kann die Vorhersage durcheinanderkommen. Auf Servern mit spuerbarer Latenz oder Versions-Uebersetzung (z.B. ViaVersion) braucht es mehr Puffer als den Meteor-Standard.")
@@ -500,6 +510,9 @@ public class HumanPvP extends Module {
     private static final int PRIORITY_PEARL = 70;
     private static final int PRIORITY_MISC = 60;
     private static final int PRIORITY_LOOK = 0;
+    /** Ob in diesem Tick bereits eine "echte" Aktion (Priority > PRIORITY_LOOK) in die Rotations-Warteschlange
+     *  eingegeben wurde. Siehe GodmodePvP.realActionThisTick fuer die volle Begruendung. */
+    private boolean realActionThisTick;
     private boolean pendingFreeLook;
     private double pendingFreeLookYaw, pendingFreeLookPitch;
     private int sprintResetCooldown;
@@ -577,10 +590,24 @@ public class HumanPvP extends Module {
 
     private int lastTrapTick = -999;
     private boolean drinkingFireRes;
+    /** true, sobald onActivate() vollstaendig durchlief; siehe onDeactivate(). */
+    private boolean lifecycleStarted;
     private int fireResStartTick = -999;
 
     public HumanPvP() {
         super(com.provipvp.ProviPvPAddon.CATEGORY, "human-pvp", "ProviPvP V2: menschlich wirkender Kampf-Bot (Reaktionszeit, sichtbare Rotation, Klick-Jitter). Kein Unerkennbarkeits-Versprechen. Befehl: .hpvp");
+    }
+
+    /**
+     * Erzwingt die Profil-Exklusivitaet schon im Toggle-Pfad. Meteor ueberspringt bei
+     * {@code Utils.canUpdate()==false} (Hauptmenue, Welt laedt) sowohl das Event-Bus-Subscribe als
+     * auch {@link #onActivate()} — dann greift auch der {@code onTick}-Waechter nicht, weil er genau
+     * die uebersprungene Subscription braucht. Der Toggle-Pfad laeuft immer.
+     */
+    @Override
+    public void toggle() {
+        if (!isActive()) com.provipvp.ProviPvPAddon.enforceExclusiveProfile(HumanPvP.class);
+        super.toggle();
     }
 
     @Override
@@ -676,13 +703,22 @@ public class HumanPvP extends Module {
         if (autoEatOn.get()) autoEatEnabledByHuman = safeEnable(m, AutoEat.class);
         if (noFallOn.get()) noFallEnabledByHuman = safeEnable(m, NoFall.class);
 
-        MeteorClient.EVENT_BUS.subscribe(this);
+        // KEIN EVENT_BUS.subscribe(this): Meteor abonniert in Module.toggle() bereits selbst.
+        // Ein zweites Abonnieren laesst jeden @EventHandler zweimal pro Event laufen.
 
         info("ProviPvP V2 (human) aktiv. Rechtsklick auf das Modul im Meteor-Menue zum Keybind. Befehl: .hpvp");
+        lifecycleStarted = true;
     }
 
+    /**
+     * Meteor kann {@code onDeactivate()} ohne vorheriges {@code onActivate()} aufrufen (wurden beide
+     * Profile im Hauptmenue eingeschaltet, ueberspringt toggle() das Aktivieren). Der Aufraeumlauf
+     * wuerde dann fremde Zustaende zerstoeren — siehe GodmodePvP fuer die ausfuehrliche Begruendung.
+     */
     @Override
     public void onDeactivate() {
+        if (!lifecycleStarted) return;
+        lifecycleStarted = false;
         MeteorClient.EVENT_BUS.unsubscribe(this);
 
         Modules m = Modules.get();
@@ -709,6 +745,13 @@ public class HumanPvP extends Module {
         }
         warnedOutOfMisc.clear();
         Input.setKeyState(mc.options.keySprint, false);
+        // Auch die Bewegungstasten: die Retreat-Logik (:1928-1930) setzt keyLeft/keyRight/keyDown
+        // direkt. Ohne diesen Reset bleiben sie nach dem Deaktivieren clientseitig gedrueckt und der
+        // Spieler laeuft dauerhaft seitwaerts bzw. rueckwaerts weiter.
+        Input.setKeyState(mc.options.keyLeft, false);
+        Input.setKeyState(mc.options.keyRight, false);
+        Input.setKeyState(mc.options.keyDown, false);
+        Input.setKeyState(mc.options.keyUp, false);
         mc.player.setSprinting(false);
 
         info("ProviPvP V2 aus.");
@@ -743,6 +786,7 @@ public class HumanPvP extends Module {
         Player self = mc.player;
         currentAction = "-";
         rotationsThisTick = 0;
+        realActionThisTick = false;
         pendingFreeLook = false;
         boolean guiOpen = mc.gui.screen() != null;
         // Nur eine echte Fremd-Container-GUI hat ein anderes containerMenu als das normale Inventar -
@@ -967,11 +1011,9 @@ public class HumanPvP extends Module {
 
         // Cosmetic Ziel-Verfolgung: laeuft am Tick-Ende mit der niedrigsten Prioritaet - ABER NUR, wenn
         // diesen Tick noch keine echte Aktion (Perle, Nahkampf, Anchor/Bett) die Rotation schon
-        // beansprucht hat. Siehe GodmodePvP.doTick() fuer die volle Begruendung: Rotations.rotate()
-        // haengt einen unbedingten Tail-Flush sonst als ZWEITES, separates Rotations-Paket direkt hinter
-        // das der echten Aktion (z.B. Perlwurf) - Ursache der gemeldeten "Perlen landen immer am Kopf
-        // des Gegners statt in der berechneten Flugbahn".
-        if (pendingFreeLook && rotationsThisTick == 0) {
+        // beansprucht hat. rotationsThisTick allein reicht nicht, weil der Callback asynchron laeuft.
+        // Wir nutzen realActionThisTick (siehe rotateAndRun), das nur bei Priority > PRIORITY_LOOK gesetzt wird.
+        if (pendingFreeLook && !realActionThisTick) {
             rotateAndRun(pendingFreeLookYaw, pendingFreeLookPitch, PRIORITY_LOOK, null);
         }
     }
@@ -1654,11 +1696,13 @@ public class HumanPvP extends Module {
         return null;
     }
 
-    /** Eigenschaden-Freigabe fuer Bett-Explosionen inkl. Selbstmord-Schutz - siehe GodmodePvP. */
+    /** Eigenschaden-Freigabe fuer Bett-Explosionen inkl. Selbstmord-Schutz - siehe GodmodePvP.
+     *  Wendet bedSelfDamageMultiplier an (Paper/Spigot haben oft 2-3x hoeheren Self-Damage). */
     private boolean bedSelfDamageAcceptable(double selfDmg) {
-        if (selfDmg > bedMaxSelfDamage.get()) return false;
+        double adjustedDmg = selfDmg * bedSelfDamageMultiplier.get();
+        if (adjustedDmg > bedMaxSelfDamage.get()) return false;
         double effectiveHp = mc.player.getHealth() + mc.player.getAbsorptionAmount();
-        return selfDmg < effectiveHp - 1.0;
+        return adjustedDmg < effectiveHp - 1.0;
     }
 
     private static boolean isBed(ItemStack stack) {
@@ -1666,10 +1710,13 @@ public class HumanPvP extends Module {
     }
 
     /** Reiht eine Rotation+Aktion ein - siehe GodmodePvP fuer die volle Erklaerung (Mehrfachaktionen
-     *  pro Tick statt des frueheren starren 1-Aktion-Mutex). Gibt immer true zurueck. */
+     *  pro Tick statt des frueheren starren 1-Aktion-Mutex). Gibt immer true zurueck.
+     *  @param priority Priorität der Aktion. Nur Aktionen mit Priority > PRIORITY_LOOK zählen als
+     *  "echte" Aktionen für realActionThisTick (verhindert free-look Tail-Flush). */
     private boolean rotateAndRun(double yaw, double pitch, int priority, Runnable callback) {
         Rotations.rotate(yaw, pitch, priority, rotationsThisTick > 0, callback);
         rotationsThisTick++;
+        if (priority > PRIORITY_LOOK) realActionThisTick = true;
         return true;
     }
 
@@ -2300,7 +2347,9 @@ public class HumanPvP extends Module {
                 supportSyncFailed = true;
             }
         } catch (Throwable t) {
-            savedSupport = null;
+            // savedSupport bewusst NICHT nullen: es ist der zuletzt GELESENE Wert von CrystalAura und
+            // der einzige Weg zurueck zum Original. Verwischt, sichert der naechste erfolgreiche
+            // Aufruf den selbst geschriebenen Wert als "Original" — der Nutzerwert waere dann weg.
             supportSyncFailed = true;
             error("CrystalAura-Support-Mode konnte nicht gesetzt werden (Meteor-Version geaendert?) - Obsidian-Unterbau bei freier Luft laeuft evtl. nicht automatisch. Weiche auf Anchor-Vorzug aus, solange das so bleibt.");
         }

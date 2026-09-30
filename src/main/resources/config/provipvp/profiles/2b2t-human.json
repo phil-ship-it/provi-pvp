@@ -1,0 +1,73 @@
+{
+  "name": "2b2t-human",
+  "description": "Human-like PvP for 2b2t - visible rotations, reaction delays, click jitter",
+  "module": "human-pvp",
+  "settings": {
+    "general": {
+      "follow": true,
+      "follow-range": 20,
+      "engage-distance": 14,
+      "attack-range": 3.4,
+      "smart-targeting": true,
+      "backup-range": 10.0
+    },
+    "combat": {
+      "use-anchors": true,
+      "anchor-mode": 1,
+      "use-beds": false,
+      "bed-min-damage": 4.0,
+      "bed-max-self-damage": 16.0,
+      "bed-self-damage-multiplier": 2.5,
+      "min-support-delay": 4,
+      "prefer-axe-melee": true,
+      "sprint-reset": true,
+      "knockback-pearl": true,
+      "shield-breaker": true,
+      "melee-strafe": true,
+      "max-self-damage": 6.0
+    },
+    "defense": {
+      "trap-mode": 1,
+      "escape-pearl": true,
+      "anti-rubberband": true,
+      "auto-mend": true,
+      "auto-eat": true,
+      "no-fall": true,
+      "auto-shield": true,
+      "fast-totem": true,
+      "avoid-lava": true,
+      "auto-fire-res": true
+    },
+    "inventory": {
+      "inv-manager": true,
+      "min-crystals": 24,
+      "min-anchors": 4,
+      "min-glowstone": 8,
+      "min-pearls": 8,
+      "min-obsidian": 16,
+      "min-web": 4,
+      "min-beds": 4,
+      "min-heal-potions": 8
+    },
+    "pearls": {
+      "pearl-gapclose": true,
+      "pearl-min-dist": 10.0
+    },
+    "healing": {
+      "heal-potions": true,
+      "heal-min-damage": 3.0,
+      "heal-cooldown": 12
+    },
+    "human": {
+      "reaction-min": 3,
+      "reaction-max": 9,
+      "attack-chance": 0.9,
+      "aim-tolerance": 4.0,
+      "max-turn-speed": 18.0
+    },
+    "qa": {
+      "free-look": false,
+      "min-support-delay": 4
+    }
+  }
+}
