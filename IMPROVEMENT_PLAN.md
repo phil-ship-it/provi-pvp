@@ -154,6 +154,31 @@ Der Code war nicht kompilierbar und ist repariert:
 
 ---
 
+## 🔧 Werkzeuge: Offline-Auswertung eines Laufs
+
+Der Bot erzeugt mit `debug-trace` (Standard **aus**, zum Aufzeichnen einschalten) bereits alle
+Entscheidungen, und das Test-Datapack `infinite_kit` zaehlt den Ressourcenverbrauch. Damit ist ein
+Feedback-Loop vorhanden, aus dem sich Settings-Aenderungen ableiten lassen — ohne die KI in den
+Gefechts-Tick zu haengen, der nur 50 ms hat.
+
+- `tools/collect_run.py` — startet beide TestBots, sichert die Usage-Zaehler vor und nach einem
+  Kampffenster, legt `<bot>.log` und `_delta.json` ab
+- `tools/analyse.py` — wertet Trace + Usage aus und macht **begruendete Settings-Vorschlaege**.
+  Aendert selbst nichts; wer uebernimmt, entscheidet.
+
+Aufruf: `python tools/collect_run.py 360`, danach
+`python tools/analyse.py ../analysedaten --out bericht.md`
+
+**Absichtliche Grenze:** kein Modellaufruf pro Tick. Eine Frontier-Antwort braucht 300 ms-3 s,
+ein Tick hat 50 ms — fuer Dodge und Anti-Fall-Perle ist das keine Optimierung, sondern ein
+Ausschluss. An den Stellen, an denen eine KI helfen soll, ist die analytische Loesung
+(Bisektion ueber die Flugzeit, Raycast-Cache) schneller und exakter. Die KI gehoert zwischen die
+Sessions, nicht in den Kampf.
+
+**Noch nicht erfasst:** Selbstschaden und Schaden pro Runde. Dafuer muesste das Datapack
+Schadensereignisse zaehlen; ohne diese Groesse sind Vorschlaege zu `max-self-damage` nicht
+belastbar, also auch nicht enthalten.
+
 ## 📝 Notes
 
 - Alle Änderungen müssen rückwärtskompatibel mit bestehenden Settings bleiben
