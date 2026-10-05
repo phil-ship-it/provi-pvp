@@ -2,6 +2,9 @@ package com.provipvp;
 
 import com.provipvp.config.ProfileManager;
 import com.provipvp.modules.Auto5b5tDupe;
+import com.provipvp.broker.PvpBrokerSystem;
+import com.provipvp.hud.ProviDebugOverlay;
+import com.provipvp.hud.PvpSessionStats;
 import com.provipvp.modules.AutoArmor;
 import com.provipvp.modules.BrandSpoof;
 import com.provipvp.modules.ExploitGuard;
@@ -11,6 +14,9 @@ import com.provipvp.modules.MacroTriggerModule;
 import com.provipvp.modules.PacketFilter;
 import com.provipvp.modules.PacketLogger;
 import com.provipvp.modules.ProviClickGui;
+import com.provipvp.modules.SlowFallingAura;
+import com.provipvp.modules.SpearModule;
+import com.provipvp.modules.WindChargeModule;
 import com.provipvp.modules.TrainingDummy;
 import com.provipvp.commands.HumanPvpCommand;
 import com.provipvp.commands.NbtCommand;
@@ -18,6 +24,8 @@ import com.provipvp.commands.ProfileCommand;
 import com.provipvp.commands.ProxyCommand;
 import com.provipvp.commands.PvpCommand;
 import meteordevelopment.meteorclient.addons.MeteorAddon;
+import meteordevelopment.meteorclient.systems.Systems;
+import meteordevelopment.meteorclient.systems.hud.Hud;
 import meteordevelopment.meteorclient.commands.Commands;
 import meteordevelopment.meteorclient.systems.modules.Category;
 import meteordevelopment.meteorclient.systems.modules.Modules;
@@ -70,6 +78,11 @@ public class ProviPvPAddon extends MeteorAddon {
     public void onInitialize() {
         ProfileManager.init();
 
+        // Muss VOR jeder Modulaktivierung stehen: das System setzt die Aktionsbelegung pro Tick
+        // zurueck. Registriert man es spaeter, entscheidet der Broker einen Tick zu spaet und die
+        // Kollisionsvermeidung greift im entscheidenden Moment nicht.
+        Systems.add(new PvpBrokerSystem());
+
         Modules.get().add(new GodmodePvP());
         Modules.get().add(new HumanPvP());
         Modules.get().add(new TrainingDummy());
@@ -81,6 +94,19 @@ public class ProviPvPAddon extends MeteorAddon {
         Modules.get().add(new MacroTriggerModule());
         Modules.get().add(new AutoArmor());
         Modules.get().add(new ProviClickGui());
+
+        // Die drei Aktionsmodule konkurrieren mit den Kampfprofilen um Slot, Rotation und
+        // Baritone-Pfad. Sie loesen das ueber ConflictRegistry/Broker, nicht ueber Reihenfolge.
+        Modules.get().add(new SlowFallingAura());
+        Modules.get().add(new SpearModule());
+        Modules.get().add(new WindChargeModule());
+
+        // Diagnose und Sitzungszaehler sind strikt lesend: sie belegen keine Aktion, halten nichts
+        // fest und fassen die Hotbar nicht an. Genau das macht sie als Messwerkzeug brauchbar.
+        Hud.get().register(ProviDebugOverlay.INFO);
+        Hud.get().add(ProviDebugOverlay.INFO, 0, 0);
+        Hud.get().register(PvpSessionStats.INFO);
+        Hud.get().add(PvpSessionStats.INFO, 0, 0);
         Commands.add(new PvpCommand());
         Commands.add(new HumanPvpCommand());
         Commands.add(new NbtCommand());

@@ -1,216 +1,163 @@
 # ProviPvP Improvement Plan
 
-Stand: 2026-09-28 · Alle Statusangaben unten wurden gegen den Code geprüft, nicht aus dem Gedächtnis übernommen.
+Stand: 1. Oktober 2026 · Alle Statusangaben unten sind gegen den Code geprüft, nicht aus dem Gedächtnis übernommen.
 
 ## Target Servers: 2b2t, 5b5t, donutsmp
-## Config: JSON | Debug: In-game custom | Team: Custom
+## Config: JSON | Debug: In-HUD-Overlay | Team: Custom
 
-Add-on: `com.provipvp` (11 Module, 5 Commands, 2 Testklassen) auf Meteor Client 26.2
+Add-on: `com.provipvp` auf Meteor Client 26.2 (Java 25, Mojmap-Mappings, Fabric Loader 0.19.3, Loom 1.17-SNAPSHOT).
+
+**Reichweite der Anti-Cheat-Arbeit — bitte nicht verwechseln:**
+
+| Server | Anti-Cheat | Konsequenz |
+|---|---|---|
+| 2b2t | eigene AC, Schwerpunkt Bewegung, Cheats ausdrücklich erlaubt | Härtung bringt dort nichts |
+| 5b5t | **keine** In-Game-AC, nur Whitelist-Antibot | Härtung bringt dort nichts |
+| donutsmp | Grim-Familie | **hier gehört die gesamte Härtung hin** |
+
+Deshalb liegt die Härtung ausschließlich im `donutsmp`-Profil. `2b2t`, `5b5t` und `arena-aggressive`
+schalten sie explizit ab — dort ist jede Reaktionszeit, die sie kostet, verschenkter Schaden.
 
 ---
 
 ## ✅ WEEK 1: Critical Fixes — IMPLEMENTIERT
 
-### Day 1: Rotation Queue & D-Tap
-- [x] Rotation-Queue-Starvation in `rotateAndRun()` / `pendingFreeLook` — Flag `realActionThisTick` (`GodmodePvP.java:892`, ausgewertet in `:1389`)
-- [x] D-Tap-Doppelzündler-Race — warten auf Server-`EntityAdded`-Bestätigung
-- [x] Anchor-Charge-Leak beim Dimensionswechsel — `anchorsChargedByUs.clear()` an zwei Stellen (`:1122`, `:1244`)
-
-### Day 2: Bed Aura & Smart Targeting
-- [x] `bedSelfDamageMultiplier` in **beiden** Modulen (`GodmodePvP.java:232`, `HumanPvP.java:205`), angewandt in `:3037-3039`
-- [x] Smart-Targeting-`backupRange` — bereits korrekt durch `followRange` gefiltert
-- [x] `InvHelper.find()`-Offhand-Race — `isHotbarOrOffhand()` ergänzt (`InvHelper.java:30`), genutzt in `GodmodePvP.java:2150`
-
-### Day 3: Config-Profiles
-- [x] `ProfileManager` (`config/ProfileManager.java`), Ziel `config/provipvp/profiles/*.json`
-- [x] `ProfileCommand` — `list`, `save <name> [godmode|human]`, direkter Profilaufruf je Modul
-- [x] 4 Default-Profile in `src/main/resources/config/provipvp/profiles/`: `2b2t.json`, `5b5t.json`, `donutsmp.json`, `2b2t-human.json`
-- [x] Bestehende Tests grün: `PvpMathTest`, `SmartSearchTest`
-
-### ⬜ Offen aus Week 1
-- [ ] Test auf dem Testserver mit Test-Bots
-- [ ] Regressionsprüfung gegen 2b2t / 5b5t / donutsmp
-
-**Aktueller Diff:** 4 Dateien, +107/−47 —
-`ProviPvPAddon.java` (+7/−?), `GodmodePvP.java` (+103/−?), `HumanPvP.java` (+35/−?), `InvHelper.java` (+9/−?)
+- [x] Rotation-Queue-Starvation (`realActionThisTick`)
+- [x] D-Tap-Doppelzündler-Race — wartet auf Server-`EntityAdded`
+- [x] Anchor-Charge-Leak beim Dimensionswechsel
+- [x] `bedSelfDamageMultiplier` in beiden Modulen
+- [x] `InvHelper.find()`-Offhand-Race (`isHotbarOrOffhand`)
+- [x] `ProfileManager` + `ProfileCommand` + 5 Default-Profile
 
 ---
 
-## 🔶 WEEK 2: Architecture Extraction — IN ARBEIT
+## ✅ WEEK 2: Architecture — ABGESCHLOSSEN, aber anders als geplant
 
-`GodmodePvP.java` ist mit ~5700 Zeilen weiterhin das Monolith, aber der Kern ist jetzt zerlegt.
-Aus `GodmodePvP.rotateAndRun` (:3072) und `queueWithCombatSlot` (:3130) hervorgegangen — der
-Rotations-Code war zwischen `GodmodePvP` und `HumanPvP` dupliziert, und genau dort sitzt der
-Starvation-Bug aus Woche 1.
+Der Plan sah vor, `CombatCore` als abstrakte Basis einzuziehen. **Das ist nicht geschehen und wäre
+auch nicht möglich gewesen:** `CombatCore` wurde nie benutzt. Die Extraktion erzeugte rund 600 Zeilen
+Klasse plus 42 Unit-Tests, die **keinen einzigen Laufzeitpfad erreichten** — `GodmodePvP` baute sich
+seinen eigenen `ExplosionScanner` und rief ihn nie ab, `HumanPvP` hatte eigene Inline-Strahlprüfungen.
 
-- [x] `RotationQueue` als Modul (`exec/RotationQueue.java`) — Warteschlange, `clientSide`-Zaehlung,
-      `realActionThisTick` und alle Prioritaeten; 6 Tests in `RotationQueueTest`
-- [x] `PearlSolver` als Modul (`pearl/`)
-- [x] `InventoryManager` als Modul (`core/`)
-- [x] `TargetSelector` als Modul (`core/`)
-- [x] `ExplosionScanner` als Modul (`terrain/`)
-- [ ] `SelfDamagePolicy` als Modul
-- [x] Abstrakte Basisklasse `CombatCore` (`core/CombatCore.java`)
-- [ ] `GodmodePvP extends CombatCore` + aggressive Features
-- [ ] `HumanPvP extends CombatCore` + Human-Features
-- [x] Event-getriebene Architektur: `TargetChangeEvent` + `ExplosionDetectedEvent` in `core/events/`,
-      veroeffentlicht ueber `CombatCore` (Meteors Orbit-Bus)
-- [ ] Strukturiertes Logging mit SLFLog4J-Markern
+Belegt per Referenzzählung über den gesamten Quellbaum, vor dem Aufräumen:
 
-**Einschraenkung, die die Klassen-Zerlegung begrenzt:** `GodmodePvP` und `HumanPvP` muessen von
-Meteors `Module` erben, Java erlaubt keine Mehrfachvererbung — sie koennen also nicht gleichzeitig
-`CombatCore` erben. `CombatCore` ist deshalb abstrakte Basis der Kampf-*Logik*-Klassen; die Module
-halten eine `CombatPipeline` per Komposition. `CombatCore` als reine Dekoration zu lassen waere
-genau die Sorte tote Code, die diese Extraktion beseitigen soll.
+| Klasse | Referenzen außerhalb der eigenen Datei |
+|---|---|
+| `CombatPipeline`, `CombatCore` | 0 |
+| `TargetSelector`, `InventoryManager` | 0 |
+| `RotationQueue`, `CombatExecutor` | 0 |
+| `PearlSolver`, `PearlAim`, `PearlScenario` | 0 (nur ein Javadoc-`{@code}`-Verweis in `GodmodePvP`) |
+| `ExplosionScanner` | 0 Abfragen — nur `markTick` + `onBlockUpdate` |
 
-**Noch nicht verdrahtet:** `CombatPipeline` wird von `GodmodePvP` noch nicht benutzt. Der
-Slot-Mutex-Umstieg auf `InventoryManager` betrifft ~15 Aufrufstellen in nie im Kampf getestetem
-Code und ist ein eigener Schritt.
+**Erledigt:**
+
+- [x] `CombatCore`, `CombatPipeline`, `TargetSelector`, `InventoryManager`, `TerrainProbe`, `core/events/*` — **gelöscht**
+- [x] `RotationQueue`, `CombatExecutor`, `pearl/*` — **gelöscht**
+- [x] `terrain/ExplosionScanner` + `RaycastCache` — **behalten und lebendig gemacht** (siehe WEEK 3)
+- [x] `ExplosionScanner.countNearbyBlocks` war entgegen seinem eigenen Javadoc boxend (`IntStream.boxed()`
+      allozierte 1331 `Integer` pro Aufruf) — auf indizierte Schleifen umgestellt
+- [x] `PvpMath`, `InvHelper`, `PitchVariance`, `SmartSearch`, `ProfileManager` — waren und sind verdrahtet
+
+**Konsequenz für künftige Arbeit:** Nach jedem Hinzufügen neuer Klassen wird per `grep` über
+`src/main/java` geprüft, dass jede neue Klasse außerhalb der eigenen Datei referenziert wird. Genau
+an dieser Prüfung ist der tote Cluster von 2026-09 sichtbar geworden.
 
 ---
 
-## ⬜ WEEK 3: Performance & Anti-Cheat — NICHT BEGONNEN
+## ✅ WEEK 3: Performance & Anti-Cheat — IMPLEMENTIERT
 
-### Performance
-- [ ] Raycast-Ergebnisse in `validExplosionSpot()` cachen
-- [ ] Inkrementelle Anchor-/Bed-Kandidaten
-- [ ] `countNearbyBlocks()` mit Streams optimieren
-- [ ] Inventarzählungen cachen, `ContainerChangedEvent` abhören
-- [ ] `maintainNearbyAnchors`-Scanradius reduzieren
+### Performance (gemessene Kosten, nicht geschätzt)
+- [x] `maintainNearbyAnchors` — 9×7×9 = **567 `getBlockState` pro Tick**; jetzt über `ScanBudget`
+      gedrosselt (jeder 4. Lauf) und mit wiederverwendetem `MutableBlockPos` allokationsfrei
+- [x] `countNearbyBlocks(feet, 5)` **2× pro Tick = 2662 `getBlockState` + 2662 `BlockPos`**; jetzt
+      gedrosselt und an den Scanner delegiert
+- [x] Raycast-Ergebnisse in `ExplosionScanner`/`RaycastCache` — vorhanden, jetzt tatsächlich benutzt
+- [x] `onDeactivate` dereferenzierte `mc.player` ungeschützt (NPE über `onGameLeft`) — behoben
+- [x] `releaseCombatSlot` stellte Baritone-Follow nie wieder her (asymmetrisches Fenster) — behoben
+      durch die referenzgezählte `PathLease`
+- [x] `HumanPvP` löste die volle Perlen-Trajektorie **zweimal** pro Wurf — behoben
+- [ ] `calcBestAnchor` alloziert pro Aufruf 3 `ArrayList` + Integer-Boxing (B12) — **offen**
+- [ ] `solvePearlAtTarget` — bis ~117 000 `simulatePearl` + ~29 000 `Level#clip` in einem Tick
+      (122 Kandidaten × 3 Runden × 8×40-Bisekktion) — **offen, der größte verbleibende Posten**
 
 ### Anti-Cheat
-- [ ] `RotationObfuscator` (Micro-Jitter, Ease-Kurven, Timing-Varianz)
-- [ ] `tickRateMonitor` gegen Timer-Erkennung
-- [ ] `attackRangeJitter`, `swingHandRandomDelay`
-- [ ] `pearlPitchVariance`
-- [ ] Server-spezifische Defaults in den Profilen
+- [x] `GcdRotator` — Winkel auf das Sensitivity-Gitter quantisiert, Jitter gegen `DuplicateRotPlace`
+- [x] `ActionRayValidator` — jede Aktion gegen die **gesendete** Rotation geprüft, nicht gegen die Kamera
+- [x] `PlaceCursorSolver` — Cursor und Blockseite aus der gesendeten Rotation
+- [x] `ReachPolicy` — Melee/Crystal-Abau **3.0** und Blockplatzierung **4.5** als benannte Konstanten;
+      die Verwechslung war vorher latent vorhanden
+- [x] `ActionCadence` — eine Aktion je Movement-Paket, Item-Use vorher freigeben, Slot-Swap vorher
+- [x] `AttackDispatcher` — INTERACT vor ANIMATION
+- [x] `TickRateGate` — Drosselung bei Lag
+- [ ] `_RANDOMISIERUNG_` der D-Tap-/Anchor-Delays über `RandomBetween` — verdrahtet, Default-Spannen
+      stehen in den Profilen
 
 ### Benchmarks & Tests
-- [ ] JMH-Benchmarks für die Hotspots
-- [ ] Unit-Tests für die extrahierten Module
-- [ ] Integrationstest-Skript
+- [x] **88 → 253+ Tests.** Neu: `GcdRotatorTest`, `ActionRayValidatorTest`, `PlaceCursorSolverTest`,
+      `ReachPolicyTest`, `CrystalScorerTest`, `AttackGateTest`, `SelfDamageGuardTest`,
+      `CrystalToolPolicyTest`, `CrystalOwnershipTest`, `SpearModelTest`, `SlowFallingArrowTest`,
+      `WindChargeModelTest`, `KnockbackModelTest`, `AttackDispatcherTest`, `TotemEventReaderTest`,
+      `TickRateGateTest`, `ActionCadenceTest`, `RandomBetweenTest`, `ScanBudgetTest`,
+      `ProfileManagerTest`, `ActionBrokerTest`, `BrokerCoordinationTest`
+- [ ] JMH-Benchmarks — **offen**
+- [ ] Integrationstest-Skript — **offen**
 
 ---
 
-## ⬜ WEEK 4: Features & Polish — NICHT BEGONNEN
+## ✅ WEEK 4: Kollisionsvermeidung zwischen Modulen
 
-- [ ] `ProviDebugOverlay` (Ziel-HP, vorhergesagte Position, beste Spots, Baritone-Pfad, Rotation-Queue, Ressourcen-Zähler)
-- [ ] Team-System (geteilter Gegner, Ressourcen-Teilen, Combo-Koordination)
-- [ ] `/provipvp tune` (5-Minuten-Sessions, misst K/D, Kristalle/Sek. usw.)
-- [ ] Dokumentation: `ARCHITECTURE.md`, `SETTINGS_REFERENCE.md`, `PROFILE_GUIDE.md`, `ANTICHEAT_GUIDE.md`, `DEVELOPER_GUIDE.md`
+Der Nutzerauftrag lautete: neue Module dürfen sich nicht gegenseitig blockieren. Daraus:
 
----
-
-## 🎯 Nächste Schritte
-
-1. **Woche 1 abschließen** — Testserver-Lauf mit Bots, Regressionsprüfung. Alles andere ist unbelegt, solange kein Kampf getestet wurde.
-2. **Woche 2 starten** — zuerst `CombatCore` + `RotationQueue`, weil der Rotations-Code in beiden Modulen dupliziert ist und der Starvation-Bug aus Woche 1 genau dort wohnt.
-3. **`GodmodePvP.java` aufteilen** — ~3000 Zeilen in einem Modul ist der Hauptgrund, warum Week 1 schwer zu verifizieren war.
+- [x] `ActionBroker` — pro Tick genau ein Besitzer je `ActionKind`. Preemption nur, solange der
+      bisherige Besitzer **noch nicht gefeuert** hat; danach wird abgelehnt, weil das Paket unterwegs ist
+- [x] `PathLease` — referenzgezählte Baritone-Sperre (behebt das asymmetrische Fenster aus WEEK 3)
+- [x] `ConflictRegistry` — zwei Modi: `EXCLUSIVE` (das neue Modul wird abgewiesen) und `DEFERS`
+      (beide laufen, das schwächere tritt zurück)
+- [x] `PvpServices` — einzige Instanz, damit sich zwei Module überhaupt sehen
+- [x] `PvpBrokerSystem` — Tick-Reset und Freigabe der Pfad-Sperre bei Weltwechsel
 
 ---
 
-## 📌 Stand vom 2026-09-28 (Session dih-src)
+## 🔴 Offen und wichtig
 
-Diese Arbeiten betreffen **nicht** das ProviPvP-Add-on, sondern den DIH/Kui-Client in `dih-src/`. Hier festgehalten, damit sie nicht verloren gehen.
+**1. Nichts davon ist im Gefecht gesehen.** Build und Tests sind grün — das ist ein Compile- und
+Testbeweis, kein Kampfbeweis. Der lokale Testserver teleportiert Testspieler, taugt also nicht für
+isolierte Prüfungen. Siehe `TESTPLAN.md`.
+
+**2. `solvePearlAtTarget` ist weiterhin der teuerste Pfad im Bot.** Bis ~146 000 Voxeloperationen in
+einem einzigen Tick, alle acht Ticks. Das ist der nächste Performance-Posten, der sich lohnt.
+
+**3. Nicht verdrahtete Settings in `HumanPvP`.** Das Modul hat 89 Settings weniger als `GodmodePvP`.
+Ob das Absicht ( schlankeres Profil) oder Versehen ist, war nie entschieden — siehe `FEATURES.md`.
+
+**4. `BrandSpoof`** ist nach Grim-Default-Konfiguration nutzlos (Grim ignoriert `fabric`/`vanilla`).
+Entfernen oder nur mit Mod-List-Gate behalten. Nicht entschieden.
+
+---
+
+## 📌 Stand vom 2026-09-30 (Session dih-src)
+
+Diese Arbeiten betreffen **nicht** das ProviPvP-Add-on, sondern den DIH/Kui-Client in `dih-src/`.
+Hier festgehalten, damit sie nicht verloren gehen. Details siehe `dih-src/MANUAL.md` und
+`dih-src/README.md`.
 
 ### Design: Catppuccin Mocha
-Der Client war auf einer Rot-Schwarz-Art, die nie umgefärbt wurde. Ursache: `KuiTheme.recolor()` lässt Farben unverändert, solange der Kanal inaktiv ist — mit der Standard-Config war **kein** Kanal aktiv.
-
-- `UiColors`, `CompactTheme`, `KuiColors` auf Catppuccin Mocha umgestellt (base/mantle/crust/surface0-2, Akzent mauve `#CBA6F7`, Text `#CDD6F4`)
-- ~60 Literale in 21 weiteren Dateien nachgezogen (Screens, Overlays, HUD, Matchmaking)
-- Fenster: 4px Eckenradius + Haarlinien-Rand. Dabei aufgefallen: `UiRenderer.roundRect` ist eine **Pill-Sprite-9-Slice**, deren Endkappen mit der Höhe skalieren — für große Fenster unbrauchbar. `roundedRect`/`roundedFrame`/`roundedRectTop` ergänzt
-- Headerleiste von der grellen Akzentplatte auf gedämpftes Mauve mit Titel und Unterstrich
-- Logos `kui_client_logo.png` / `loading_logo.png` von `#3B6EFF` auf `#D2ABFF` (Hue auf Mauve, V-Struktur erhalten)
-
-### Markenname
-`夔` (U+5914) statt „Kui" an 162 Stellen in 60 Dateien, sichtbar u. a. als „夔 Modules". Ersetzt, inkl. 4 fehlender Leerzeichen. Nur ein Laufzeit-Config-*Wert* betroffen, keine persistierten Schlüssel.
+- `UiColors`, `CompactTheme`, `KuiColors` auf Catppuccin Mocha umgestellt; ~60 Literale in 21 Dateien nachgezogen
+- Fenster: 4px Eckenradius + Haarlinien-Rand. `UiRenderer.roundRect` ist eine Pill-Sprite-9-Slice,
+  deren Endkappen mit der Höhe skalieren — `roundedRect`/`roundedFrame`/`roundedRectTop` ergänzt
+- Markenname `夔` (U+5914) statt „Kui" an 162 Stellen in 60 Dateien
 
 ### Intent-Exposure (CrystalAura / AnchorAura)
-Der Code war nicht kompilierbar und ist repariert:
-- `AnchorAuraModule` — dupliziertes Fragment, Methodenblock hinter der Klassen-Klammer, `sameRotation` statisch mit Instanzaufruf
-- `KuiExplosionDamage.calculateDamage` existierte im Projekt nicht → ersetzt durch die echte API `damageTo(target, pos, POWER, options)`
-- `PlanDefend` existierte nicht → `ObsidianPlan`
+Der Code war nicht kompilierbar und ist repariert: `AnchorAuraModule`, `KuiExplosionDamage`,
+`PlanDefend` → `ObsidianPlan`.
 
 ### Chat-Befehle
-- `KuiChatSuggestMixin`: Nutzungszeile und Vorschlagsliste lagen in einem `try`; im `catch` rief `kui$clearActiveSuggestions()` eine bereits berechnete Liste ab. Vanillas `fillNodeUsage` liest `minecraft.player.connection`. Getrennt abgesichert. Verifiziert: `.` → 61 Einträge, `.t` → 3, `.tp` → 0
-- Prefix-Verwechslung: Meteor belegt `.`, Kui wird auf `%` umgeschrieben. Neuer Hinweis `explainMisroutedCommand` (verbraucht die Nachricht **nicht**), Regel testbar über `commandNamedUnder`, Test `MisroutedPrefixTest`
-- `PanoramaRecolorTest.stockThemeRecolorsTheUiBlue` pinnte den alten Vertrag (Standard = Blau, Art = Rot) → ersetzt durch den neuen
+`KuiChatSuggestMixin` trennt jetzt Nutzungszeile, Vorschlagsliste und Fehlerbehandlung.
 
 ### Verteilstand
-`gradlew build` grün, 1221 Tests. Build-Artefakt `build/libs/Kui-5.0.1-26.2-dev.jar` ist installiert als `%APPDATA%/.minecraft-262pvp/mods/kui-5.0.1.jar`; das vorherige liegt als `kui-5.0.1.jar.bak` daneben.
+`gradlew build` grün, 1221 Tests. Build-Artefakt installiert als `%APPDATA%/.minecraft-262pvp/mods/kui-5.0.1.jar`.
 
-### Offen aus dieser Session
-- [x] `KuiDisconnectedScreenMixin` — der Auto-Reconnect-Knopf lag bei `height - 38` deckungsgleich ueber
-      der Vanilla-Button-Zeile (die sitzt bei `height - 32`) und war dadurch nicht zu sehen. Jetzt
-      oberhalb der Zeile, mit benannten Konstanten und Begrenzung gegen kleine Bildschirme.
-      Sichtbarkeit per Screenshot **nicht** verifiziert — der DisconnectedScreen ist ohne laufenden
-      Disconnect nicht erzeugbar.
-- [x] `KuiWaypointsScreen:634` — der Helfer `frame(...)` nahm einen `border`-Parameter, verwarf ihn und
-      setzte stattdessen fest `recolor(0x99585B70, OUTLINE)`. Beide Aufrufer reichen `THEME.borderSoft()`,
-      also war der Parameter wirkungslos und die Rahmenfarbe folgte nicht dem Theme. Wird jetzt benutzt.
-- `autism-client/` liegt als nicht getrackter Fork im Repo (entschieden: nicht löschen, nicht anfassen)
+### Noch offen
+- [ ] `KuiDisconnectedScreenMixin` — Sichtbarkeit per Screenshot **nicht** verifiziert
+- [ ] `autism-client/` liegt als nicht getrackter Fork im Repo (entschieden: nicht löschen, nicht anfassen)
 
 **Sicherung:** beide `dih-src`-Dateien liegen als `*.bak-sprint` daneben (`dih-src` ist nicht in git).
-
----
-
-## 🔧 Werkzeuge: Offline-Auswertung eines Laufs
-
-Der Bot erzeugt mit `debug-trace` (Standard **aus**, zum Aufzeichnen einschalten) bereits alle
-Entscheidungen, und das Test-Datapack `infinite_kit` zaehlt den Ressourcenverbrauch. Damit ist ein
-Feedback-Loop vorhanden, aus dem sich Settings-Aenderungen ableiten lassen — ohne die KI in den
-Gefechts-Tick zu haengen, der nur 50 ms hat.
-
-- `tools/collect_run.py` — startet beide TestBots, sichert die Usage-Zaehler vor und nach einem
-  Kampffenster, legt `<bot>.log` und `_delta.json` ab
-- `tools/analyse.py` — wertet Trace + Usage aus und macht **begruendete Settings-Vorschlaege**.
-  Aendert selbst nichts; wer uebernimmt, entscheidet.
-
-Aufruf: `python tools/collect_run.py 360`, danach
-`python tools/analyse.py ../analysedaten --out bericht.md`
-
-**Absichtliche Grenze:** kein Modellaufruf pro Tick. Eine Frontier-Antwort braucht 300 ms-3 s,
-ein Tick hat 50 ms — fuer Dodge und Anti-Fall-Perle ist das keine Optimierung, sondern ein
-Ausschluss. An den Stellen, an denen eine KI helfen soll, ist die analytische Loesung
-(Bisektion ueber die Flugzeit, Raycast-Cache) schneller und exakter. Die KI gehoert zwischen die
-Sessions, nicht in den Kampf.
-
-**Noch nicht erfasst:** Selbstschaden und Schaden pro Runde. Dafuer muesste das Datapack
-Schadensereignisse zaehlen; ohne diese Groesse sind Vorschlaege zu `max-self-damage` nicht
-belastbar, also auch nicht enthalten.
-
-## 📝 Notes
-
-- Alle Änderungen müssen rückwärtskompatibel mit bestehenden Settings bleiben
-- Profile liegen in `config/provipvp/profiles/`
-- Debug-Overlay per Keybind (Default: `RSHIFT + D`)
-- Team-System nutzt eigene Pakete, nicht Meteor-Party
-- `dih-src` ist **nicht** in git getrackt — vor jedem Ersetzen eines Jars sichern
-- Beide `dih-src`-UI-Fixes sind in `*.bak-sprint` gesichert (Stand 2026-09-30)
-- ProviPvP-Tests: 88 Testfaelle in 6 Klassen (`gradlew test`)
-- Tests: `PvpMathTest`, `SmartSearchTest` (ProviPvP) · `PanoramaRecolorTest`, `MisroutedPrefixTest`, `ClientCommandParsingTest` (dih-src)
-### A/B-Messung: `balance-resources` 1.5 → 3.0 — **nicht bestaetigt**
-
-Der Analyser schlug vor, `balance-resources` (Skala 0–5) zu erhoehen, weil nur 8 % der Explosionen
-Anker sind und der Modul-Kommentar 14–26 % nennt. Gegengeprüft, je 6 Minuten, Arena ohne Reset:
-
-| Profil | vorher (1.5) | nachher (3.0) |
-|---|---:|---:|
-| TestBot_1 | 8 % Anker (217/20) | **9 %** (355/36) |
-| TestBot_2 | 8 % Anker (262/23) | **12 %** (218/31) |
-
-**Ergebnis: die Hypothese ist nicht bestaetigt.** +1 bzw. +4 Prozentpunkte liegen innerhalb der
-Streuung — im selben Lauf lagen die beiden Bots mit identischer Einstellung bereits 3 Prozentpunkte
-auseinander, und die Explosionszahl schwankt zwischen Läufen stark (Bot 1: 217 → 355 Crystals,
-Bot 2: 262 → 218). Eine Wirkung dieser Größe lässt sich mit zwei Profilen und je einem Lauf nicht
-von der Streuung trennen. Erforderlich wären ≥ 5 Läufe je Arm.
-
-Der Wert bleibt bei **1.5**. Der Vorschlag des Analysers war begründet, aber falsch in der Stärke —
-genau der Fall, für den die Regeln jetzt den echten Skalenbereich aus `GodmodePvP.java` lesen
-statt zu raten: der Vorschlag „`pearl-min-dist` senken" war unmoeglich, der Wert stand bereits am
-Minimum der Skala.
-
-**Offen bleibt der eigentliche Befund:** 58–68 % der engaged-Samples liegen bei Abstand > 6
-(p90 ~21). Der Bot rennt, kommt nicht in Explosionsreichweite, und `follow` ist nur in 33–35 %
-der engaged-Samples aktiv. Das ist kein Settings-Problem, sondern der Baritone-Follow, der bei jeder
-`reserveCombatSlot` abgebrochen wird.

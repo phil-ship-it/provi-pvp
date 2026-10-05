@@ -1,10 +1,24 @@
 package com.provipvp.modules;
 
+import com.provipvp.crystal.AttackGate;
+import com.provipvp.crystal.CrystalOwnership;
+import com.provipvp.crystal.SelfDamageGuard;
+import com.provipvp.exec.PitchVariance;
+import com.provipvp.mechanics.ShieldWindow;
+import com.provipvp.net.ActionCadence;
+import com.provipvp.net.AttackDispatcher;
+import com.provipvp.net.TickRateGate;
+import com.provipvp.ray.ActionRayValidator;
+import com.provipvp.ray.ReachPolicy;
+import com.provipvp.rotation.GcdRotator;
+import com.provipvp.terrain.ExplosionScanner;
 import com.provipvp.util.InvHelper;
 import com.provipvp.util.PvpMath;
+import com.provipvp.util.RandomBetween;
 
 import baritone.api.BaritoneAPI;
 import meteordevelopment.meteorclient.MeteorClient;
+import meteordevelopment.meteorclient.events.entity.EntityAddedEvent;
 import meteordevelopment.meteorclient.events.game.GameLeftEvent;
 import meteordevelopment.meteorclient.events.world.TickEvent;
 import meteordevelopment.meteorclient.settings.BoolSetting;
@@ -35,6 +49,7 @@ import net.minecraft.core.component.DataComponents;
 import net.minecraft.world.InteractionHand;
 import net.minecraft.world.effect.MobEffects;
 import net.minecraft.world.entity.LivingEntity;
+import net.minecraft.world.entity.boss.enderdragon.EndCrystal;
 import net.minecraft.world.entity.player.Player;
 import net.minecraft.world.item.AxeItem;
 import net.minecraft.world.item.BedItem;
@@ -47,15 +62,18 @@ import net.minecraft.world.level.block.Blocks;
 import net.minecraft.world.level.block.state.BlockState;
 import net.minecraft.world.level.Level;
 import net.minecraft.world.level.ClipContext;
+import net.minecraft.world.phys.AABB;
 import net.minecraft.world.phys.BlockHitResult;
 import net.minecraft.world.phys.HitResult;
 import net.minecraft.world.phys.Vec3;
 
 import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Random;
+import java.util.Set;
 import java.util.UUID;
 
 import static meteordevelopment.meteorclient.MeteorClient.mc;
@@ -289,6 +307,70 @@ public class HumanPvP extends Module {
         .defaultValue(18.0)
         .range(5.0, 45.0)
         .sliderRange(5.0, 40.0)
+        .build()
+    );
+
+    /** Obergrenze des "menschlichen Klickversatzes" — der untere Rand ist immer 1 Tick, ein Bereich
+     *  aus einem einzelnen Wert waere genau das maschinenidentische Timing, das dieses Profil
+     *  vermeiden soll (siehe RandomBetween). */
+    public final Setting<Integer> clickDelayMax = sgHuman.add(new IntSetting.Builder()
+        .name("click-delay-max")
+        .description("Obergrenze des zufaelligen Klick-Versatzes in Ticks (1 = nie verzoegert). Der Bot wartet vor jedem bereiten Schlag 1..N Ticks - das ist die zweite Haelfte des Verklickens neben attack-chance und der Grund, warum der Schlagtakt nie exakt im Cooldown-Takt faellt.")
+        .defaultValue(4)
+        .range(1, 20)
+        .sliderRange(1, 10)
+        .build()
+    );
+
+    /** Symmetrische Streuung um die gesendete Rotation. Bewusst winzig: die Rampe aus smoothLookAt()
+     *  ist die eigentliche Humanisierung dieses Profils, der Jitter existiert nur, damit nicht drei
+     *  aufeinanderfolgende Rotationen exakt dasselbe Gitter-Delta haben (Grim DuplicateRotPlace). */
+    public final Setting<Double> rotationJitter = sgHuman.add(new DoubleSetting.Builder()
+        .name("rotation-jitter")
+        .description("Zufaellige Streuung der gesendeten Rotation um den Zielwinkel, symmetrisch. Wertet als reines Gitter-Rauschen, damit der Winkel auf dem Maus-Empfindlichkeits-Gitter landet statt auf einem glatten Float. 0 = aus.")
+        .defaultValue(0.2)
+        .range(0.0, 2.0)
+        .sliderRange(0.0, 1.0)
+        .build()
+    );
+
+    /** Rettungswurf-Streuung — siehe PitchVariance.VERTICAL_DOWN. */
+    public final Setting<Double> pearlDownVariance = sgPearl.add(new DoubleSetting.Builder()
+        .name("pearl-down-variance")
+        .description("Streuung in Grad um den festen 80-Grad-Winkel des senkrechten Rettungswurfs. Ohne das wirft der Bot bei jedem Fall exakt gleich - das ist das auffaelligste Maschinensignal in diesem ganzen Profil. 0 nutzt die Sicherheitsspanne von 0.75 Grad.")
+        .defaultValue(0.75)
+        .range(0.0, 10.0)
+        .sliderRange(0.0, 5.0)
+        .build()
+    );
+
+    public final Setting<Boolean> strictReach = sgQA.add(new BoolSetting.Builder()
+        .name("strict-reach")
+        .description("Prueft Nahkampf und Schildbrechen gegen die wirklich gesendete Rotation: Vanilla-Reichweite 3.0 (Grim flaggt ab 3.0005) statt des attack-range-Werts, plus Sichtlinie und Zieltreffer. Der Standardwert attack-range=3.4 lag real ueber der Grim-Schwelle - jeder Schlag zwischen 3.0 und 3.4 war ein Reach-Flag. Aus schalten, wenn der Server nachweislich mehr Reichweite erlaubt.")
+        .defaultValue(true)
+        .build()
+    );
+
+    public final Setting<Boolean> packetCadence = sgQA.add(new BoolSetting.Builder()
+        .name("packet-cadence")
+        .description("Eine Aktion pro Bewegungspaket: kein zweiter Angriff, keine zweite Platzierung und kein Armschwung im selben Paket (Grim MultiActionsA/DuplicateSwing). Zaehlt auch den Slot-Wechsel zwischen zwei Aktionen - genau die Verschachtelung, die als PacketOrderE/F auffaellt.")
+        .defaultValue(true)
+        .build()
+    );
+
+    public final Setting<Boolean> lagThrottle = sgQA.add(new BoolSetting.Builder()
+        .name("lag-throttle")
+        .description("Unter Lag (langsamer Tick als 1.2 s nominal) nur noch jede zweite Aktion; bei einem harten Spike oder unter 30% HP gar keine. Die Zuordnung von Bewegung, Rotation und Aktion ist bei gehaemmter Verbindung genau das, was als Rubberband zurueckkommt.")
+        .defaultValue(true)
+        .build()
+    );
+
+    /** Selbst-Platzierung als eingebaute Crystal-Buchhaltung: eigene Crystals loesen keinen
+     *  Auto-Schield aus und werden nicht als "frischer Gegner-Crystal" gezaehlt. */
+    public final Setting<Boolean> crystalOwnership = sgQA.add(new BoolSetting.Builder()
+        .name("crystal-ownership")
+        .description("Merkt sich, welche End Crystals das eigene Aura gesetzt hat. Eigene Crystals loesen dann keinen Auto-Schield aus - sonst blockt der Bot im Crystal-Kampf reflexhaft gegen seinen eigenen Crystal und schuetzt sich nie gegen den des Gegners.")
+        .defaultValue(true)
         .build()
     );
 
@@ -594,6 +676,62 @@ public class HumanPvP extends Module {
     private boolean lifecycleStarted;
     private int fireResStartTick = -999;
 
+    // ---------- Verdrahtung der getesteten Helfer ----------
+
+    /** Gitter-Basis der gesendeten Rotationen. Meteor quantisiert nicht, Grim rechnet den ggT der
+     *  gesendeten Deltas - also muss der Addon das selbst tun. Geseedet wird aus dem Wert, den
+     *  smoothLookAt() ERSTELLT hat, nicht aus der Kamera: das Profil rampiert, der Akkumulator muss
+     *  also die Rampe als Vorwerts sehen, sonst quantisiert er jeden Tick gegen eine falsche Basis. */
+    private final GcdRotator.AngleDeltaAccumulator rotationAccumulator = new GcdRotator.AngleDeltaAccumulator();
+
+    /** Zuletzt tatsaechlich an Rotations.rotate() uebergebene Winkel — die Validierung am Nahkampf
+     *  prueft gegen DAS und nicht gegen die Kamera (siehe ActionRayValidator, "Warum die Kamera
+     *  nicht zaehlt"). null, sobald dieser Tick noch nichts eingereiht wurde. */
+    private GcdRotator.Rotation lastSentRotation;
+
+    /** Eine Aktion pro Bewegungspaket (Grim MultiActionsA / DuplicateSwing / PacketOrderE). */
+    private final ActionCadence cadence = new ActionCadence();
+
+    /** Drosselt die Aktionsrate, sobald der Client-Tick laenger als nominell dauert. */
+    private final TickRateGate tickGate = new TickRateGate();
+    private TickRateGate.Verdict tickVerdict = TickRateGate.Verdict.RUN;
+    private int actionIndex;
+    private long lastTickNanos;
+
+    /** Welche End Crystals dieses Modul gesetzt hat — filtert sie aus der Auto-Schield-Reaktion
+     *  heraus (Setting {@link #crystalOwnership}). Endet mit 32 Eintraegen / 200 Ticks, damit die
+     *  Liste nicht ueber eine lange Sitzung hinweg leer laeuft. */
+    private final CrystalOwnership ownCrystals = new CrystalOwnership();
+
+    /** Geteilter Block-Raycast fuer Perlenbahn, Sichtlinien und Explosions-Vorpruefung. Enthaelt den
+     *  Cache, weshalb derselbe Strahl im Kampf nicht zweimal durch die Welt geht. */
+    private final ExplosionScanner scanner = new ExplosionScanner();
+
+    /**
+     * Sichtpruefung fuer ActionRayValidator — die Regel selbst ist kopflos, nur die Welt kommt herein.
+     *
+     *  <p>{@code isCollisionShapeFullBlock} statt des veralteten {@code blocksMotion()}: es ist genau
+     *  die Eigenschaft, an der Vanillas COLLIDER-ClipContext haengt. Damit kann der Validator nicht
+     *  "verdeckt" melden, wo der echte Raycast durchkommt (Truhen, Tueren, Gelander zaehlen nicht als
+     *  voll — ein Schlag durch einen offenen Rahmen ist kein Occlusion-Fehler).
+     */
+    private final ActionRayValidator.World rayWorld = pos -> mc.level != null
+        && mc.level.getBlockState(pos).isCollisionShapeFullBlock(mc.level, pos);
+
+    /** Der Dispatcher bestellt nur den Animationsteil — das Schadenspaket kommt weiter aus
+     *  {@code gameMode.attack()}, weil nur das den Angriffs-Cooldown zuruecksetzt und die
+     *  Sweep-Reichweitenpruefung aufloest. {@code SwingMode.CLIENT} entspricht dem vorherigen
+     *  {@code player.swing()}; ein zusaetzliches Swing-Paket waere eine Aenderung des Protokollbilds,
+     *  kein Fix. Als Feld, damit nicht pro Schlag ein neuer Dispatcher entsteht. */
+    private final AttackDispatcher attacker = new AttackDispatcher((packet, argument) -> { }, hand -> {
+        if (mc.player != null) mc.player.swing(hand == AttackDispatcher.OFF_HAND
+            ? InteractionHand.OFF_HAND : InteractionHand.MAIN_HAND);
+    });
+
+    /** Wiederverwendete Menge fuer den Crystal-Abgleich — pro Tick neu zu allozieren waere die
+     *  einzige Daueralokation, die dieser Tick ansonsten nicht braucht. */
+    private final Set<Integer> visibleCrystalIds = new HashSet<>();
+
     public HumanPvP() {
         super(com.provipvp.ProviPvPAddon.CATEGORY, "human-pvp", "ProviPvP V2: menschlich wirkender Kampf-Bot (Reaktionszeit, sichtbare Rotation, Klick-Jitter). Kein Unerkennbarkeits-Versprechen. Befehl: .hpvp");
     }
@@ -610,13 +748,18 @@ public class HumanPvP extends Module {
         super.toggle();
     }
 
-    @Override
-    public void onActivate() {
-        // Beide PvP-Profile verwalten dieselben globalen Meteor-/Baritone-Ressourcen. Beim
-        // Aktivieren wird das andere Profil daher sofort und rueckstandsfrei deaktiviert.
-        GodmodePvP godmode = Modules.get().get(GodmodePvP.class);
+    /**
+     * Der gemeinsame Zustands-Reset fuer onActivate() und onDeactivate().
+     *
+     * <p><b>Warum ueberhaupt extrahiert:</b> das Modul ist ein Singleton, sein Zustand lebt also
+     * ueber Aktivierungssessions hinweg weiter. Zwei getrennt geschriebene Reset-Listen driften
+     * unausweichlich auseinander — onDeactivate() raeumte nur einen Teil dessen ab, was
+     * onActivate() gesetzt hatte, also blieb nach jedem Deaktivieren Engagement-, Aura- oder
+     * Heilverlauf-Zustand des letzten Kampfes stehen und wurde beim naechsten Aktivieren
+     * uebernommen. Eine Liste, zwei Aufrufer, kann nicht driften.
+     */
+    private void resetCombatState() {
         lastPearlScanTick = -999;
-        if (godmode != null && godmode.isActive()) godmode.disable();
         tickCounter = 0;
         lastPearlTick = -999;
         supportSyncFailed = false;
@@ -629,12 +772,14 @@ public class HumanPvP extends Module {
         rubberbandCooldown = 0;
         followSuppressedUntilDecision = false;
         blockingSwapBack = false;
+        blocking = false;
         shieldUntil = 0;
         lastCrystalCount = -1;
         lastAnchorBlockCount = -1;
         lastBedBlockCount = -1;
-        explosionRetreatUntil = 0;
+        explosionRetreatUntil = -1;
         nextStrafeSwitchTick = -1;
+        strafeLeft = false;
         followActive = false;
         followedId = null;
         autoMendEnabledByHuman = false;
@@ -646,15 +791,20 @@ public class HumanPvP extends Module {
         fireResSwapBack = false;
         lastRetargetCheck = 0;
         secondEnemyCooldown = 0;
+        engagedId = null;
         engageAtTick = 0;
+        pursuing = false;
+        targetSpeed = 0;
         nextClickTick = -1;
         auraMode = -1;
         lastAuraSwitch = -999;
+        anchorPos = null;
         anchorStage = 0;
         anchorCooldown = 0;
         anchorCandidates.clear();
         anchorCandidateIndex = 0;
         anchorCalcOrigin = null;
+        bestAnchorDmgCache = 0;
         bedPos = null;
         bedStage = 0;
         bedStageDeadline = 0;
@@ -670,6 +820,26 @@ public class HumanPvP extends Module {
         healingUntilFull = false;
         lastTrapTick = -999;
         lastPositions.clear();
+        currentAction = "-";
+
+        // Die stillen Helfer: Gitter-Basis, Ledger und Raycast-Cache sind Welt- und Session-bezogen,
+        // ein Restart ohne Reset hiesse "letzte Rotation der letzten Sitzung" als GCD-Vorwert.
+        rotationAccumulator.reset();
+        lastSentRotation = null;
+        cadence.onTick();
+        actionIndex = 0;
+        lastTickNanos = 0L;
+        tickVerdict = TickRateGate.Verdict.RUN;
+        ownCrystals.reset();
+        scanner.invalidate();
+    }
+
+    @Override
+    public void onActivate() {
+        // Beide PvP-Profile verwalten dieselben globalen Meteor-/Baritone-Ressourcen. Beim
+        // Aktivieren wird das andere Profil daher sofort und rueckstandsfrei deaktiviert.
+        GodmodePvP godmode = Modules.get().get(GodmodePvP.class);
+        resetCombatState();
 
         Modules m = Modules.get();
 
@@ -733,26 +903,28 @@ public class HumanPvP extends Module {
 
         cancelFollow();
 
-        if (blocking) {
-            if (blockingSwapBack) InvUtils.swapBack();
-            blocking = false;
-            blockingSwapBack = false;
+        // Die Swap-Ruecksetzung braucht mc.player — beim Weltwechsel ist es schon null, und genau
+        // dort wird am haeufigsten deaktiviert (onGameLeft).
+        if (mc.player != null) {
+            if (blocking && blockingSwapBack) InvUtils.swapBack();
+            if (drinkingFireRes && fireResSwapBack) InvUtils.swapBack();
         }
-        if (drinkingFireRes) {
-            if (fireResSwapBack) InvUtils.swapBack();
-            drinkingFireRes = false;
-            fireResSwapBack = false;
-        }
+
         warnedOutOfMisc.clear();
         Input.setKeyState(mc.options.keySprint, false);
-        // Auch die Bewegungstasten: die Retreat-Logik (:1928-1930) setzt keyLeft/keyRight/keyDown
-        // direkt. Ohne diesen Reset bleiben sie nach dem Deaktivieren clientseitig gedrueckt und der
-        // Spieler laeuft dauerhaft seitwaerts bzw. rueckwaerts weiter.
+        // Auch die Bewegungstasten: die Retreat-Logik setzt keyLeft/keyRight/keyDown direkt. Ohne
+        // diesen Reset bleiben sie nach dem Deaktivieren clientseitig gedrueckt und der Spieler
+        // laeuft dauerhaft seitwaerts bzw. rueckwaerts weiter.
         Input.setKeyState(mc.options.keyLeft, false);
         Input.setKeyState(mc.options.keyRight, false);
         Input.setKeyState(mc.options.keyDown, false);
         Input.setKeyState(mc.options.keyUp, false);
-        mc.player.setSprinting(false);
+        if (mc.player != null) mc.player.setSprinting(false);
+
+        // Symmetrisch zu onActivate(): alles, was der Kampf zurueckgelassen hat (Engagement, Aura-
+        // Modus, Anker-/Bett-Stufe, Heilverlauf, Gitter-Basis, Ledger) geht hier runter — sonst
+        // startet die naechste Sitzung mit dem Zustand des letzten Kampfes.
+        resetCombatState();
 
         info("ProviPvP V2 aus.");
     }
@@ -762,6 +934,13 @@ public class HumanPvP extends Module {
         if (!Utils.canUpdate()) return;
 
         tickCounter++;
+        // Ledger-Tick-Grenze VOR doTick(): eine Aktion, die dieser Tick bucht, muss im selben Tick
+        // auch wieder abgerechnet werden, sonst zaehlt sie doppelt.
+        cadence.onTick();
+        ownCrystals.advance(1);
+        // Eigene Rotationen duerfen das Delta des Vortages nicht erben — der Akkumulator seedet neu.
+        lastSentRotation = null;
+        sampleTickRate();
 
         try {
             doTick();
@@ -782,8 +961,34 @@ public class HumanPvP extends Module {
         if (isActive()) toggle();
     }
 
+    /**
+     * Merkt sich End Crystals, die das von uns aktivierte Aura gesetzt hat.
+     *
+     * <p><b>Warum ueberhaupt:</b> HumanPvP setzt keine Crystals selbst — Meteors CrystalAura tut das.
+     * Der Client sieht die Platzierung aber vorhergesagt als Entity-Appear, und solange das Aura von
+     * uns stammt und in Reichweite steht, ist genau das die Erklaerung fuer einen neu auftauchenden
+     * Crystal. Ohne diese Buchhaltung zaehlt der Bot seinen EIGENEN Crystal bei jedem Platzieren als
+     * "frischen Gegner-Crystal" und blockt reflexhaft dagegen.
+     *
+     * <p>Grenze der Heuristik, bewusst so belassen: ein Gegner, der im selben Tick durch denselben
+     * Client-Pfad einen Crystal in Reichweite setzt, wird als eigener gewertet. Die Fehlentscheidung
+     * faellt gegen den Bot aus (ein ausgelassener Auto-Schild), nicht gegen uns.
+     */
+    @EventHandler
+    public void onEntityAdded(EntityAddedEvent event) {
+        if (!crystalOwnership.get() || mc.player == null) return;
+        if (!(event.entity instanceof EndCrystal crystal)) return;
+        // Nur was unser Aura auch erreichen wuerde — weiter entfernte Crystals sind Fremdbestand.
+        if (crystal.distanceToSqr(mc.player) > 64.0) return;
+        ownCrystals.notePlaced(crystal.getId());
+    }
+
     private void doTick() {
         Player self = mc.player;
+        // C10: containerMenu wurde unguarded gelesen. Das faellt beim Disconnect auf — dort ist
+        // mc.player bereits null, aber onGameLeft tickt nicht mehr. Der Wirt entscheidet heute ueber
+        // Utils.canUpdate(), aber eine eigene Zustaendigkeit im Body waere eine stille Pflicht.
+        if (self == null || mc.level == null) return;
         currentAction = "-";
         rotationsThisTick = 0;
         realActionThisTick = false;
@@ -791,7 +996,10 @@ public class HumanPvP extends Module {
         boolean guiOpen = mc.gui.screen() != null;
         // Nur eine echte Fremd-Container-GUI hat ein anderes containerMenu als das normale Inventar -
         // Meteor-ClickGUI/eigenes Inventar teilen sich inventoryMenu, Totem-Nachlegen darf da weiterlaufen.
-        boolean foreignContainerOpen = mc.player.containerMenu != mc.player.inventoryMenu;
+        boolean foreignContainerOpen = self.containerMenu != null && self.containerMenu != self.inventoryMenu;
+        // Der Raycast-Cache haengt an Welt und Chunk-Kontext: ohne dieses markTick liefert er nach
+        // einem Chunkwechsel oder einem Weltwechsel noch "frei" fuer Bloecke, die es nicht mehr gibt.
+        scanner.markTick(tickCounter);
         // Kein Verzoegerungs-Gate mehr: nach einem Totem-Pop ist die Offhand fuer die naechste(n)
         // Angriffswelle sofort ungeschuetzt - bei zwei schnellen Treffern hintereinander (2v1, oder ein
         // Gegner der einfach schnell genug klickt) reicht selbst 1-3 Tick Verzoegerung, um den Bot
@@ -857,8 +1065,11 @@ public class HumanPvP extends Module {
         }
         if (!target.getUUID().equals(engagedId)) {
             engagedId = target.getUUID();
-            int span = Math.max(1, reactionMaxTicks.get() - reactionMinTicks.get() + 1);
-            engageAtTick = tickCounter + reactionMinTicks.get() + rng.nextInt(span);
+            // Reaktionszeit als echtes Min/Max-Intervall: reactionMin/reactionMax sind bereits
+            // einstellbar, aber die Spannweite wurde mit einem selbst gebauten nextInt gebildet.
+            // RandomBetween uebernimmt die Normalisierung (vertauschte Grenzen) mit, also kann der
+            // Nutzer die beiden Werte in beliebiger Reihenfolge eintragen, ohne den Kampf stillzulegen.
+            engageAtTick = tickCounter + reactionRange().sample(rng);
             nextClickTick = -1;
             pursuing = false; // neues Ziel -> Kaltstart-Schwelle (engage-distance) gilt wieder von vorn
         }
@@ -905,13 +1116,14 @@ public class HumanPvP extends Module {
             && (InvHelper.has(Items.ENDER_PEARL));
         if (escapePearl.get() && self.getHealth() <= 8.0f && dist <= 6.0) {
             if (pearlReady) {
-                if (throwPearl(target, true)) {
+                if (throwPearlAwayFrom(target)) {
                     currentAction = "escape-pearl";
                     return;
                 }
             }
             if (autoShield.get() && !blocking) {
-                shieldUntil = tickCounter + 20;
+                // +5, weil der Schild die ersten 5 Ticks des Item-Use noch gar nicht blockt.
+                shieldUntil = ShieldWindow.until(tickCounter, ShieldWindow.EMERGENCY_HELD_TICKS);
                 startBlock();
             }
             explosionRetreatUntil = tickCounter + 20;
@@ -927,9 +1139,17 @@ public class HumanPvP extends Module {
 
         // Feindlicher Crystal frisch platziert (in 5 m)? -> kurz blocken. Anchor/Bett sind Bloecke statt
         // Entities, gleiche Delta-Idee per Block-Scan (siehe GodmodePvP fuer dieselbe Erweiterung).
-        java.util.List<net.minecraft.world.entity.boss.enderdragon.EndCrystal> nearCrystals =
-            mc.level.getEntitiesOfClass(net.minecraft.world.entity.boss.enderdragon.EndCrystal.class, self.getBoundingBox().inflate(5));
-        boolean freshCrystal = lastCrystalCount >= 0 && nearCrystals.size() > lastCrystalCount && !nearCrystals.isEmpty();
+        // Gezählt wird nur, was NICHT uns gehört: das eigene Aura setzt permanent Crystals, und ohne
+        // diesen Filter löst jede eigene Platzierung den Auto-Schield aus — der Bot blockt dann im
+        // Crystal-Kampf reflexhaft gegen seinen eigenen Crystal und verpasst den des Gegners.
+        List<EndCrystal> nearCrystals =
+            mc.level.getEntitiesOfClass(EndCrystal.class, self.getBoundingBox().inflate(5));
+        forgetVanishedCrystals(nearCrystals);
+        int enemyCrystals = 0;
+        for (EndCrystal crystal : nearCrystals) {
+            if (!crystalOwnership.get() || !ownCrystals.owns(crystal.getId())) enemyCrystals++;
+        }
+        boolean freshCrystal = lastCrystalCount >= 0 && enemyCrystals > lastCrystalCount;
         int anchorBlocks = countNearbyBlocks(self.blockPosition(), 5, st -> st.is(Blocks.RESPAWN_ANCHOR));
         int bedBlocks = countNearbyBlocks(self.blockPosition(), 5, st -> st.getBlock() instanceof BedBlock);
         boolean freshAnchor = lastAnchorBlockCount >= 0 && anchorBlocks > lastAnchorBlockCount;
@@ -938,11 +1158,12 @@ public class HumanPvP extends Module {
         if (freshCrystal || freshAnchor || freshBed) {
             explosionRetreatUntil = tickCounter + 12; // fuer updateCombatMovement() unten - physischer Rueckzug
             if (autoShield.get() && !blocking) {
-                shieldUntil = tickCounter + 15; // Crystal zuendet praktisch sofort - kurzes, hartes Block-Fenster
+                // 15+5 ergibt 10 Ticks echten Schutz statt 15 Ticks "ich halte ein Schild".
+                shieldUntil = ShieldWindow.until(tickCounter, ShieldWindow.FRESH_EXPLOSION_HELD_TICKS);
                 startBlock();
             }
         }
-        lastCrystalCount = nearCrystals.size();
+        lastCrystalCount = enemyCrystals;
         lastAnchorBlockCount = anchorBlocks;
         lastBedBlockCount = bedBlocks;
 
@@ -992,8 +1213,7 @@ public class HumanPvP extends Module {
         }
 
         if (shieldBreaker.get() && target instanceof Player p && p.isBlocking()) {
-            breakShield(p);
-            currentAction = "schild-brechen";
+            if (breakShield(p)) currentAction = "schild-brechen";
         } else if (dist <= attackRange.get() && currentAimError(aim) <= aimTolerance.get() && self.hasLineOfSight(target)
             // Frisch NACH selectAura()/runAnchorTick()/runBedTick() neu berechnet statt eines am
             // Tick-Anfang zwischengespeicherten Werts: die drei rufen ihrerseits smoothLookAt() auf
@@ -1002,9 +1222,17 @@ public class HumanPvP extends Module {
             // aufs Ziel ausgerichtet" gesagt, obwohl der Bot gerade real zu einem Block daneben schaut -
             // ein Melee-Schlag mit nicht passender Blickrichtung ist ein klassisches Rotation-Anti-Cheat-
             // Flag-Muster (Grim/Vulcan).
-            && self.getAttackStrengthScale(0.5f) >= 0.95f && readyToClick()) {
-            attackMelee(target);
-            currentAction = "schlagen";
+            // AttackGate D9 ersetzt den festen >=0.95-Vergleich durch das benannte Cooldown-Gate; die
+            // 0.95 bleiben als bewusste Humanisierung dieses Profils — AttackGate.FULL_STRENGTH (1.0)
+            // waere hier die maschinelle Variante. D7/D10 bleiben bewusst aussen, siehe attackGateAllows.
+            && attackGateAllows()
+            // Die Reihenfolge zählt: Reichweite/Sicht zuerst, weil sie nichts verbrauchen. readyToClick()
+            // wuerfelt den Klickversatz und verbraucht attack-chance — faellt es danach, ist die
+            // Chance fuer diesen bereiten Schlag verbraucht, ohne dass geschlagen wurde.
+            && meleeRayAllows(target)
+            && tickGate.allows(tickVerdict, actionIndex++)
+            && readyToClick()) {
+            if (attackMelee(target)) currentAction = "schlagen";
         }
 
         if (currentAction.equals("-")) currentAction = auraMode == 0 ? "crystal" : "zielen";
@@ -1041,9 +1269,24 @@ public class HumanPvP extends Module {
         aimInitialized = false;
     }
 
+    /** Die Reaktionsspanne als Wertobjekt — RandomBetween normalisiert selbst, ein vertauschtes
+     *  Paar aus den beiden Settings darf den Kampf nicht stilllegen. */
+    private RandomBetween.RandomBetweenInt reactionRange() {
+        return new RandomBetween.RandomBetweenInt(reactionMinTicks.get(), reactionMaxTicks.get());
+    }
+
+    /** Der Klickversatz als Wertobjekt; die Untergrenze ist immer 1 Tick, damit ein bereiter Schlag
+     *  nie im selben Tick wie die letzte Aktion herausfaellt. */
+    private RandomBetween.RandomBetweenInt clickDelayRange() {
+        return new RandomBetween.RandomBetweenInt(1, clickDelayMax.get());
+    }
+
     private boolean readyToClick() {
         if (nextClickTick < 0) {
-            nextClickTick = tickCounter + 1 + rng.nextInt(3);
+            // Vor dem festen nextInt(3): der Bereich war nicht einstellbar, und genau dieser feste
+            // Versatz ist die regelmaessigste Spur im ganzen Profil — der Schlagtakt lag exakt im
+            // Cooldown-Raster. Jetzt 1..click-delay-max.
+            nextClickTick = tickCounter + clickDelayRange().sample(rng);
             return false;
         }
         if (tickCounter < nextClickTick) return false;
@@ -1166,15 +1409,17 @@ public class HumanPvP extends Module {
             return;
         }
 
-        Player self = mc.player;
-
         switch (anchorStage) {
             case 0 -> {
                 BlockPos spot = nextAnchorCandidate();
                 if (spot == null) return;
 
-                double d = Math.sqrt(self.distanceToSqr(Vec3.atCenterOf(spot)));
-                if (d > 4.0) return; // naechster Tick neuer Versuch, Baritone laeuft naeher
+                // Vanilla BLOCK_INTERACTION_REACH ist 4.5, ENTITY_INTERACTION_RANGE waere 3.0 — fuer
+                // eine Blockplatzierung gilt die 4.5. ReachPolicy benennt das, statt hier eine Zahl
+                // zu stehen, die man mit der Nahkampfreichweite verwechseln kann (Grim misst Platzierung
+                // mit derselben 4.5er-Grenze).
+                double d = mc.player.getEyePosition().distanceTo(Vec3.atCenterOf(spot));
+                if (!ReachPolicy.allows(ReachPolicy.Action.PLACE_BLOCK, d)) return; // naechster Tick neuer Versuch
 
                 smoothLookAt(Vec3.atCenterOf(spot));
                 if (currentAimError(Vec3.atCenterOf(spot)) > aimTolerance.get()) return; // erst ausrichten
@@ -1182,7 +1427,12 @@ public class HumanPvP extends Module {
                 FindItemResult anchor = InvHelper.find(Items.RESPAWN_ANCHOR);
                 if (!anchor.found()) return;
 
+                // Eine Platzierung pro Bewegungspaket (Grim MultiPlace) — faellt sie aus, wandert der
+                // Kandidat NICHT weiter, sonst verliert der Bot diese Stelle fuer immer.
+                if (!allowAction(ActionCadence.Action.PLACE)) return;
+
                 boolean swapped = InvUtils.swap(anchor.slot(), true);
+                if (swapped) cadence.onSlotChange();
                 boolean placed = BlockUtils.place(spot, anchor, false, 50);
                 if (swapped) InvUtils.swapBack();
 
@@ -1250,21 +1500,31 @@ public class HumanPvP extends Module {
         }
     }
 
-    /** Interagiert nur, wenn die (sichtbare, tempolimitierte) Rotation schon nah genug am Ziel ist. */
+    /** Interagiert nur, wenn die (sichtbare, tempolimitierte) Rotation schon nah am Ziel ist
+     *  UND die GESENDETE Rotation den Block wirklich trifft. Die zweite Bedingung fehlte vorher:
+     *  der Anchor kann seitlich versetzt liegen, und die reine currentAimError()-Pruefung sieht das
+     *  nicht — der Bot zeigte in die Naehe des Blocks und schickte trotzdem einen useItemOn auf eine
+     *  voellig andere Flaeche (Grim InvalidInteractCursor). */
     private boolean interactAnchor(FindItemResult item) {
         if (drinkingFireRes || !item.found() || (!item.isOffhand() && !item.isHotbar())) return false;
         Vec3 center = Vec3.atCenterOf(anchorPos);
         smoothLookAt(center);
         if (currentAimError(center) > aimTolerance.get()) return false;
+        if (strictReach.get() && !blockRayAllows(anchorPos)) return false;
+        if (!allowAction(ActionCadence.Action.RIGHT_CLICK)) return false;
         boolean swapped = false;
         if (!item.isOffhand() && !item.isMainHand()) {
             swapped = InvUtils.swap(item.slot(), true);
             if (!swapped) return false;
+            cadence.onSlotChange();
         }
         InteractionHand hand = item.isOffhand() ? InteractionHand.OFF_HAND : InteractionHand.MAIN_HAND;
         boolean success = mc.gameMode.useItemOn(mc.player, hand,
             new BlockHitResult(center, BlockUtils.getDirection(anchorPos), anchorPos, true)).consumesAction();
-        if (success) mc.player.swing(hand);
+        if (success) {
+            attacker.swing(hand == InteractionHand.OFF_HAND ? AttackDispatcher.OFF_HAND : AttackDispatcher.MAIN_HAND,
+                AttackDispatcher.SwingMode.CLIENT);
+        }
         if (swapped) InvUtils.swapBack();
         return success;
     }
@@ -1293,8 +1553,10 @@ public class HumanPvP extends Module {
                 BedSpot spot = nextBedCandidate();
                 if (spot == null) return;
 
-                double d = Math.sqrt(self.distanceToSqr(Vec3.atCenterOf(spot.pos())));
-                if (d > 4.0) return; // naechster Tick neuer Versuch, Baritone laeuft naeher
+                // Platzierung ist eine Blockinteraktion (4.5), kein Entity-Zugriff (3.0) — siehe die
+                // gleiche Begruendung beim Anchor.
+                double d = self.getEyePosition().distanceTo(Vec3.atCenterOf(spot.pos()));
+                if (!ReachPolicy.allows(ReachPolicy.Action.PLACE_BLOCK, d)) return; // naechster Tick neuer Versuch
 
                 // Grob in Richtung der gewuenschten Kopfteil-Ausrichtung drehen (menschliches Tempo via
                 // smoothLookAt) - der virtuelle Zielpunkt liegt 10 Bloecke in "spot.dir()".
@@ -1312,6 +1574,7 @@ public class HumanPvP extends Module {
                 // synchroner Praezisions-Snap direkt vor der Platzierung war unnoetig und widersprach
                 // dem eigenen Modul-Ziel (tempolimitierte Drehung statt Snap ueberall). Platzierung
                 // nutzt jetzt einfach die bereits erreichte, tolerierte Rotation.
+                if (!allowAction(ActionCadence.Action.PLACE)) return;
                 if (BlockUtils.place(spot.pos(), foundBed, false, 50)) {
                     bedPos = spot.pos();
                     bedStage = 1;
@@ -1331,8 +1594,13 @@ public class HumanPvP extends Module {
                 Vec3 center = Vec3.atCenterOf(bedPos);
                 smoothLookAt(center);
                 if (currentAimError(center) > aimTolerance.get()) return;
+                // Auch das Zünden ist eine Interaktion auf einer bestimmten Flaeche — der Strahl muss
+                // dort ankommen, sonst schickt der Bot einen Klick ins Leere (InvalidInteractCursor).
+                if (strictReach.get() && !blockRayAllows(bedPos)) return;
+                if (!allowAction(ActionCadence.Action.RIGHT_CLICK)) return;
 
                 BlockUtils.interact(new BlockHitResult(center, BlockUtils.getDirection(bedPos), bedPos, true), InteractionHand.MAIN_HAND, true);
+                attacker.swing(AttackDispatcher.MAIN_HAND, AttackDispatcher.SwingMode.CLIENT);
                 bedStage = 0;
                 bedCooldown = 15 + rng.nextInt(15); // Verschnaufpause statt Dauerfeuer
             }
@@ -1508,7 +1776,11 @@ public class HumanPvP extends Module {
                     double selfDmg = crystal
                         ? DamageUtils.crystalDamage(mc.player, pos)
                         : DamageUtils.anchorDamage(mc.player, pos);
-                    if (selfDmg > maxSelfDamage.get()) continue;
+                    // SelfDamageGuard: Deckel 6.0 bleibt (bewusst strenger als GodmodePvP), aber der
+                    // Deckel allein liess den Selbstmord zu — bei 4 HP und 6.0 Schadensdeckel ist
+                    // jede Platzierung unter dem Deckel und trotzdem toedlich. LETHAL wird zuerst
+                    // geprueft, unabhaengig davon, wie weit der Nutzer den Deckel stellt.
+                    if (!SelfDamageGuard.allows(selfDmg, maxSelfDamage.get(), totalHealth())) continue;
 
                     double dmg = crystal
                         ? DamageUtils.crystalDamage(target, pos)
@@ -1543,7 +1815,7 @@ public class HumanPvP extends Module {
                     if (mc.player.getBoundingBox().intersects(new net.minecraft.world.phys.AABB(cell))) continue;
 
                     double selfDmg = DamageUtils.anchorDamage(mc.player, pos);
-                    if (selfDmg > maxSelfDamage.get()) continue;
+                    if (!SelfDamageGuard.allows(selfDmg, maxSelfDamage.get(), totalHealth())) continue;
 
                     double dmg = DamageUtils.anchorDamage(target, pos);
                     if (dmg <= 0) continue;
@@ -1697,12 +1969,21 @@ public class HumanPvP extends Module {
     }
 
     /** Eigenschaden-Freigabe fuer Bett-Explosionen inkl. Selbstmord-Schutz - siehe GodmodePvP.
-     *  Wendet bedSelfDamageMultiplier an (Paper/Spigot haben oft 2-3x hoeheren Self-Damage). */
+     *  Wendet bedSelfDamageMultiplier an (Paper/Spigot haben oft 2-3x hoeheren Self-Damage).
+     *  SelfDamageGuard prueft den Selbstmord VOR dem Deckel — der Deckel ist einstellbar, der Tote
+     *  nicht; ein Nutzer, der bed-max-self-damage hochdreht, soll daran nicht sterben. */
     private boolean bedSelfDamageAcceptable(double selfDmg) {
         double adjustedDmg = selfDmg * bedSelfDamageMultiplier.get();
-        if (adjustedDmg > bedMaxSelfDamage.get()) return false;
-        double effectiveHp = mc.player.getHealth() + mc.player.getAbsorptionAmount();
-        return adjustedDmg < effectiveHp - 1.0;
+        return SelfDamageGuard.allows(adjustedDmg, bedMaxSelfDamage.get(), totalHealth());
+    }
+
+    /** Gesamtlebensenergie inkl. Absorption — die Groesse, gegen die ein Selbstmord gerechnet wird.
+     *  Absorption zaehlt mit, sonst haelt der Bot einen Absorptions-Totem fuer "Leben" und geht bei
+     *  4 HP plus 6 Absorption in einen Schaden, der ihn nicht toetet. */
+    private double totalHealth() {
+        Player self = mc.player;
+        if (self == null) return 0.0;
+        return self.getHealth() + self.getAbsorptionAmount();
     }
 
     private static boolean isBed(ItemStack stack) {
@@ -1714,10 +1995,35 @@ public class HumanPvP extends Module {
      *  @param priority Priorität der Aktion. Nur Aktionen mit Priority > PRIORITY_LOOK zählen als
      *  "echte" Aktionen für realActionThisTick (verhindert free-look Tail-Flush). */
     private boolean rotateAndRun(double yaw, double pitch, int priority, Runnable callback) {
-        Rotations.rotate(yaw, pitch, priority, rotationsThisTick > 0, callback);
+        // Meteor schreibt rohe Floats nach serverYaw/serverPitch; Grim rechnet den ggT der
+        // gesendeten Deltas. Deshalb quantisiert der Addon selbst — auf dem Gitter der aktuellen
+        // Maus-Empfindlichkeit, mit einem winzigen Jitter, damit nicht drei Rotationen hintereinander
+        // exakt dasselbe Delta haben.
+        GcdRotator.Rotation sent = quantizeForWire(yaw, pitch);
+        lastSentRotation = sent;
+        Rotations.rotate(sent.yaw(), sent.pitch(), priority, rotationsThisTick > 0, callback);
         rotationsThisTick++;
         if (priority > PRIORITY_LOOK) realActionThisTick = true;
         return true;
+    }
+
+    /**
+     * Quantisiert die Zielwinkel auf das Maus-Gitter.
+     *
+     *  <p><b>Warum der Seed aus dem Rampe-Wert kommt und nicht aus der Kamera:</b> dieses Profil
+     *  snappt nicht, sondern dreht pro Tick höchstens {@code max-turn-speed} Grad. Der Akkumulator
+     *  braucht aber die zuletzt GESENDETE Rotation als Vorwert — und das ist in diesem Profil gerade
+     *  nicht die Kamera, sondern das Ergebnis des letzten Aufrufs. Ohne Seed quantisiert Grim-blind
+     *  gegen 0, mit Kamera-Seed gegen einen Winkel, den wir nie gesendet haben; beides erzeugt Deltas,
+     *  die nicht auf einem Gitter liegen. Deshalb wird einmalig aus effectiveAimYaw/Pitch geseedet,
+     *  dem Wert, den smoothLookAt() gerade ERSTELLT hat, und danach zustandsbehaltend weitergefuihrt.
+     */
+    private GcdRotator.Rotation quantizeForWire(double yaw, double pitch) {
+        double divisor = GcdRotator.sensitivityDivisor(mc.options.sensitivity().get());
+        if (!rotationAccumulator.isSeeded()) {
+            rotationAccumulator.seed(effectiveAimYaw(), effectiveAimPitch(), divisor);
+        }
+        return rotationAccumulator.quantize(yaw, pitch, divisor, rotationJitter.get(), rng);
     }
 
     private boolean rotateAndRun(double yaw, double pitch, Runnable callback) {
@@ -1937,41 +2243,191 @@ public class HumanPvP extends Module {
         Input.setKeyState(mc.options.keyDown, tickCounter < explosionRetreatUntil);
     }
 
-    private void attackMelee(LivingEntity target) {
-        if (drinkingFireRes) return; // s.o. - Swap-Merkposten waehrend des Trinkens nicht anfassen
+    /**
+     * Der Nahkampfschlag. Gibt zurueck, ob wirklich geschlagen wurde — der Aufrufer setzt
+     * {@code currentAction} nur noch auf tatsaechliche Aktionen.
+     */
+    private boolean attackMelee(LivingEntity target) {
+        if (drinkingFireRes) return false; // s.o. - Swap-Merkposten waehrend des Trinkens nicht anfassen
+        // Eine Aktion pro Bewegungspaket: der Slot-Wechsel zur Axt und der Schlag duerfen nicht
+        // zwischen zwei anderen Aktionen liegen (PacketOrderE/F). tickGate hat der Aufrufer schon
+        // geprueft — dort VOR readyToClick(), damit der Klickversatz nicht verbraucht wird, wenn die
+        // Drosselung ohnehin sperrt. Deshalb hier nur das Ledger, kein zweiter Drossel-Versuch.
+        cadence.setUsingItem(mc.player.isUsingItem());
+        if (!cadence.request(ActionCadence.Action.ATTACK).allowed()) return false;
+
         boolean swapped = false;
         if (preferAxeMelee.get()) {
             FindItemResult axe = InvUtils.findInHotbar(itemStack -> itemStack.getItem() instanceof AxeItem);
-            if (axe.found() && !axe.isMainHand()) swapped = InvUtils.swap(axe.slot(), true);
+            if (axe.found() && !axe.isMainHand()) {
+                swapped = InvUtils.swap(axe.slot(), true);
+                cadence.onSlotChange();
+            }
         }
         boolean wasSprinting = mc.player.isSprinting();
+        // Das Schadenspaket bleibt gameMode.attack(): nur das setzt den Angriffs-Cooldown zurueck
+        // und loest die Sweep-Reichweitenpruefung auf. AttackDispatcher liefert den Animationsteil,
+        // der vorher ein nacktes player.swing() war.
         mc.gameMode.attack(mc.player, target);
-        mc.player.swing(InteractionHand.MAIN_HAND);
+        attacker.attack(target.getId(), AttackDispatcher.MAIN_HAND, AttackDispatcher.SwingMode.CLIENT);
+        // Das swapBack() hier ist die legitime Ruecksetzung und bleibt bewusst stehen.
         if (swapped) InvUtils.swapBack();
 
         if (sprintReset.get() && wasSprinting) sprintResetCooldown = 2;
+        return true;
     }
 
-    private void breakShield(Player target) {
-        if (drinkingFireRes) return; // s.o. - Swap-Merkposten waehrend des Trinkens nicht anfassen
+    /** Schildbrechen mit der Axt — dieselben Takt- und Reichweitenregeln wie der normale Schlag. */
+    private boolean breakShield(Player target) {
+        if (drinkingFireRes) return false; // s.o. - Swap-Merkposten waehrend des Trinkens nicht anfassen
         FindItemResult axe = InvUtils.findInHotbar(itemStack -> itemStack.getItem() instanceof AxeItem);
-        if (!axe.found()) return;
+        if (!axe.found()) return false;
+
+        if (!allowAction(ActionCadence.Action.ATTACK)) return false;
+        // Der Schildbrecher schiesst ohne eigene Toleranz-Pruefung — genau hier war bisher die
+        // Rotation am wenigsten garantiert, weil runAnchorTick()/runBedTick() sie zuletzt gesetzt
+        // haben. Die Validierung gegen die gesendete Rotation schliesst das Loch.
+        if (!meleeRayAllows(target)) return false;
 
         boolean swapped = InvUtils.swap(axe.slot(), true);
+        cadence.onSlotChange();
         mc.gameMode.attack(mc.player, target);
-        mc.player.swing(InteractionHand.MAIN_HAND);
+        attacker.attack(target.getId(), AttackDispatcher.MAIN_HAND, AttackDispatcher.SwingMode.CLIENT);
+        // Legitime Ruecksetzung, bleibt.
         if (swapped) InvUtils.swapBack();
+        return true;
+    }
+
+
+    /**
+     * D9 — die einzige der drei AttackGate-Sperren, die am Spielerschlag wirklich greift.
+     *
+     *  <p>Mindestanforderung an den Angriffs-Cooldown ist bewusst 0.95 und nicht
+     *  {@link AttackGate#FULL_STRENGTH}: dieses Profil ist der langsame, fehlertolerante Bot — ein
+     *  Schlag, der am Cooldown scheitert, ist Teil der Rolle, kein Fehler.
+     *
+     *  <p><b>Warum nicht {@code evaluate()} mit allen drei Gates:</b>
+     *  D7 ({@code hurtTime > 0}) ist eine Kristall-Pop-Sperre. Sie entscheidet, ob eine
+     *  Explosion im 0.5-Sekunden-Flash des Ziels ankommt — Spielerschaden blockiert sie nicht,
+     *  in diesem Zeitfenster wird nur der Knockback ignoriert. Als Melee-Sperre wuerde sie den Bot
+     *  lahmlegen: Kaempft man gegen jemanden, der selbst zuschlaegt, ist {@code hurtTime} fast
+     *  dauerhaft groesser 0, und der Bot schlaegt dann nie mehr zurueck.
+     *  D10 (Sprung-Crit) hat in diesem Profil keine Entsprechung — der Bot springt nie, um zu
+     *  critten; eine toedliche-Crit-Frage zu stellen, die nie gestellt wird, waere toter Code.
+     */
+    private static final double HUMAN_MIN_ATTACK_STRENGTH = 0.95;
+
+    private boolean attackGateAllows() {
+        return AttackGate.gateStrength(
+            mc.player.getAttackStrengthScale(0.5f), HUMAN_MIN_ATTACK_STRENGTH).allowed();
+    }
+
+    /**
+     * Prueft den Schlag gegen die WIRKLICH gesendete Rotation — nicht gegen die Kamera und nicht
+     * gegen {@code attack-range} (3.4, ueber der Grim-Schwelle 3.0005). Faellt eine von vier
+     * Pruefungen durch, wird nicht geschlagen.
+     */
+    private boolean meleeRayAllows(LivingEntity target) {
+        if (!strictReach.get()) return true;
+        GcdRotator.Rotation sent = sentRotation();
+        Vec3 eye = mc.player.getEyePosition();
+        AABB box = target.getBoundingBox();
+        ActionRayValidator.Verdict verdict = ActionRayValidator.validateAttack(
+            sent, sent, eye, ActionRayValidator.Box.of(box.getMinPosition(), box.getMaxPosition()),
+            ReachPolicy.Action.MELEE, rayWorld);
+        return verdict.valid();
+    }
+
+    /**
+     * Dasselbe fuer eine Blockinteraktion: trifft der Strahl der gesendeten Rotation den beabsichtigten
+     * Block ueberhaupt, und liegt der Cursor auf der Flaeche?
+     *
+     *  <p>Bewusst OHNE Faces-Vergleich. {@code ActionRayValidator} akzeptiert {@code null} als
+     *  "irgendeine Flaeche" — und genau das ist hier richtig: dieses Modul zielt auf die Blockmitte,
+     *  nicht auf eine bewusst gewaehlte Seite. Ein erzwungener Flaechenvergleich wuerde bei jedem
+     *  schraegen Blick auf den Anchor FACE_MISS werfen und die komplette Anker-Stufe (platzieren →
+     *  laden → zuenden) dauerhaft blockieren, weil der Anker nie fertig wuerde. Blockidentitaet und
+     *  Cursor-Lage sind die beiden Pruefungen, die Grim hier wirklich interessieren.
+     */
+    private boolean blockRayAllows(BlockPos target) {
+        if (target == null) return false;
+        GcdRotator.Rotation sent = sentRotation();
+        return ActionRayValidator.validateBlockInteraction(
+            sent, sent, mc.player.getEyePosition(), target, null, rayWorld).valid();
+    }
+
+    /**
+     * Die Rotation, die der Server in diesem Tick sieht.
+     *
+     *  <p>Hat rotateAndRun() schon etwas eingereiht, ist das deren Ergebnis — Meteors Callback laeuft
+     *  asynchron, der Winkel im Movement-Paket ist aber der zuletzt uebergebene. Sonst (keine
+     *  eingereihte Aktion) traegt der Client die Kamerarotation, und genau die zaehlt dann.
+     */
+    private GcdRotator.Rotation sentRotation() {
+        if (lastSentRotation != null) return lastSentRotation;
+        return new GcdRotator.Rotation(effectiveAimYaw(), effectiveAimPitch());
+    }
+
+    /**
+     * Misst die tatsaechliche Client-Tickdauer und uebersetzt sie in ein Urteil des Gates.
+     *
+     *  <p>Warum selbst gemessen statt aus dem Server gelesen: die Zeit zwischen zwei eigenen
+     *  TickEvent.Pre ist genau die Groesse, gegen die sich Bewegung, Rotation und Aktion verschieben
+     *  muessen — eine Ping-Anzeige waere etwas anderes.
+     */
+    private void sampleTickRate() {
+        if (!lagThrottle.get()) {
+            tickVerdict = TickRateGate.Verdict.RUN;
+            return;
+        }
+        long now = System.nanoTime();
+        double secondsSinceLastTick = lastTickNanos == 0L
+            ? TickRateGate.NOMINAL : (now - lastTickNanos) / 1.0E9;
+        lastTickNanos = now;
+        double maxHealth = mc.player != null ? mc.player.getMaxHealth() : 20.0;
+        double healthFraction = maxHealth > 0 && mc.player != null
+            ? mc.player.getHealth() / maxHealth : 1.0;
+        tickVerdict = tickGate.evaluate(secondsSinceLastTick, healthFraction);
+    }
+
+    /** Vergisst Crystals, die aus der Naehe verschwunden sind (gesprengt oder vom Chunk verschluckt).
+     *  Ohne das waechst die eigene Liste bis zur Kapazitaetsgrenze und verdraengt sich selbst. */
+    private void forgetVanishedCrystals(List<EndCrystal> visible) {
+        if (ownCrystals.snapshot().isEmpty()) return;
+        visibleCrystalIds.clear();
+        for (EndCrystal crystal : visible) visibleCrystalIds.add(crystal.getId());
+        for (Integer id : ownCrystals.snapshot()) {
+            if (!visibleCrystalIds.contains(id)) ownCrystals.forget(id);
+        }
+    }
+
+    /**
+     * Die eine Tuer fuer jede weltwirksame Aktion: Lag-Drosselung, dann Ledger.
+     *
+     *  <p><b>Warum der Zaehler bei jedem Versuch hochlaeuft und nicht nur beim Erfolg:</b>
+     *  {@code TickRateGate} entscheidet im THROTTLE-Fall ueber {@code index % n == 0}. Wuerde der
+     *  Zaehler nur bei ausgefuehrten Aktionen steigen, bliebe er bei einem ungeraden Stand fuer
+     *  immer stehen — die Drosselung wuerde dann nie wieder durchlassen und der Bot faellt unter
+     *  Lag dauerhaft still. Genau das ist der Fehler, den diese Reihenfolge verhindert.
+     *
+     *  <p>Die Reihenfolge ist Absicht: erst die Drosselung (sie ist billig und kann alles blockieren),
+     *  dann das Ledger. Ein abgelehnter Angriff darf die Aktionsmarke des Ticks nicht verbrauchen —
+     *  sonst waere der naechste, gültige Versuch schon der zweite im selben Bewegungspaket.
+     */
+    private boolean allowAction(ActionCadence.Action action) {
+        cadence.setUsingItem(mc.player != null && mc.player.isUsingItem());
+        if (!tickGate.allows(tickVerdict, actionIndex++)) return false;
+        return cadence.request(action).allowed();
     }
 
     private boolean pearlTrajectoryClear(Vec3 origin, double yaw, double pitch, Vec3 extraVel, double ticks) {
+        // Bewusst KONSERVATIV und damit bewusst gegen ExplosionScanner.segmentClear, das bei fehlender
+        // Welt "frei" liefert. Die beiden beantworten verschiedene Fragen: segmentClear sagt "steht
+        // auf dieser Strecke ein Block?", trajectoryClear sagt "darf ich damit einen Wurf ausloesen?".
+        // Eine nicht pruefbare Bahn ist keine freie Bahn — also kein Wurf ohne Welt.
         if (mc.level == null || mc.player == null) return false;
         int maxTicks = Math.max(4, Math.min(80, (int) Math.ceil(ticks) + 2));
-        return PvpMath.trajectoryClear(origin, yaw, pitch, extraVel, (from, to) -> {
-            if (from.distanceTo(to) < 1e-6) return true;
-            ClipContext context = new ClipContext(from, to, ClipContext.Block.COLLIDER,
-                ClipContext.Fluid.NONE, mc.player);
-            return mc.level.clip(context).getType() == HitResult.Type.MISS;
-        }, maxTicks);
+        return scanner.trajectoryClear(origin, yaw, pitch, extraVel, maxTicks);
     }
 
     private boolean isPearlLanding(BlockPos cell) {
@@ -1980,19 +2436,54 @@ public class HumanPvP extends Module {
             && mc.level.getBlockState(cell.below()).blocksMotion();
     }
 
+    /** Hoechster Vorhalt in Bloecken. Der Vorhalt ist eine Korrektur, kein Zielanflug: dieser Bot
+     *  soll danebenschiessen koennen. Ohne diese Klampe wuerde eine sprintende Zielsprint bei
+     *  25 Ticks Flugzeit auf ueber fuenf Bloecke Vorhalt fuehren — das waere der praezise Wurf eines
+     *  Rechners und nicht der eines Menschen. */
+    private static final double LEAD_MAX_BLOCKS = 1.2;
+
+    /**
+     * Vorhalt auf die gemessene Zielbewegung.
+     *
+     *  <p>C6: der Wurf zielte auf {@code getBoundingBox().getCenter()} — also dorthin, wo das Ziel
+     *  JETZT steht. Bei jedem laufenden Gegner kommt die Perle einen bis zwei Bloecke zu spaet an.
+     *  Richtig ist der Schnittpunkt aus Flugzeit und Zielgeschwindigkeit.
+     */
+    private Vec3 leadPoint(Vec3 center, Vec3 velocity, double ticks) {
+        if (!(ticks > 0) || Double.isInfinite(ticks)) return center;
+        double aheadX = velocity.x * ticks;
+        double aheadZ = velocity.z * ticks;
+        double ahead = Math.hypot(aheadX, aheadZ);
+        if (ahead > LEAD_MAX_BLOCKS && ahead > 1.0E-6) {
+            double scale = LEAD_MAX_BLOCKS / ahead;
+            aheadX *= scale;
+            aheadZ *= scale;
+        }
+        return center.add(aheadX, 0.0, aheadZ);
+    }
+
     private double[] solvePearlAtTarget(LivingEntity target) {
         if (target == null || mc.player == null || mc.level == null) return null;
         Vec3 from = mc.player.getEyePosition().subtract(0, 0.1, 0);
         Vec3 own = mc.player.getKnownMovement();
         Vec3 extraVel = new Vec3(own.x, mc.player.onGround() ? 0 : own.y, own.z);
         Vec3 center = target.getBoundingBox().getCenter();
+
+        // Die Flugzeit zum aktuellen Mittelpunkt, um den Vorhalt zu bestimmen. Das ist EINE
+        // Ballistikrechnung ohne Kandidatensuche und ohne Raycasts — bewusst nicht der alte Weg,
+        // bei dem der komplette Scan (Kandidatenmenge + Bahnpruefung) pro angenommenem Wurf zweimal
+        // durchlief (B11).
+        double[] nominal = PvpMath.solvePearlAim(from, center, extraVel);
+        double horizon = nominal != null && nominal.length > 2 ? nominal[2] : 0.0;
+        Vec3 aimCenter = leadPoint(center, target.getDeltaMovement(), horizon);
+
         List<Vec3> points = new ArrayList<>();
-        points.add(center);
-        points.add(center.add(0, -0.65, 0));
-        points.add(center.add(0, 0.65, 0));
+        points.add(aimCenter);
+        points.add(aimCenter.add(0, -0.65, 0));
+        points.add(aimCenter.add(0, 0.65, 0));
         for (int i = 0; i < 8; i++) {
             double angle = i * Math.PI / 4.0;
-            points.add(center.add(Math.cos(angle) * 0.7, 0, Math.sin(angle) * 0.7));
+            points.add(aimCenter.add(Math.cos(angle) * 0.7, 0, Math.sin(angle) * 0.7));
         }
         BlockPos feet = target.blockPosition();
         for (int dx = -1; dx <= 1; dx++) {
@@ -2009,7 +2500,9 @@ public class HumanPvP extends Module {
         for (Vec3 point : points) {
             double[] aim = PvpMath.solvePearlAim(from, point, extraVel);
             if (aim == null || !pearlTrajectoryClear(from, aim[0], aim[1], extraVel, aim[2])) continue;
-            double score = point.distanceTo(center);
+            // Bewertung gegen den Vorhaltepunkt, nicht gegen die aktuelle Position: sonst gewinnt
+            // konsequent der Kandidat direkt am jetzigen Mittelpunkt und der Vorhalt ist wieder weg.
+            double score = point.distanceTo(aimCenter);
             if (score < bestScore) {
                 bestScore = score;
                 best = aim;
@@ -2018,33 +2511,39 @@ public class HumanPvP extends Module {
         return best;
     }
 
+    /**
+     * Gap-Close-Wurf. Loest die Bahn EINMAL auf und reicht das Ergebnis an den Wurf weiter —
+     * vorher lief throwPearl() intern noch einmal solvePearlAtTarget() und damit die komplette
+     * Kandidatensuche ein zweites Mal fuer jeden Wurf, der dann tatsaechlich abging (B11).
+     */
     private boolean throwPearlAtTarget(LivingEntity target) {
         if (tickCounter - lastPearlScanTick < 8) return false;
         lastPearlScanTick = tickCounter;
-        return throwPearl(target, false);
+        double[] aim = solvePearlAtTarget(target);
+        if (aim == null) return false;
+        return throwPearlWithAim(aim[0], aim[1]);
     }
 
-    private boolean throwPearl(LivingEntity aimAt, boolean away) {
+    /** Fluchtwurf: nach hinten ueber den Kopf, ohne Ballistiksuche — dafuer gibt es nichts zu loesen. */
+    private boolean throwPearlAwayFrom(LivingEntity aimAt) {
+        return throwPearlWithAim(Rotations.getYaw(aimAt) + 180.0, -35);
+    }
+
+    /** Der gemeinsame Wurf: Swap, Rotation, Benutzung. Der Slot-Wechsel wird dem Ledger gemeldet,
+     *  damit eine zwischen zwei Aktionen liegende Umschaltung als SLOT_ORDER erkannt wird. */
+    private boolean throwPearlWithAim(double yaw, double pitch) {
         if (drinkingFireRes) return false;
         FindItemResult pearl = InvHelper.find(Items.ENDER_PEARL);
         if (!pearl.found() || (!pearl.isOffhand() && !pearl.isHotbar())) return false;
-        double yaw, pitch;
-        if (away) {
-            yaw = Rotations.getYaw(aimAt) + 180.0;
-            pitch = -35;
-        } else {
-            double[] aim = solvePearlAtTarget(aimAt);
-            if (aim == null) return false;
-            yaw = aim[0];
-            pitch = aim[1];
-        }
         InteractionHand hand = pearl.isOffhand() ? InteractionHand.OFF_HAND : InteractionHand.MAIN_HAND;
         boolean swapped = false;
         if (!pearl.isOffhand() && !pearl.isMainHand()) {
             swapped = InvUtils.swap(pearl.slot(), true);
             if (!swapped) return false;
+            cadence.onSlotChange();
         }
         final boolean didSwap = swapped;
+        // hand ist effectively final, der Lambda-Kontext braucht keinen Alias.
         rotateAndRun(yaw, pitch, PRIORITY_PEARL, () -> {
             if (mc.gameMode.useItem(mc.player, hand).consumesAction()) lastPearlTick = tickCounter;
             if (didSwap) InvUtils.swapBack();
@@ -2052,6 +2551,13 @@ public class HumanPvP extends Module {
         return true;
     }
 
+    /** Rettungswurf senkrecht nach unten — mit Streuung (C9).
+     *
+     *  <p>Ein exakt fester 80-Grad-Winkel ist das auffaelligste Muster im ganzen Modul: der Bot
+     *  wuerde bei jedem Sturz pixelgleich werfen. PitchVariance liefert den gestreuten Winkel und
+     * faellt bei einem 0-Setting auf eine Sicherheitsspanne zurueck, damit der Rettungswurf nie
+     * ungestreut feuert — ein 0-Wert darf nicht dazu fuehren, dass das Feature ganz ausfaellt.
+     */
     private boolean throwPearlDown() {
         if (drinkingFireRes) return false;
         FindItemResult pearl = InvHelper.find(Items.ENDER_PEARL);
@@ -2061,14 +2567,21 @@ public class HumanPvP extends Module {
         if (!pearl.isOffhand() && !pearl.isMainHand()) {
             swapped = InvUtils.swap(pearl.slot(), true);
             if (!swapped) return false;
+            cadence.onSlotChange();
         }
         final boolean didSwap = swapped;
-        rotateAndRun(mc.player.getYRot(), 80, PRIORITY_PEARL, () -> {
+        // s.o.: hand ist effectively final.
+        double pitch = PitchVariance.apply(PEARL_DOWN_PITCH, pearlDownVariance.get(), rng);
+        rotateAndRun(mc.player.getYRot(), pitch, PRIORITY_PEARL, () -> {
             if (mc.gameMode.useItem(mc.player, hand).consumesAction()) lastPearlTick = tickCounter;
             if (didSwap) InvUtils.swapBack();
         });
         return true;
     }
+
+    /** Basiswinkel des senkrechten Rettungswurfs. Bewusst 80 statt 90 Grad: exakt 90 waere exakt der
+     *  Winkel, den PitchVariance selbst als "maschinenperfekter Fingerzeig" benennt. */
+    private static final double PEARL_DOWN_PITCH = 80.0;
 
     // ---------- Verfolgung ----------
 
@@ -2115,8 +2628,15 @@ public class HumanPvP extends Module {
         if (!mc.level.getBlockState(feet).isAir()) return;
         if (!mc.level.getBlockState(feet.below()).blocksMotion()) return;
 
+        // Platzierung, also Blockinteraktion 4.5 — der Cobweb muss wirklich erreichbar sein, sonst
+        // sendet BlockUtils einen useItemOn, den der Server als Out-of-Range verwirft.
+        if (!ReachPolicy.allows(ReachPolicy.Action.PLACE_BLOCK,
+            mc.player.getEyePosition().distanceTo(Vec3.atBottomCenterOf(feet)))) return;
+
         FindItemResult web = InvHelper.find(Items.COBWEB);
-        if (web.found() && BlockUtils.place(feet, web, true, 50)) lastTrapTick = tickCounter;
+        if (!web.found()) return;
+        if (!allowAction(ActionCadence.Action.PLACE)) return;
+        if (BlockUtils.place(feet, web, true, 50)) lastTrapTick = tickCounter;
     }
 
     // ---------- Inventar ----------

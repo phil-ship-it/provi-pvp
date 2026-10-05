@@ -42,7 +42,28 @@
       "ghost-block-mitigation": true,
       "min-support-delay": 2,
       "instant-mode": false,
-      "kill-aura": false
+      "kill-aura": false,
+      "_hardening": "donutsmp ist der einzige der drei Zielserver mit einer Anti-Cheat in Spiel. 2b2t betreibt eine eigene, bewegungsorientierte AC und erlaubt Cheats ausdruecklich, 5b5t hat gar keine In-Game-AC - dort waere jede Haertung umsonst investierte Reaktionszeit. Deshalb liegt sie ausschliesslich in diesem Profil. Die Schluessel muessen in der echten Gruppe liegen: ein frei erfundener Gruppen-Key wie 'hardening' wuerde stillschweigend ins Leere laufen.",
+      "gcd-rotation": true,
+      "gcd-jitter-steps": 1,
+      "ray-validate-actions": true,
+      "enforce-reach": true,
+      "solve-place-cursor": true,
+      "score-crystals": true,
+      "crystal-min-pick-damage": 3.0,
+      "crystal-min-tick-age": 0,
+      "gate-attacks": true,
+      "min-attack-strength": 0.9,
+      "crystal-tool-check": true,
+      "spear-aware": true,
+      "per-entity-knockback": true,
+      "slow-falling-plan": true,
+      "dispatch-attacks": true,
+      "action-cadence": true,
+      "dtap-delay-min": 28,
+      "dtap-delay-max": 44,
+      "anchor-delay-min": 5,
+      "anchor-delay-max": 9
     },
     "defense": {
       "fast-totem": true,
@@ -68,7 +89,9 @@
       "multi-target-alarm": true,
       "trap-mode": 1,
       "anti-escape-trap": true,
-      "max-self-damage": 10.0
+      "max-self-damage": 10.0,
+      "lag-throttle": true,
+      "lag-throttle-every": 2
     },
     "inventory": {
       "inv-manager": true,

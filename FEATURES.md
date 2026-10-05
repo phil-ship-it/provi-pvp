@@ -1,265 +1,598 @@
-# Features & Settings Reference
+# ProviPvP — Feature-Referenz
 
-Every behavior listed here is a real, individually toggleable Meteor setting under the module's ClickGUI entry —
-nothing described in the [README](README.md) is hardcoded. Defaults are the values the module ships with.
+**Stand: 1. Oktober 2026.** Dieses Dokument ist aus dem Quellcode erzeugt, nicht aus einer früheren
+Fassung. Jede Setting-Namen-Angabe wurde gegen die `.name("…")`-Aufrufe im Code geprüft.
 
-## GodmodePvP (`.pvp`)
+Zahlenstand, maschinell aus den Moduldateien gezählt:
 
-The ClickGUI groups are ordered as **Angriff & Auras**, **Schutz & Recovery**, **Stadt & Traps**, **Navigation**, **Inventar**, **Turtle-Master**, **Perlen & Flucht**, **Heilung**, **QA & Erweitert**, and **Mobs**. The default group contains the core target and prediction thresholds.
+| Modul | Settings |
+|---|---:|
+| GodmodePvP | 117 |
+| HumanPvP | 56 |
+| WindChargeModule | 8 |
+| SlowFallingAura | 7 |
+| SpearModule | 7 |
+| TrainingDummy | 4 |
+| Auto5b5tDupe | 3 |
+| PacketLogger | 3 |
+| MacroTriggerModule | 2 |
+| PacketFilter | 2 |
+| AutoArmor | 1 |
+| ExploitGuard | 1 |
+| BrandSpoof | 1 |
+| ProviClickGui | 7 |
+| **Summe Module** | **219** |
+| ProviDebugOverlay (HUD) | 7 |
+| PvpSessionStats (HUD) | 3 |
 
-### General
+> **Korrektur einer alten Falschaussage.** Eine frühere Fassung dieses Dokuments behauptete, die beiden
+> Kampfmodule hätten „denselben Funktionsumfang". Das ist falsch: GodmodePvP hat **117** Settings,
+> HumanPvP **56**. Genau **72** Setting-Namen gibt es nur in GodmodePvP. Die vollständige, geprüfte
+> Aufteilung dieser 72 steht in [Setting-Lücke HumanPvP](#setting-lücke-humanpvp).
 
-| Setting | Default | Description |
-|---|---|---|
-| `follow` | `true` | Automatically pursues the target with Baritone once it is within `engage-distance`, or when `pursue-stationary-targets` accepts a stationary target. |
-| `follow-range` | `40` | Maximum distance at which a player is even recognized/watched as a target. |
-| `engage-distance` | `16` | Moving targets are only pursued within this distance. Beyond it (up to `follow-range`) the bot just watches, preventing it from sprinting across the map the instant it is activated. Engagement is sticky: a hard knockback that briefly throws the distance back out mid-fight will not cause it to give up, and once engaged it keeps fighting the *same* target (by identity, not just distance) until it dies, leaves, or goes out of `follow-range` — a third player briefly wandering closer no longer steals the fight. |
-| `pursue-stationary-targets` | `true` | Pursues a stationary target anywhere inside `follow-range`, including after a knockback has separated the fight. Moving targets retain the `engage-distance` cold-start brake. |
-| `attack-range` | `3.6` | Maximum distance for melee hits (pre-hit, melee-fallback, pop-burst). Some servers/anti-cheats tolerate more or less than the vanilla-ish default. |
-| `smart-targeting` | `true` | Prefers an isolated target (no other player within `backup-range`) over pure distance; a periodic 40-tick re-evaluation can switch to a safer candidate while engaged, with hysteresis preventing tick-by-tick flapping. |
-| `backup-range` | `10.0` | How close another player has to be to a candidate target to count as "has backup" for `smart-targeting`. |
-| `pop-threshold` | `8.0` | HP drop counted as a totem pop. |
-| `prediction-ticks` | `5` | How far ahead enemy movement is predicted for attacks. |
-| `ignore-fire` | `true` | Walks straight through ground fire in melee range instead of pathing around it (Baritone otherwise treats fire as hard-impassable). |
-| `free-look` | `false` | Silent rotations: the bot still aims/turns correctly for attacks, placements, and target tracking (the outgoing packet carries the correct look direction), but your own camera stays free to look around. **Off by default** — separate rotation packets with no matching camera movement are one of the most classic anti-cheat detection signatures (Vulcan/Grim/Matrix/NCP all have explicit rotation checks for exactly this), and can cause movement corrections/rubberbanding on servers with active anti-cheat. The continuous target-tracking/circle-strafe look (outside an actual attack/placement) now yields the shared per-tick rotation slot to any real combat action instead of silently claiming it first — previously, with `free-look` on, this cosmetic tracking could beat a same-tick pearl throw, Anchor/Bed interaction, or Crystal placement to Meteor's rotation queue and make that action fire with the *previous* tick's stale look direction instead of its own. |
+---
 
-### Combat
+## 1. Aufbau
 
-| Setting | Default | Description |
-|---|---|---|
-| `smart-auras` | `true` | Chooses Crystal or Anchor based on a real damage calculation. With zero End Crystals AND zero (Respawn Anchor + Glowstone) in the inventory, skips the whole damage/position simulation and forces melee-only instead of endlessly re-simulating and toggling Meteor's CrystalAura for items that don't exist (that dead-weight simulation was itself a source of visible movement stutter). Turning this **off** now correctly falls back to simple always-Crystal mode instead of freezing all explosion combat — it used to leave the internal aura state stuck at its "nothing decided yet" initial value forever (since only this calculation ever advanced it), silently disabling Crystal/Anchor/Bed placement entirely and dropping to pure melee. |
-| `anchor-mode` | `1` | `0` = automatic (always max damage), `1` = use Anchor even on a damage tie, `2` = off. |
-| `use-anchors` | `true` | Allow Anchors at all (costs 1 Glowstone per detonation). |
-| `use-beds` | `false` | Bed Aura: places and detonates beds as an explosive (damage value 5.0, same as Anchor). Only works outside the Overworld (Nether/End — e.g. portal camping on 5b5t); the client can't verify this ahead of time, only the server decides. Off by default so beds aren't wasted in the Overworld (where using one just sleeps/sets your spawn point instead of exploding). When both an Anchor and a Bed are viable, whichever deals more damage wins — Anchor only needs 1 Glowstone, so it's usually the more efficient default on an exact tie. |
-| `no-delay` | `false` | Instant mode: strips out every remaining artificial wait — Anchor/Bed placement and maintenance pauses, D-Tap cooldown, all ender pearl throw cooldowns. Pure speed over caution: can burn through pearls/Anchors/Beds faster than the server can actually process the resulting actions. Two exceptions stay active regardless — the aura-switch hysteresis and the `min-support-delay` floor — because those aren't caution, they're technical requirements: removing them broke Crystal placement's sequence-number prediction entirely (0 damage from any source, confirmed in testing) rather than just making things faster. |
-| `pre-hit` | `false` | Melees the target right before the explosion for extra damage. Off by default — vanilla's attack cooldown (~0.5-0.6s depending on weapon) is pure wasted time against an Anchor/Crystal barrage; without this extra hit, Anchor and Crystal can fire back-to-back as fast as the server can process them. |
-| `melee-fallback` | `true` | Melees normally whenever no explosion is about to land, including when a valid Anchor/Crystal/Bed candidate is temporarily unavailable. Keeping this on prevents a close-range target from being ignored during a short geometry or resource gap; `pre-hit` is the separate redundant hit during a confirmed explosion. |
-| `prefer-axe-melee` | `true` | Automatically swaps to the axe for melee hits (axe-swap meta). |
-| `shield-breaker` | `true` | Swaps to the axe against a blocking target. |
-| `melee-strafe` | `true` | Faces the target and circle-strafes in melee — harder to hit, varies the explosion angle. Direction switches on a randomized interval, not a fixed period. |
-| `sprint-reset` | `true` | W-tap: briefly cancels and re-enables sprint before every melee hit so *every* hit gets the sprint-knockback bonus, not just the first of a sprint sequence. |
-| `track-target` | `true` | Keeps looking at the target's predicted position outside melee-strafe range, instead of only during a single aim action. |
-| `crit-jump` | `true` | Jumps right before swinging so the hit lands while falling (+50% damage) — the same thing real top-tier players do. |
-| `d-tap` | `true` | After a knockback hit, places obsidian in the predicted flight path and detonates two Crystals spaced at the hit-invulnerability window, for a fast double-totem-pop. Candidate floor spots must be within the bot's own reach (4.5 blocks), not just near the target's predicted position — on a hard vertical/horizontal launch the prediction can drift well past that, and without this check the bot occasionally built an obsidian pillar it couldn't actually reach to follow up on, leaving it standing there doing nothing. |
-| `use-mace` | `true` | Uses the Mace over axe/sword for finishing hits while falling (Smash Attack bonus). |
-| `elytra-combat` | `true` | Firework boost when gliding speed drops too low during elytra combat. |
-| `zero-delay` | `true` | Sets CrystalAura placement/break delays to 0 and enables Fast-Break. The attack uses the real server-provided End-Crystal entity ID from `EntityAdded`; the client does not guess an ID before the server has created the entity. |
-| `ghost-block-mitigation` | `true` | Tracks own block placements until a server block update arrives. After two round trips, a still-only-client prediction is removed locally and Baritone's world cache is reloaded; no fabricated network desync packet is sent. |
-| `min-support-delay` | `1` | Minimum tick gap between an obsidian support block and the following crystal placement. This is the current Meteor-compatible floor; only raise it on high-latency or cross-version connections where block prediction desyncs. |
-| `kill-aura` | `false` | Also runs Meteor's KillAura for melee. Mob filter is shared with the `Mobs` group. Off by default since the built-in axe-melee logic already covers it. |
-| `escape-pearl` | `true` | Pearls away at low HP with an enemy nearby. |
-| `knockback-pearl` | `true` | Pearls straight down for a controlled landing whenever the bot is in real danger from a fall: either just launched by knockback (hit or explosion) with strong upward velocity, or generally airborne and already 3+ blocks into a fall (the same height Minecraft itself starts counting fall damage from) — not just the post-hit case, so walking off a ledge or getting launched by something else entirely still gets caught. |
-| `anti-anchor-disengage` | `true` | Counts damaging Anchor explosions over a 20-tick window. Three or more while the bot stands in an open 1×1 hole trigger a steep pearl escape toward a point 2.5 blocks above the feet. |
-| `explosion-floor-snap` | `true` | Uses a prior vertical-velocity sample. When an explosion adds more than 0.45 vertical velocity, a same-tick pearl release is solved toward a real floor ahead; the legacy fall-protection pearl remains 80°. |
+```
+ProviPvPAddon
+  ├── Systeme
+  │     └── PvpBrokerSystem          tickt den Broker VOR allen Modulen
+  ├── Module (14)
+  │     ├── GodmodePvP ─────────┐
+  │     ├── HumanPvP ───────────┤  Kampfprofile
+  │     ├── SpearModule ────────┤  Spezialmodule
+  │     ├── WindChargeModule ───┤  (DEFERS gegen die Kampfprofile)
+  │     ├── SlowFallingAura ────┘
+  │     ├── ProviClickGui, AutoArmor, Auto5b5tDupe, TrainingDummy
+  │     └── PacketLogger, PacketFilter, ExploitGuard, BrandSpoof, MacroTriggerModule
+  ├── HUD
+  │     ├── ProviDebugOverlay      RSHIFT+D
+  │     └── PvpSessionStats
+  └── Befehle: /pvp, /hpvp, /profile, /proxy, /nbt
+```
 
-### Defense
+Reine Entscheidungslogik liegt in headless-testbaren Klassen ohne `mc.*`-Bezug. Die Module selbst
+sind dünn: sie sammeln Weltzustand, rufen eine Entscheidungsklasse und senden Pakete.
 
-| Setting | Default | Description |
-|---|---|---|
-| `fast-totem` | `true` | Checks the offhand every tick and refills a totem the instant it's used. Keeps working while the Meteor ClickGUI or your own inventory (E) is open — only pauses while a genuine foreign container (chest, ender chest, anvil, shulker box, ...) is open, since that GUI remaps inventory slot IDs and blind swaps there could move the wrong item. If no totem is left anywhere, this is detected the same tick (not on the next periodic inventory scan) and reported once in chat. |
-| `auto-mend` | `true` | Repairs armor with XP (Meteor's AutoMend). |
-| `auto-eat` | `true` | Eats automatically (Meteor's AutoEat) when hunger is low — without enough saturation Minecraft itself disables sprinting, which breaks sprint-reset knockback and Baritone's movement speed. |
-| `no-fall` | `true` | Prevents fall damage (Meteor's NoFall) — needed because Baritone here is deliberately tuned for aggressive jump/cliff pursuit (up to 20 blocks of fall height without water). |
-| `auto-shield` | `true` | Briefly raises the shield when an enemy Crystal is freshly placed nearby, reducing explosion damage. |
-| `anti-rubberband` | `true` | Detects a server position correction and drops the stale path instead of fighting it. A moderate jump only counts outside of combat (normal explosion knockback shouldn't trigger it); a genuinely extreme jump triggers regardless, since real knockback rarely covers that much distance in one tick and rubberbanding is most common during actual Crystal/Anchor fights. |
-| `respect-friends` | `true` | Avoids explosions that would also hit a player on the Meteor friends list. |
-| `hole-awareness` | `true` | Looks for a nearby one-block-deep, open-topped hole in close combat and uses it as a fighting position instead of standing in the open. If the bot itself is enclosed or the target leaves the old hole, it first scans for an open escape cell and then resumes direct pursuit instead of keeping the stale combat goal. |
-| `height-advantage` | `true` | Prefers a position lower than the target — your own explosions deal more damage from there, the enemy's deal less. Once a spot is chosen it's held onto until the target moves more than 2 blocks or the spot stops being valid, instead of recalculating from scratch every tick — without that stickiness, tiny movement noise (a slope half-step, target strafing) could flip the choice between "go lower" and "just walk closer" several times a second, spamming Baritone with a new path every tick (visible stutter, and hits/explosions landing unreliably since the bot never settled into either option). |
-| `avoid-lava` | `true` | Skips crystal/anchor placement spots directly next to lava (Nether lakes, bedrock pools) — prevents self-ignition and unleashing a flood of lava after the explosion. |
-| `auto-fire-res` | `true` | Drinks a Fire Resistance potion automatically whenever you're in the Nether and don't already have one active — makes lava contact, fire, and burning explosion damage irrelevant. Runs independently of whether a fight is happening. While a drink is in progress (up to 2s) or the shield is actively blocking, the other one is now prevented from starting, and every other action that briefly swaps hotbar items (melee axe/mace swap, shield-break, Anchor/Bed interaction, Crystal placement, pearl throws, elytra firework boost) skips itself for that tick instead of overwriting the drink's held swap-back slot — previously any of those firing mid-drink could leave the bot stuck holding the wrong item once the drink finished. |
-| `build-cover` | `true` | Places obsidian to close an open side when no natural hole is nearby. Never places it in the direction facing the target — a straightforward-sounding "wall myself in" used to occasionally brick the bot's own line of sight to the enemy right in the middle of a fight (no melee, no explosions, just standing there), if the only open neighboring block happened to be the one between the bot and its target. |
-| `peek-tactic` | `true` | Crouches in cover while nothing is actively happening, only standing up briefly to attack. |
-| `retreat-threshold` | `true` | Breaks off only when totems are below 2 and no usable Crystal, Anchor/Glowstone, or dimension-valid Bed supply remains. |
-| `retreat-on-losing-trade` | `true` | Pearls away if the bot itself was just hard-hit (popped) but its own Crystal/Anchor explosions haven't damaged the target in a while — recognizes a losing trade instead of continuing pointlessly. |
-| `multi-target-alarm` | `true` | Warns and becomes briefly more cautious when a second player shows up nearby during a fight. |
-| `insta-city` | `true` | Breaks reachable enemy Obsidian surround with a hotbar pickaxe, waits for the authoritative block update, then places a Crystal into the confirmed gap. Vanilla survival cannot legally turn a hand-started break into a final-tick pickaxe break. |
-| `anti-escape-trap` | `true` | Detects a true four-sided 1×1 cell one to three blocks along the target's movement vector and fills it with Cobweb, falling back to Obsidian. The Bot's own hitbox and the player's current body are excluded. |
-| `turtle-master-defense` | `true` | Below the health threshold, moves a Crossbow already loaded with a Turtle-Master Tipped Arrow into the offhand, then fires it at the player's own feet in one use/release callback. |
-| `turtle-master-health` | `0.4` | Maximum-health fraction below which Turtle-Master defense is eligible. |
-| `turtle-master-cooldown` | `10` | Ticks between downward Turtle-Master shots. |
-| `trap-mode` | `1` | Cobweb at the target's feet to slow them: `0` = off, `1` = only when the target is close (≤6 blocks), `2` = always. |
-| `max-self-damage` | `12.0` | Maximum self-damage tolerated per placement spot. |
-
-### Inventory
-
-| Setting | Default | Description |
-|---|---|---|
-| `inv-manager` | `true` | Every 20 ticks, keeps combat resources in the hotbar, first evicting ballast such as useless Overworld beds or dimension-invalid anchors. It restocks Crystals, usable Anchors/Glowstone, Pearls, Obsidian, Cobweb, dimension-valid Beds, healing potions, and Turtle-Master arrows. |
-| `min-crystals` | `32` | Restock threshold for Crystals. |
-| `min-anchors` | `4` | Restock threshold for Respawn Anchors. |
-| `min-glowstone` | `8` | Restock threshold for Glowstone (Anchor fuel). |
-| `min-pearls` | `8` | Restock threshold for Ender Pearls. |
-| `min-obsidian` | `16` | Restock threshold for Obsidian (D-Tap, emergency cover). |
-| `min-web` | `4` | Restock threshold for Cobweb (trap). |
-| `min-beds` | `4` | Restock threshold for Beds (Bed Aura). Works correctly regardless of the item's actual max stack size — reads it dynamically instead of assuming vanilla's default, so it's unaffected by servers that raise beds to a 64-stack (e.g. 5b5t). |
-| `min-heal-potions` | `8` | Restock threshold for Splash Healing Potions. Same stack-size-agnostic handling as `min-beds`. |
-
-### Mobs
-
-| Setting | Default | Description |
-|---|---|---|
-| `attack-mobs` | `false` | Attacks mobs when no player is in range. |
-| `mob-types` | — | Which mob types get attacked (also passed through to KillAura/CrystalAura). |
-| `mob-range` | `10` | Range for mob attacks. |
-
-### Ender Pearls
-
-| Setting | Default | Description |
-|---|---|---|
-| `pearl-gapclose` | `true` | Pearls toward the target when it's too far away to melee-hit or deal damage. The threshold is coupled to `attack-range` (never lower than `attack-range + 0.5`); the bot scans the predicted hitbox, nearby offsets, and standable landing cells, then keeps only ballistic solutions whose sampled path is clear of current blocks. |
-| `pearl-min-dist` | `4.0` | Distance floor for gap-close Pearls. The effective threshold is `max(pearl-min-dist, attack-range + 0.5)`; the environment scan may choose a nearby open landing point, but never fires a solution whose path is blocked. |
-
-### Healing
-
-| Setting | Default | Description |
-|---|---|---|
-| `heal-potions` | `true` | Throws a Splash Potion of Healing/Strong Healing at your own feet the instant fresh damage is detected — it shatters on the ground right there and heals immediately. Works regardless of combat/engage state, so it also covers fall/fire/environmental damage, not just hits taken mid-fight. Needs a Splash Healing potion in inventory (works fine as a 64-stack on servers with expanded stack sizes). |
-| `heal-min-damage` | `3.0` | HP loss accumulated over the current rolling window (up to 8 ticks) must reach this before a potion is thrown. After a qualifying hit, healing can continue until maximum health is reached, subject to the cooldown and shared slot mutex. |
-| `heal-cooldown` | `12` | Minimum ticks between two thrown potions — stops a single multi-hit combo from burning several potions at once, without stalling badly under sustained pressure (multiple pops in quick succession). Skipped entirely while actively shield-blocking or drinking Fire Resistance, since both hold Meteor's shared hotbar-swap-back slot for several ticks — throwing a potion in the middle would silently corrupt that slot and leave the module stuck on the wrong item once the block/drink ends. |
-
-## HumanPvP (`.hpvp`)
-
-HumanPvP uses the parallel ClickGUI order **Angriff & Auras**, **Schutz & Recovery**, **Navigation**, **Inventar**, **Human-Profil**, **Perlen & Flucht**, **Heilung**, and **QA & Erweitert**. Its dependency ownership and action-slot checks are stricter than the shared Meteor module defaults, so main-inventory resources are not counted as immediately actionable.
-
-A deliberately slower, imperfect profile built to look like manual play. Shares the same Crystal/Anchor/defense
-core as `GodmodePvP`, with these differences:
-
-| Setting | Default | Description |
-|---|---|---|
-| `follow-range` | `20` | Smaller detection range than `GodmodePvP` by default. |
-| `engage-distance` | `14` | Same sticky-engagement behavior as `GodmodePvP`, tuned to a shorter range. |
-| `attack-range` | `3.4` | Same as `GodmodePvP`'s `attack-range`, tuned slightly shorter by default. |
-| `smart-targeting` / `backup-range` | `true` / `10.0` | Same isolated-target preference as `GodmodePvP`, with periodic re-evaluation while engaged rather than a permanently frozen first choice. |
-| `free-look` | `false` | Same silent-rotation behavior as `GodmodePvP` — off by default for the same anti-cheat-detection reason. The continuous smoothed look-tracking now yields the shared per-tick rotation slot to any real action (pearl throw, Anchor interaction) instead of silently claiming it first, same fix as `GodmodePvP`. |
-| `reaction-min` / `reaction-max` | `3` / `9` ticks | Randomized reaction delay before engaging a newly acquired target — no instant snap-to-target. |
-| `attack-chance` | `0.9` | Probability that a "ready" hit is actually thrown, simulating human misclicks. |
-| `aim-tolerance` | `4.0°` | Aim tolerance before a hit or placement is executed. |
-| `max-turn-speed` | `18.0°/tick` | Maximum camera rotation per tick — human-paced turning instead of an instant snap. |
-| `max-self-damage` | `6.0` | More conservative self-damage cap than `GodmodePvP`'s `12.0`. |
-| `anti-rubberband` | `true` | Detects a server position correction and drops the stale path instead of fighting it. A moderate jump only counts outside of combat (normal explosion knockback shouldn't trigger it); a genuinely extreme jump triggers regardless, since real knockback rarely covers that much distance in one tick and rubberbanding is most common during actual Crystal/Anchor fights. |
-| `pearl-min-dist` | `10.0` | Higher default than `GodmodePvP`'s `4.0` — still a floor on top of `attack-range`; the Human profile uses the same environment-scanned ballistic candidates, but reacts with human-like timing. |
-
-All other Combat/Defense/Inventory/Pearl/Healing settings mirror `GodmodePvP` (same names, same purpose, same
-defaults) unless listed above — including `use-beds` and the three `heal-*` settings. One mechanical difference:
-placing a bed needs an exact 90°-aligned facing (for the head-part direction), so unlike every other action in
-this module it uses one brief, precise rotation snap instead of the usual gradual human-paced turn, regardless
-of `free-look`. A brief target loss/switch no longer abandons an already-placed-and-loading Anchor (the internal
-stage no longer resets to "searching" on engagement loss) — it now finishes charging/detonating the Anchor once
-a target reappears, the same "finish what's already started" behavior the Bed sequence already had.
-
-## TrainingDummy
-
-Melee hits use the real vanilla knockback formula (`LivingEntity#knockback`) instead of arbitrary sliders:
-base strength 0.4, existing velocity halved rather than replaced (so a hit mid-knockback blends instead of
-overriding), vertical boost only applied while the dummy is on the ground (airborne hits keep the existing
-fall speed, exactly like a real player), and both a sprint bonus (sprint roughly doubles knockback per the
-Minecraft Wiki) and the attacker's actual Knockback-enchant level are taken into account.
-
-| Setting | Default | Description |
-|---|---|---|
-| `health` | `20` | Dummy's HP — can be changed live while it's running. |
-| `real-explosion-hits` | `true` | The dummy also reacts to nearby Crystal/Anchor/Bed explosions with real damage and knockback, not just melee hits — detected by the Crystal/Anchor/Bed disappearing between two ticks (an Anchor's charge dropping counts too). Damage comes from Meteor's own `DamageUtils` (the same real line-of-sight-aware calculation GodmodePvP/HumanPvP use for their own targeting), and the knockback direction/strength is derived from that same calculation — the dummy launches further from a closer, more exposed hit, same as a real player would. |
-| `auto-respawn` | `true` | Respawns the dummy when it dies or disappears. |
-| `invincible` | `false` | HP never reaches 0 — no despawn/respawn needed, uninterrupted practice. |
-
-## AutoArmor
-
-Automatically equips the strongest available armor piece per slot from your entire inventory. Scores candidates
-by their real `Attributes.ARMOR`/`ARMOR_TOUGHNESS` attribute value (armor points weighted 10x over toughness as
-a tiebreaker), not by guessing from material name - so an enchanted Diamond chestplate correctly beats an
-unenchanted Netherite one if it actually protects more.
-
-| Setting | Default | Description |
-|---|---|---|
-| `announce` | `true` | Chats when an armor piece gets upgraded. |
-
-## Auto5b5tDupe
-
-Ported from [mmvanheusden/meteor-5b5t-addon](https://github.com/mmvanheusden/meteor-5b5t-addon) (GPL-3.0), which
-targeted MC 1.21.5/Yarn mappings - rewritten against 26.2/Mojang mappings here since the recipe-book API was
-completely redesigned between those versions. Source was read in full before porting: no network calls, no
-third-party auth, no telemetry - a pure crafting exploit (drop the held item, then send a craft-request packet
-that references the ingredient in the gap before the server processes the drop).
-
-**Requires an actual Crafting Table (`CraftingMenu`) open, not the player's own 2x2 inventory grid** - the race
-condition lives in the table's 3x3 slot-shifting logic, which differs from the simpler 2x2 path and doesn't
-trigger it there. The module opens a nearby table automatically, or places one from your inventory if none is
-nearby, before attempting the exploit.
-
-**Original last verified working 19/05/2025 - over a year old. Whether 5b5t has since patched this race condition
-is unverified. Test with `single` on a worthless item before relying on it.**
-
-| Setting | Default | Description |
-|---|---|---|
-| `recipe` | `Stick` | Which recipe to exploit (`Stick` or `CraftingTable`). Needs ingredients for at least 2 in inventory. |
-| `single` | `false` | Just the raw exploit attempt (no rotation/drop automation, no auto-opening a table) - for testing whether the gap is even still open. Requires a Crafting Table to already be open. |
-| `rotation-mode` | `Silent` | `Silent` sends a rotation packet without moving your camera; `Client` actually snaps your pitch down and back. |
-
-## PacketLogger, BrandSpoof, ExploitGuard, PacketFilter, MacroTrigger
-
-Small, standalone debug/OpSec modules - honestly scoped, no silent-fail claims.
-
-| Module | Setting | Default | Description |
-|---|---|---|---|
-| PacketLogger | `log-receive` | `true` | Logs incoming packet class names to chat. Pure observation. |
-| PacketLogger | `log-send` | `false` | Logs outgoing packet class names to chat. |
-| PacketLogger | `filter` | (empty) | Only logs packet class names containing this text (case-insensitive). Empty = everything. |
-| BrandSpoof | `spoofed-brand` | `vanilla` | Client brand reported to the server instead of `fabric` — the simplest automated modded-client detection. Doesn't defend against behavioral analysis. |
-| ExploitGuard | `max-component-depth` | `200` | Cancels incoming chat packets whose text-component tree nests deeper than this — a known client-crash vector via malicious server broadcasts. Can't protect against crashes during packet decoding itself, only validly-decoded but pathological content. |
-| PacketFilter | `blocked-outgoing` | (empty list) | Outgoing packets whose class name contains any of these texts (case-insensitive) are never sent to the server. |
-| PacketFilter | `announce` | `true` | Chats when a packet gets blocked. |
-| MacroTrigger | `triggers` | (empty list) | One entry per line, format `trigger=>command` - e.g. `gg=>.pvp off`. Runs the Meteor command whenever an incoming chat message contains the trigger text. Chat-only; no packet- or inventory-state triggers (would need dedicated infrastructure this project doesn't have yet). |
-| MacroTrigger | `announce` | `true` | Chats when a macro fires. |
-
-
-## ProviClickGui
-
-ClickGUI-Overhaul. The module only *carries the settings* - it does not have to be enabled, the
-mixins read the values directly. `enabled` off = Meteor's original ClickGUI, unchanged.
-
-| Module | Setting | Default | Description |
-|---|---|---|---|
-| ProviClickGui | `enabled` | `true` | Master switch. Off = Meteor's original ClickGUI including its search. |
-| ProviClickGui | `settings-pane` | `true` | Persistent settings pane on the right. Right click on a module selects it into the pane instead of opening a separate screen; the pane's *Volle Ansicht* button still opens Meteor's full module screen. |
-| ProviClickGui | `pane-width` | `240` | Minimum width of the pane. Wider settings texts widen it further - Meteor windows size to their content. |
-| ProviClickGui | `smart-search` | `true` | Replaces Meteor's search. Meteor sorts *all* modules by raw Levenshtein distance and filters nothing, which is why a better match can end up hidden behind unrelated ones. This filters and ranks instead. |
-| ProviClickGui | `search-descriptions` | `true` | Also searches setting *descriptions*, not just names; hits are annotated `Beschreibung: xyz`. |
-| ProviClickGui | `typo-tolerance` | `2` | Allowed edit distance for typo hits. Typo hits always rank last and disappear entirely when real matches exist. |
-| ProviClickGui | `max-results` | `40` | Maximum number of displayed hits. |
-
-Search ranking order: exact name → name prefix → name contains → all query words in name →
-alias → all query words in one setting name → category → addon → single word → typo.
-Single-word and typo hits are fallback-only, so unrelated modules don't flood the list.
-
-## Theme compatibility (Catppuccin and other third-party themes)
-
-`GuiTheme.modulesHelpText()` is abstract in Meteor 26.2. Themes built against an earlier 26.2
-snapshot (Catppuccin 2.2.0 among them) do not implement it and throw
-`AbstractMethodError` while the module list is being built — the addon looks simply broken and
-has to be disabled. `GuiThemeCompatMixin` supplies Meteor's standard answer (`true`) as a
-concrete base implementation, so such themes work. Themes that implement the method themselves
-still win, because a subclass definition overrides the inherited one.
-
-## Commands
-
-| Command | Effect |
+| Paket | Aufgabe |
 |---|---|
-| `.pvp` / `.pvp toggle` | Toggle `GodmodePvP` |
-| `.pvp on` / `.pvp off` | Explicitly enable/disable `GodmodePvP` |
-| `.hpvp` / `.hpvp toggle` | Toggle `HumanPvP` |
-| `.hpvp on` / `.hpvp off` | Explicitly enable/disable `HumanPvP` |
-| `.nbt` | Dumps components/NBT of whatever's under your crosshair (entity or block), falls back to your held item if neither |
-| `.nbt item` / `.nbt entity` / `.nbt block` | Same, explicitly targeted |
-| `.proxy` / `.proxy list` | List configured proxies (uses Meteor's built-in proxy system) and which one is active |
-| `.proxy add <name> <ip> <port> [socks4\|socks5]` | Add a proxy, defaults to socks5 |
-| `.proxy switch <name>` | Switch the active proxy - takes effect on the *next* connection, not the current session |
-| `.proxy remove <name>` | Remove a proxy |
-| `.proxy check` | Health-check every configured proxy |
+| `broker/` | Wer darf in diesem Tick was tun. Kein Weltbezug. |
+| `rotation/` | GCD-Quantisierung (`GcdRotator`) |
+| `ray/` | Reichweiten (`ReachPolicy`), Sichtlinie (`ActionRayValidator`), Platzierungs-Cursor (`PlaceCursorSolver`) |
+| `crystal/` | Auswahl (`CrystalScorer`), Besitz (`CrystalOwnership`), Angriffs-Gate (`AttackGate`), Werkzeugprüfung (`CrystalToolPolicy`), Selbsttod (`SelfDamageGuard`) |
+| `mechanics/` | `SpearModel`, `KnockbackModel`, `SlowFallingArrow`, `WindChargeModel`, `ShieldWindow` |
+| `net/` | `AttackDispatcher`, `ActionCadence`, `TickRateGate`, `TotemEventReader` |
+| `perf/` | `ScanBudget` |
+| `terrain/` | `ExplosionScanner`, `RaycastCache` |
+| `util/` | `RandomBetween`, `InvHelper`, `SmartSearch`, `PvpMath` |
+| `exec/` | `PitchVariance` |
 
-## Third-party tools this project relies on
+---
 
-| Tool | Role |
+## 2. Anti-Blocking: der Broker
+
+Das ist der Teil, der verhindert, dass sich Module gegenseitig blockieren. Er besteht aus vier
+Klassen in `broker/`, die **keinen** `mc.*`-Bezug haben und deshalb komplett headless getestet sind.
+
+### `ActionBroker` — wer darf was, in diesem Tick
+
+Pro `ActionKind` gibt es genau **einen** Inhaber. Kinds: `MELEE, CRYSTAL, ANCHOR, BED, PEARL, BLOCK,
+PROJECTILE, USE_ITEM, SHIELD, SWAP`.
+
+- `claim(owner, kind, priority)` — belegen. Höhere Priorität darf **nur** verdrängen, solange der
+  aktuelle Inhaber noch nicht `spend()` aufgerufen hat. Danach ist die Aktion irreversibel, ein
+  Modul, das schon sendet, wird nicht mehr ausgetauscht.
+- `spend(owner, kind)` — die Aktion ist raus. Ab hier ist der Slot für den Tick verbraucht.
+- `release(owner)` — Modul aus: alle ihre Belegungen und ihre Pfad-Sperre weg.
+- `tick()` — Anfang des Ticks, setzt den Zähler zurück.
+
+Der Punkt von `spend` ist der entscheidende: Ein Modul, das gerade einen Crystal zündet, wird **nicht**
+mehr von einem schnelleren Modul verdrängt. Sonst würde man den Crystal doppelt zünden oder den
+Angriff verlieren.
+
+### `PathLease` — Baritone, referenzgezählt
+
+Mehrere Module wollen Baritone anhalten. `PathLease` zählt mit: derselbe Inhaber, der zweimal
+pausiert, zählt einmal. Erst wenn der letzte Inhaber aufgibt, läuft Baritone wieder.
+`releaseAll(owner)` räumt bei Deaktivierung und Weltwechsel.
+
+### `ConflictRegistry` — Module, die gar nicht erst starten
+
+`declare(ownerClass, Mode, priority, conflictClasses...)`:
+
+- **`EXCLUSIVE`** — das neue Modul wird abgewiesen.
+- **`DEFERS`** — beide laufen, aber das schwächere gibt pro Aktion nach.
+
+Zwei Regeln, die den Testplan nicht überraschen lassen: ein **nicht registriertes** aktives Modul
+gewinnt immer, und bei **gleicher** Priorität gewinnt das bereits aktive Modul. Reihenfolge im
+Modulmenü spielt also keine Rolle.
+
+### `PvpServices` — der einzige Zugang
+
+Eine gemeinsame Instanz. Prioritäten: `P_CRITICAL=100`, `P_COMBAT=70`, `P_SUPPORT=40`,
+`P_OPPORTUNIST=20`. `release(module)` räumt Broker-Belegungen und Pfad-Sperre.
+
+### Reihenfolge in `onInitialize()`
+
+```java
+Systems.add(new PvpBrokerSystem());   // MUSS vor allen Modulen
+...
+Modules.get().add(new GodmodePvP());
+```
+
+Steht der Broker **nach** der Modulregistrierung, entscheidet er einen Tick zu spät — und genau im
+entscheidenden Moment (Kampfesbeginn) greift die Kollisionsvermeidung dann nicht.
+
+---
+
+## 3. GodmodePvP — 117 Settings
+
+Kampfprofil „maximal". Läuft mit Baritone-Verfolgung, Crystal-/Anchor-/Bed-Aura, D-Tap, Stadtkampf.
+
+### General (5)
+`attack-range` (3.6) · `smart-targeting` · `backup-range` · `pop-threshold` · `prediction-ticks`
+
+### 1 · Angriff & Auras (41)
+`smart-auras` · `anchor-mode` · `use-anchors` · `use-beds` · `bed-min-damage` ·
+`bed-max-self-damage` · `bed-self-damage-multiplier` · `balance-resources` · `aggressive` ·
+`piston-aura` · `pre-hit` · `melee-fallback` · `prefer-axe-melee` · `shield-breaker` · `melee-strafe` ·
+`sprint-reset` · `track-target` · `crit-jump` · `d-tap` · `use-mace` · `elytra-combat` ·
+`gcd-rotation` · `gcd-jitter-steps` · `ray-validate-actions` · `enforce-reach` · `solve-place-cursor` ·
+`score-crystals` · `crystal-min-pick-damage` · `crystal-min-tick-age` · `gate-attacks` ·
+`min-attack-strength` · `crystal-tool-check` · `spear-aware` · `per-entity-knockback` ·
+`slow-falling-plan` · `dispatch-attacks` · `action-cadence` · `dtap-delay-min` · `dtap-delay-max` ·
+`anchor-delay-min` · `anchor-delay-max`
+
+#### Die Härtungs-Settings (D-Gruppe, alle Standard **an**)
+
+Das ist der Teil, der Vanilla-Mechanik von geratenen Werten trennt:
+
+| Setting | Was es tut |
 |---|---|
-| [Meteor Client](https://meteorclient.com/) | Host client / addon API, provides `CrystalAura`, `KillAura`, `AutoMend`, `AutoEat`, `NoFall`, the Friends system, and the settings/GUI framework this addon builds on. |
-| [Baritone](https://github.com/cabaletta/baritone) | Pathfinding and movement execution (`FollowProcess`, `CustomGoalProcess`, `PathingBehavior`) — this addon configures and drives it, it doesn't reimplement movement itself. |
-| [Fabric Loader](https://fabricmc.net/) / [Fabric API](https://modrinth.com/mod/fabric-api) | Mod loading platform. |
+| `gcd-rotation` | Quantisiert Yaw/Pitch auf das Mausraster (Divisor 0.0086). Ohne das sendet das Modul rohe Float-Winkel. |
+| `gcd-jitter-steps` | Zusätzliche Streuung in Rasterschritten (0 = exakt). |
+| `ray-validate-actions` | Prüft jede Aktion gegen die **gesendete** Rotation statt gegen die Kamera. |
+| `enforce-reach` | Echte Vanilla-Reichweiten: Nahkampf und **Crystal-Zündung 3.0**, Blockplatzierung 4.5. Die beiden werden nie vermischt. |
+| `solve-place-cursor` | Löst die echte Klickfläche für Anker/Bett/Crystal aus der gesendeten Rotation. Ein geratener `BlockHitResult` zeigt bei schrägen Wänden in die Nachbarfläche. |
+| `score-crystals` | Wählt den Crystal nach projiziertem Schaden statt nach Listenposition. |
+| `crystal-min-pick-damage` | Mindest-projizierter Schaden für die Auswahl (3.0). |
+| `crystal-min-tick-age` | Mindestalter, bevor ein eigener Crystal angegriffen wird (0). |
+| `gate-attacks` | Gated Angriff durch `hurtTime` und vollen Angriffs-Cooldown; Sprung-Crit nur wenn er töten würde. |
+| `min-attack-strength` | Mindest-Angriffsstärke 0..1 (0.9). |
+| `lethal-self-damage-guard` | Verwirft jede Platzierung, deren projizierter Eigenschaden die **eigenen aktuellen HP** erreichen würde — unabhängig von `max-self-damage`. Der Deckel ist einstellbar, der eigene Tod nicht. |
+| `crystal-tool-check` | Schwingt nicht mit einem Werkzeug, das einem End Crystal nichts zufügt. |
+| `spear-aware` | Rechnet mit dem 26er-Spear: 4.5 Reichweite, kein Crit, kein Sprint-KB, Charge ab 4.6 b/s. |
+| `per-entity-knockback` | Knockback pro Ziel aus Netherite, Blast-Protection und Resistenz. |
+| `slow-falling-plan` | Plant gegen Ziele unter Slow Falling (Mace-Smash unerreichbar). |
+| `wind-charge-awareness` | Wind Charge: 1 Schaden, Radius 2.4, KB ×1.22, 10 Ticks Abkling. *(Standard **aus**)* |
+| `dispatch-attacks` | Zündung/Nahkampf/Schildbrechen als Interact + separate Animation; der Vanilla-Weg schickt das Swing-Paket doppelt. |
+| `totem-event-detection` | Erkennt den eigenen Pop am Entity-Event-Paket 35 statt über den Health-Drop (zählte zweimal). |
+| `action-cadence` | Pro Movement-Paket höchstens eine Platzierung, ein Angriff, ein Rechtsklick, ein Schwung, eine Blickrichtung. |
+| `protect-own-crystals` | Prüft die Bahn von Perlentrank **gegen eigene Crystals** — beide kollidieren. |
+| `ghost-block-mitigation` | Verfolgt eigene Platzierungen bis zum Server-Update. |
+| `lag-throttle` / `lag-throttle-every` | Drosselt die Aktionsrate bei Server-Ticks > 1.2 s. |
+
+### 2 · Schutz & Recovery (29)
+`fast-totem` · `auto-mend` · `auto-eat` · `no-fall` · `auto-shield` · `anti-rubberband` ·
+`respect-friends` · `hole-awareness` · `height-advantage` · `avoid-lava` · `auto-fire-res` ·
+`build-cover` · `surround` · `anti-bed` · `anti-piston` · `secure-footing` · `peek-tactic` ·
+`watchdog-ticks` · `retreat-threshold` · `retreat-on-losing-trade` · `multi-target-alarm` ·
+`trap-mode` · `max-self-damage` · `lethal-self-damage-guard` · `wind-charge-awareness` ·
+`totem-event-detection` · `lag-throttle` · `lag-throttle-every` · `protect-own-crystals`
+
+### 3 · Stadt & Traps (2)
+`insta-city` · `anti-escape-trap`
+
+### 4 · Navigation (5)
+`follow` · `follow-range` · `engage-distance` · `pursue-stationary-targets` · `ignore-fire`
+
+### 5 · Inventar (9)
+`inv-manager` · `min-crystals` · `min-anchors` · `min-glowstone` · `min-pearls` · `min-obsidian` ·
+`min-web` · `min-beds` · `min-heal-potions`
+
+### 6 · Turtle-Master (3)
+`turtle-master-defense` · `turtle-master-health` · `turtle-master-cooldown`
+
+### 7 · Perlen & Flucht (9)
+`escape-pearl` · `knockback-pearl` · `anti-anchor-disengage` · `explosion-floor-snap` ·
+`pearl-pitch-variance` · `pearl-gapclose` · `pearl-min-dist` · `pearl-delay-min` · `pearl-delay-max`
+
+### 8 · Heilung (3)
+`heal-potions` · `heal-min-damage` · `heal-cooldown`
+
+### 9 · QA & Erweitert (8)
+`free-look` · `through-walls` · `zero-delay` · `ghost-block-mitigation` · `min-support-delay` ·
+`no-delay` · `kill-aura` · `debug-trace`
+
+### 10 · Mobs (3)
+`attack-mobs` · `mob-types` · `mob-range`
+
+---
+
+## 4. HumanPvP — 56 Settings
+
+Kampfprofil „menschlich": Reaktionszeit, Verklicken, begrenzte Drehgeschwindigkeit, Sichtlinien-Pflicht.
+Vorsichtiger bei Eigenschaden (`max-self-damage` 6.0 statt 12.0), `min-support-delay` 4 statt 1.
+
+### General (3)
+`attack-range` (3.4) · `smart-targeting` · `backup-range`
+
+### 1 · Angriff & Auras (11)
+`use-anchors` · `anchor-mode` · `use-beds` · `bed-min-damage` · `bed-max-self-damage` ·
+`bed-self-damage-multiplier` · `prefer-axe-melee` · `sprint-reset` · `shield-breaker` · `melee-strafe` ·
+`max-self-damage`
+
+### 2 · Schutz & Recovery (9)
+`trap-mode` · `anti-rubberband` · `auto-mend` · `auto-eat` · `no-fall` · `auto-shield` · `fast-totem` ·
+`avoid-lava` · `auto-fire-res`
+
+### 3 · Navigation (3)
+`follow` · `follow-range` · `engage-distance`
+
+### 4 · Inventar (9)
+`inv-manager` · `min-crystals` · `min-anchors` · `min-glowstone` · `min-pearls` · `min-obsidian` ·
+`min-web` · `min-beds` · `min-heal-potions`
+
+### 5 · Human-Profil (7)
+`reaction-min` · `reaction-max` · `attack-chance` · `aim-tolerance` · `max-turn-speed` ·
+`click-delay-max` · `rotation-jitter`
+
+### 6 · Perlen & Flucht (5)
+`knockback-pearl` · `pearl-down-variance` · `escape-pearl` · `pearl-gapclose` · `pearl-min-dist`
+
+### 7 · Heilung (3)
+`heal-potions` · `heal-min-damage` · `heal-cooldown`
+
+### 8 · QA & Erweitert (6)
+`free-look` · `min-support-delay` · `strict-reach` · `packet-cadence` · `lag-throttle` ·
+`crystal-ownership`
+
+---
+
+## Setting-Lücke HumanPvP {#setting-lücke-humanpvp}
+
+Die 72 Setting-Namen, die nur in GodmodePvP vorkommen. Aufteilung nach **Ursache**, nicht nach Gruppe.
+
+### A — Absichtliche Design-Auswahl (22)
+
+Diese Features machen den Bot zum Godmode. Ein Profil, das „menschlich" spielen soll, darf sie nicht
+haben, sonst ist es kein Human-Profil mehr.
+
+`pursue-stationary-targets` · `pop-threshold` · `prediction-ticks` · `smart-auras` ·
+`balance-resources` · `aggressive` · `piston-aura` · `pre-hit` · `melee-fallback` · `track-target` ·
+`crit-jump` · `d-tap` · `use-mace` · `elytra-combat` · `zero-delay` · `no-delay` · `kill-aura` ·
+`attack-mobs` · `mob-types` · `mob-range` · `dtap-delay-min` · `dtap-delay-max`
+
+### B — Funktionell abgedeckt, anderer Name (2)
+
+`pearl-pitch-variance` → gibt es als `pearl-down-variance`.
+`through-walls` → HumanPvP macht das Gegenteil: `strict-reach` **verlangt** Sichtlinie.
+
+### C — Stadt & Traps (2)
+
+HumanPvP hat keine Stadt-Gruppe. `insta-city` · `anti-escape-trap`
+
+### D — Verteidigungstiefe (16)
+
+Alle vorhanden, HumanPvP hat keine Entsprechung. Der Bot in Human-PvP steht damit sichtbar freier:
+`ignore-fire` · `respect-friends` · `hole-awareness` · `height-advantage` · `build-cover` · `surround` ·
+`anti-bed` · `anti-piston` · `secure-footing` · `peek-tactic` · `watchdog-ticks` · `retreat-threshold` ·
+`retreat-on-losing-trade` · `multi-target-alarm` · `anti-anchor-disengage` · `explosion-floor-snap`
+
+Besonders folgenreich: `surround` und `secure-footing`. Im Nether ist Fehlende Boden der
+Tod, und `anti-bed` ist laut 2b2t-Wiki die häufigste Todesursache im Nether-PvP.
+
+### E — Turtle-Master (3)
+
+` turtle-master-defense` · `turtle-master-health` · `turtle-master-cooldown`
+
+### F — Timing-Streuung (4)
+
+Ohne diese drei gleiche Cooldowns in gleicher Folge. `pearl-delay-min` · `pearl-delay-max` ·
+`anchor-delay-min` · `anchor-delay-max`
+
+### G — Diagnose (1)
+
+`debug-trace`. Ohne das gibt es für HumanPvP keinen Kampf-Trace; Fehlverhalten ist nicht lokalisierbar.
+
+### H — Härtung / Anti-Cheat-Korrektheit (22)
+
+**Das ist die eigentliche Lücke.** Das sind keine Aggressions-Features, sondern Korrektheit — und sie
+fehlen in genau dem Profil, das sich als das unauffälligere verkauft.
+
+`gcd-rotation` · `gcd-jitter-steps` · `ray-validate-actions` · `enforce-reach` · `solve-place-cursor` ·
+`score-crystals` · `crystal-min-pick-damage` · `crystal-min-tick-age` · `gate-attacks` ·
+`min-attack-strength` · `lethal-self-damage-guard` · `crystal-tool-check` · `spear-aware` ·
+`per-entity-knockback` · `slow-falling-plan` · `wind-charge-awareness` · `dispatch-attacks` ·
+`totem-event-detection` · `lag-throttle-every` · `action-cadence` · `protect-own-crystals` ·
+`ghost-block-mitigation`
+
+Teilweise abgedeckt, aber **nicht gleich**:
+
+| GodmodePvP | HumanPvP | Unterschied |
+|---|---|---|
+| `enforce-reach` + `ray-validate-actions` | `strict-reach` | prüft Reach und Sichtlinie, aber nur Nahkampf/Schildbrechen — **nicht** die Crystal-Zündung |
+| `action-cadence` | `packet-cadence` | Human zählt auch den Slot-Wechsel, Godmode zusätzlich Item-Use |
+| `gcd-rotation` | `rotation-jitter` | Human streut die Rotation, **quantisiert sie aber nicht** — die Winkel landen nicht auf dem Mausraster |
+| `score-crystals` + `CrystalOwnership` | `crystal-ownership` | Human merkt sich eigene Crystals nur, um `auto-shield` nicht reflexhaft auszulösen; die **Auswahl** des zu brechenden Crystals ist weiterhin listenbasiert |
+| `lag-throttle` + `lag-throttle-every` | `lag-throttle` | fest auf „jede zweite Aktion" verdrahtet |
+
+**Fazit:** HumanPvP ist kleiner, aber nicht schlechter geschützt, wo es drauf ankommt — nur an fünf
+genannten Stellen. Das ist der ehrliche Stand.
+
+---
+
+## 5. Die drei neuen Module
+
+Alle drei melden sich beim `ConflictRegistry` mit **`DEFERS`** gegen `GodmodePvP` und `HumanPvP` an,
+Priorität 20 (unter `P_COMBAT=70`). Solange ein Kampfprofil läuft, bekommen sie keine Belegung und
+treten zurück. Sie sind also **kein** Konfliktfall — im Gegenteil, sie sind nur dann aktiv, wenn
+gerade kein Profil läuft.
+
+### `provi-slow-falling-aura` — 7 Settings
+`range` · `auto-swap` · `swap-delay` · `shot-cooldown` · `rotation-jitter` · `pop-window-ticks` ·
+`min-pops`
+
+Entscheidung über `SlowFallingArrow`. Der dokumentierte Gegenangriff: verlangsamt den Gegner und
+nimmt ihm damit **beides** — den Crit (kein Fall) und den Mace-Smash (Slow Falling verhindert ihn).
+
+Die eigentliche Logik ist das **Pop-Fenster**: Ist gerade ein Pop-Fenster offen
+(`popWindowTicks >= pop-window-ticks && maxRepeatedPops >= min-pops`), wird der Schuss **zurückgehalten**.
+Ein zweiter Pfeil würde genau das Fenster unterbrechen, in das der Crystal-Pop des Profils passen
+soll. Sonst wird SLOW_FALLING bzw. LONG_SLOW_FALLING gefeuert.
+
+### `provi-spear` — 7 Settings
+`attack-range` · `auto-swap` · `swap-delay` · `use-jab` · `use-charge` · `hold-ticks` ·
+`rotation-jitter`
+
+Entscheidung über `SpearModel`. **Der Grund, warum es dieses Modul gibt:** der Addon-`attack-range` von
+3.6 erreicht die Spear-Reichweite 4.5 nicht. In GodmodePvP bleibt das ein Setting
+(`spear-aware`), das die Reichweitenprüfung repariert — aber nicht das, was ein Profil mit
+Reichweite 4.5 anstellt.
+
+Charge-Angriff greift ab **5.1 b/s**, nicht 4.6: die 4.6 ist die Schwelle für den *geladenen* Zustand,
+nicht für einen Treffer mit vollem Schaden.
+
+### `provi-wind-charge` — 8 Settings
+`mode` · `auto-swap` · `swap-delay` · `rotation-jitter` · `throw-range` · `throw-cooldown` ·
+`only-near-drop` · `min-burst-level`
+
+Entscheidung über `WindChargeModel`. **Wind Charges sprengen seit 1.20.5 keine End Crystals.** Deshalb
+konfligiert dieses Modul nicht mit den Crystal-Auren — es zählt nur als Schaden (1) und Knockback
+(×1.22, Radius 2.4, 10 Ticks Abkling).
+
+---
+
+## 6. Die beiden HUD-Elemente
+
+Beide sind **strikt lesend**: keine Belegung, keine Baritone-Sperre, kein Hotbar-Zugriff. Genau
+deshalb zeigen sie den Broker-Zustand unverfälscht.
+
+### `provi-debug-overlay` — RSHIFT+D
+7 Settings: `show` · `bind` · `background` · `text-color` · `muted-color` · `warn-color` ·
+`background-color`
+
+Zeilen:
+
+| Zeile | Inhalt |
+|---|---|
+| `ProviPvP <Modul>: <Aktion>` | jedes aktive ProviPvP-Modul mit `getInfoString()`. Mehrere gleichzeitig = genau der Fall, den der Broker verhindern soll. |
+| `Ziel <Name> hp/…hp <m> …` | Ziel, Distanz, Reaktionsfenster |
+| `Rotation yaw … dYaw … dPitch …` | **die gesendete** Rotation (`Rotations.serverYaw`), nicht die Kamera. Rot, wenn dYaw und dPitch beide 0 sind oder einer > 5° — genau die Werte, die Grim nicht erst wertet. |
+| `Scan-Budget <Art> erlaubt/verschluckt` | Zähler der Drosselung je Scan-Art |
+| `<KIND>=<Modul> … Baritone frei/angehalten (n)` | Broker-Halter je `ActionKind` und der Pfad-Lease-Zähler |
+| `Crystals <n> eigene, <n> aus dem Fenster gefallen` | Größe des Besitzesfensters und wie viele Einträge herausgefallen sind |
+| `Sitzung <Kills> <Tode> …` | Kurzform der Zähler; `PvpSessionStats` zeigt dieselben Zahlen ausführlich |
+
+Beim Weltwechsel wird der abgeleitete Zustand (letzte Rotation, Crystal-Besitz) verworfen — sonst
+rechnete der erste Tick nach einem Dimensionstorch ein GCD-Delta gegen den Winkel der alten Dimension.
+
+### `provi-session-stats` — kein Keybind
+5 Settings. Zählt für die Sitzung: Kills, Tode, Serie (beste Serie), Schaden aus/ein, Crystals
+getroffen/gepoppt. Die Schadenszuordnung ist **clientseitig und damit eine Näherung**.
+
+---
+
+## 7. Profile
+
+| Profil | Härtung | Gedacht für |
+|---|---|---|
+| `donutsmp` | **an** | Grim-Server — hier greift das GCD- und Reach-Grid |
+| `2b2t` | aus | eigener Anti-Cheat, historische Vanilla-Nähe |
+| `5b5t` | aus | AntiCheatPlus, eigener AC |
+| `arena-aggressive` | aus | Maximale Aggression |
+| `2b2t-human` | aus | HumanPvP auf 2b2t |
+
+**Wichtig — dieser Bereich war bis eben kaputt.** Die ausgelieferten Profile suchten ihre Gruppen
+unter den Schlüsseln `combat` und `defense`. Die echten Gruppen heißen aber `1 · Angriff & Auras` und
+`2 · Schutz & Recovery`. Der Vergleich lieferte immer `null`, jedes Setting wurde als
+„fehlgeschlagen" gezählt, **ohne Fehlermeldung**. Ein Profil anzuwenden tat nichts.
+
+Behoben über eine Alias-Tabelle (`combat`→`1 · Angriff & Auras`, `defense`→`2 · Schutz & Recovery`,
+`city`/`traps`→`3 · Stadt & Traps`, `human`→`5 · Human-Profil`, mit `stripIndex` für den
+`N · `-Präfix) plus einen gruppenübergreifenden `findSettingAnywhere`-Fallback.
+
+**Test `ProfileManagerTest.everyShippedProfileUsesResolvableGroupKeys`** schützt das dauerhaft.
+
+---
+
+## 8. Befehle
+
+| Befehl | Wirkung |
+|---|---|
+| `.pvp on / off / toggle` | GodmodePvP steuern |
+| `.hpvp on / off / toggle` | HumanPvP steuern |
+| `.profile <name> [godmode / human]` | Profil anwenden, meldet Erfolge **und Fehlschläge** |
+| `.profile list` | vorhandene Profile |
+| `.profile save <name> [godmode / human]` | aktuelle Settings als Profil speichern |
+| `.prof` | Kurzform von `.profile` |
+| `.proxy list / check / add / remove / switch` | Meteors Proxy-System (nicht selbst implementiert) |
+| `.nbt item / entity / block` | Components/NBT im Chat |
+
+**Wichtig für den Test:** `.profile <name>` **ohne** Modulangabe wendet das Profil auf das
+**gerade aktive** PvP-Modul an — sonst auf GodmodePvP. Für Phase 1 des Testplans heißt das: erst das
+richtige Modul einschalten, dann `.profile donutsmp`.
+
+---
+
+## 9. Bewusst nicht gebaut
+
+Nichts hiervon ist Platzhalter — es ist nicht implementiert:
+
+- **B12** — Allokationen in `calcBestAnchor` / `bestDamageAround`
+- **F5** — Error Prone / NullAway in der Build-Konfiguration
+- **F6** — automatisierte Integrationstests
+- **E2 BrandSpoof-Löschung** — vom Nutzer aus dem Umfang genommen
+- Die **Abtastung im Gefecht**. 290 Tests prüfen Entscheidungslogik headless. Kein Test prüft, ob der
+  Bot in einer Arena auch wirklich zuschlägt. Dafür ist [TESTPLAN.md](TESTPLAN.md) da.
+
+
+## 10. Gefundener und behobener Fehler: Schildfenster
+
+Bei der Durchsicht fiel auf, dass die Korrektur aus **C7** nur in `GodmodePvP` angekommen war.
+`HumanPvP` hielt den Schild weiterhin `tickCounter + 20` bzw. `+ 15`, **ohne** die 5
+Aktivierungs-Ticks zu rechnen.
+
+Vanilla blockt mit einem Schild erst ab dem **6. Tick** des Item-Use (250 ms). Ein Fenster von 15
+Ticks bedeutet also: 5 Ticks hält der Bot einen Schild in der Hand, der nichts abwehrt, und kann in
+dieser Zeit nicht angreifen — 10 Ticks echter Schutz statt 15.
+
+Ursache war nicht ein Tippfehler, sondern die Struktur: die Verzögerung stand als Konstante in
+**beiden** Modulen. Behoben über `mechanics/ShieldWindow` — eine headless Klasse, die beide Module
+jetzt gemeinsam benutzen. `until(now, heldTicks)` hebt jedes Fenster auf mindestens
+`MIN_USEFUL_TICKS` (= 10) an, sodass „hält, schützt nicht und legt nach" nicht mehr möglich ist.
+10 Tests decken die Arithmetik ab.
+
+---
+
+## 11. Gefundener und behobener Fehler: das Selbstschaden-Gate
+
+Das ist der Grund, warum der Bot auf 5b5t gegen jeden Gegner verlor und keine Anker benutzte.
+
+`selfDamageAllowed()` prüfte den Explosionsstrahl an **neun Punkten** der Spieler-Hitbox und
+verlangte, dass **alle neun** verdeckt sind:
+
+```java
+return !blastRayClear(centre) && !blastRayClear(minX,minY,minZ) && ... // acht Ecken
+```
+
+Auf offenem Feld — also im Nahkampf, wo ein Crystal, ein Anker oder ein Bett überhaupt erst Sinn
+ergibt — sind ausnahmslos alle neun exponiert. Die Funktion lieferte damit **immer** `false`.
+
+Was das ausgelöst hat, war eine Kette:
+
+| Stelle | Folge |
+|---|---|
+| `calcBestAnchor` :3353 | `anchorCandidates` blieb leer → **keine Anker, ever** |
+| `bestDamageAround` :3311 | `continue` für jede Zelle → **Rückgabe 0** → die Aura-Wahl sah überhaupt keine brauchbare Crystal-Position mehr |
+| `crystalPlacementSafe` :3594 | Crystal-Platzierung auf offenem Feld ebenfalls tot |
+| `calcBestBed`, `maintainNearbyBeds`, `tryPlaceBed` | Betten im Nether ebenfalls tot |
+| `onEntityAdded` :1801 | *Umgekehrt*: der Bot brach reflexhaft **jeden** gegnerischen Crystal auf offenem Feld ab |
+| `calcBestBed` / Anti-Bed / D-Tap-Scan / Piston / InstaCity | dieselbe Verweigerung, sechs weitere Stellen |
+
+Zwei Folgen, die den Ausfall verlängert haben:
+
+- **`crystalForcedUntil`**: nach **zwei** fehlgeschlagenen Platzierungen wurde 40 Ticks lang
+  Crystal erzwungen. Bei leerer Kandidatenliste ist aber gar nichts fehlgeschlagen — es gab nichts
+  zu versuchen. Der Bot wechselte also zu einer Waffe, die es ebenfalls nicht gab.
+- Im **Nether** ist diese Reaktion besonders schädlich: Anker können dort nicht explodieren, also
+  gibt es auch keinen Ausweichweg — der Bot wechselte von der einen Nicht-Waffe zur anderen.
+
+**Behoben** über `crystal/SelfDamageExposure`. Deckung ist jetzt ein Anteil (0 bis 1), kein
+Ausschluss, und wird in die Schadensrechnung eingespeist statt eine Platzierung zu verweigern:
+
+```java
+private double effectiveSelfDamage(Vec3 explosionPos, double baseDamage) {
+    return SelfDamageExposure.effective(baseDamage, countExposedPoints(explosionPos));
+}
+```
+
+Alle 13 Aufrufstellen wurden auf den wirksamen Schaden umgestellt, damit Deckel
+(`max-self-damage`), Bett-Deckel (`bed-max-self-damage`) und Todesgrenze
+(`lethal-self-damage-guard`) dieselbe Zahl sehen. `selfDamageAllowed()` hatte danach keine
+Aufrufer mehr und ist entfernt.
+
+**Anker im Nether:** `anchorsExplodeHere()` = `dimension() != Level.NETHER`. Das ist Vanillas
+Verhalten — Anker explodieren im Nether nicht, sie laden nur. Die Funktion schaltet dort vier
+Stellen ab: Platzierung (`tryPlaceAnchor`), Laden/Zünden (`maintainNearbyAnchors`),
+Aura-Auswahl (`hasAnchorItem`) und Nachfüllen (`refill`). **Keine Anker im Nether ist korrekt.**
+Dort ist Bett-PvP die richtige Waffe, und `bedsExplodeHere()` =
+`dimension() != Level.OVERWORLD` lässt sie zu.
+
+---
+
+## 12. Gefundener und behobener Fehler: Hotbar-Blockade
+
+`hasActionableItem()` zählt einen Stack nur, wenn er in der **Hotbar oder Offhand** liegt:
+
+```java
+return result.found() && (result.isHotbar() || result.isOffhand());
+```
+
+`selectAura()` fragt danach Crystal, Anker und Bett. Liegt eine davon nur im Hauptinventar, gilt sie
+als „nicht vorhanden" — und wenn **alle drei** fehlen, setzt `auraMode = -1` und der Bot tut nichts.
+Laut eigener Javadoc ist genau das live passiert: **95 Sekunden lang keine einzige Explosion**, bei
+vollen Vorräten im Inventar.
+
+Der Mechanismus, der das hätte verhindern sollen, war `evictHotbarBallast()` — und der kannte nur
+drei Ballast-Arten:
+
+```java
+boolean ballast = s.is(Items.GLASS_BOTTLE)
+    || (bedsUseless && isBed(s))
+    || (anchorsUseless && s.is(Items.RESPAWN_ANCHOR));
+```
+
+Die eigentliche Blockade erreichte er nie: Kies, Erde, Netherrack, Pfeile, Fäulnisfleisch,
+Baublöcke. Füllt sich die Hotbar damit — was im Laufe eines Kampfes passiert —, liefert
+`evictHotbarBallast()` `false`, `hotbarTargetSlot()` `-1`, und **jedes** `refill()` läuft ins Leere.
+
+**Behoben, in zwei Schritten:**
+
+1. **Die Ballast-Regel ist umgedreht.** Statt aufzuzählen, was Ballast *ist*, wird aufgezählt, was
+   **geschützt** ist: verwaltete Ressourcen, Totem, Schild, Nahrung (`DataComponents.FOOD`),
+   Werkzeug (`ItemTags.SWORDS/AXES/PICKAXES/SHOVELS/HOES/SPEARS` plus Bogen, Armbrust, Dreizack,
+   Mace als Item-Klassen), der Offhand-Inhalt und der gerade belegte `combatSlotTargetSlot`.
+   Alles andere ist räumbar. Eine Ballast-Liste muss jede unnötige Sache kennen — inklusive der,
+   die morgen jemand dem Bot in die Hand gibt. Eine Schutzliste nicht.
+2. **`refill()` räumt seinen Slot selbst frei**, wenn keiner da ist, statt es zu hoffen. Vorher
+   wurde nur einmal pro Sekunde pauschal geräumt, jetzt gezielt dann, wenn eine Ressource
+   nachfragt.
+
+Nebenbei mitgezogen: `Items.FIRE_RESISTANCE_POTION` gibt es seit 1.20.4 nicht mehr. Die
+Feuerresistenz-Prüfung lag an zwei Stellen als Lambda kopiert; jetzt ist sie `isFireResPotion()`,
+der dritte Nutzer ist die Ballast-Regel.
+
+---
+
+## 13. Gefundener und behobener Fehler: LOOK-Slot-Starvation
+
+Pro Movement-Paket ist **genau eine** Blickrichtung erlaubt (`ActionCadence.LOOK`, Standard **an**).
+Das ist keine Vorsicht, sondern Korrektheit: zwei verschiedene Yaw-Werte in einem Paket produziert
+kein echter Client.
+
+Wartung und Platzierung brauchen beide eine Drehung. Sie standen in der falschen Reihenfolge:
+
+```java
+maintainNearbyAnchors();   // stand VOR der Aura-Platzierung
+maintainNearbyBeds();
+...
+tryPlaceAnchor();           // rotateAndRun(...) → bekam den Slot nie
+```
+
+Sobald **irgendein** Anker in den 4.2-Blöcke-Radius lag, nahm `maintainNearbyAnchors()` den Slot
+über `interactAnchorAt()`. Und ein frisch platzierter, noch ungeladener Anker ist genau das — er
+lag einen Tick später im Weg und lud sich im nächsten, während die nächste Platzierung ins Leere
+lief. Nach zwei Ticks Belegung und Pause war die Frequenz halbiert.
+
+**Behoben:** Wartung läuft jetzt **hinter** dem Aura-Block, auf allen drei Zweigen (D-Tap,
+`interceptEnemyBoxing`, Aura-Platzierung). Sie behält ihren Cooldown, läuft also weiterhin regelmäßig
+— sie kommt nur nicht mehr vor der Platzierung dran.
+
+**Korrigiert wurde auch ein Kommentar, der das Gegenteil behauptete.** Er sagte, die Erstladung
+feuere „dank Mehrfachaktionen-pro-Tick noch im SELBEN Tick". Das ist unmöglich: der äußere
+`rotateAndRun()` hat den LOOK-Slot bereits verbraucht, der verschachtelte Aufruf in
+`interactAnchorAt()` wird abgelehnt — zusätzlich fehlt ihm der Combat-Slot, der noch auf dem Anker
+parkt. Der Versuch ist damit nur bei ausgeschaltetem `action-cadence` erfolgreich. Der Kommentar
+sagte jetzt, was tatsächlich gilt.

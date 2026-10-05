@@ -42,7 +42,24 @@
       "ghost-block-mitigation": true,
       "min-support-delay": 1,
       "instant-mode": false,
-      "kill-aura": false
+      "kill-aura": false,
+      "_hardening": "Bewusst AUS. 5b5t hat laut eigener Site keine In-Game-AC, nur ein Whitelist-Antibot. Die Gitter-Rotation, die Aktions-Strahlpruefung und die Kadenz-Drosselung wuerden hier nur Reaktionszeit kosten, ohne etwas zu verhindern.",
+      "gcd-rotation": false,
+      "ray-validate-actions": false,
+      "enforce-reach": false,
+      "solve-place-cursor": false,
+      "score-crystals": false,
+      "gate-attacks": false,
+      "crystal-tool-check": false,
+      "spear-aware": false,
+      "per-entity-knockback": false,
+      "slow-falling-plan": false,
+      "dispatch-attacks": false,
+      "action-cadence": false,
+      "dtap-delay-min": 28,
+      "dtap-delay-max": 30,
+      "anchor-delay-min": 4,
+      "anchor-delay-max": 5
     },
     "defense": {
       "fast-totem": true,
@@ -68,7 +85,8 @@
       "multi-target-alarm": true,
       "trap-mode": 1,
       "anti-escape-trap": true,
-      "max-self-damage": 12.0
+      "max-self-damage": 12.0,
+      "lag-throttle": false
     },
     "inventory": {
       "inv-manager": true,

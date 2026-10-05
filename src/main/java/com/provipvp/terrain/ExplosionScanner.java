@@ -1,6 +1,5 @@
 package com.provipvp.terrain;
 
-import com.provipvp.core.TerrainProbe;
 import com.provipvp.util.PvpMath;
 
 import net.minecraft.core.BlockPos;
@@ -15,16 +14,15 @@ import net.minecraft.world.phys.HitResult;
 import net.minecraft.world.phys.Vec3;
 
 import java.util.function.Predicate;
-import java.util.stream.IntStream;
 
 import static meteordevelopment.meteorclient.MeteorClient.mc;
 
 /** Die Welt-Geometrie-Schicht: alles, was "ist diese Strecke frei?" heisst, und nichts darueber hinaus.
  *
  *  Zustaendig ist hier genau eine Sache: der {@link RaycastCache} und der aktuelle Tick. Die
- *  taktischen Entscheidungen (wohin werfen, wohin stellen) liegen in {@code PearlSolver} und den
- *  Aura-Modulen - dieser Scanner trifft keine Entscheidung, er liefert Rohbefunde. Damit bleibt die
- *  teure Voxel-Arbeit an einer Stelle, statt in jedem Modul ein eigenes Raycast-Verfahren zu haben.
+ *  taktischen Entscheidungen (wohin werfen, wohin stellen) liegen in den Aura-Modulen - dieser
+ *  Scanner trifft keine Entscheidung, er liefert Rohbefunde. Damit bleibt die teure Voxel-Arbeit an
+ *  einer Stelle, statt in jedem Modul ein eigenes Raycast-Verfahren zu haben.
  *
  *  Der Raycast selbst ist derselbe, den die Module schon benutzen: {@code Level#clip} mit
  *  {@code ClipContext.Block.COLLIDER} und {@code ClipContext.Fluid.NONE} - "blockiert die Kollisionsform
@@ -35,7 +33,7 @@ import static meteordevelopment.meteorclient.MeteorClient.mc;
  *  der Modul-Zaehler), bei jedem {@code ClientboundBlockUpdatePacket} {@link #onBlockUpdate(BlockPos)}.
  *  Ohne {@code markTick} arbeitet der Scanner korrekt, nur ohne Cache - {@code markTick} ist also
  *  keine Initialisierung, sondern die Gueltigkeitsverwaltung. */
-public final class ExplosionScanner implements TerrainProbe {
+public final class ExplosionScanner {
     /** Abstand, innerhalb dessen ein Raycast-Treffer am Endpunkt noch als "frei" gilt. Ein exakter
      *  MISS ist bei einem Ziel, das direkt an einer Wand oder Stufenkante liegt, nicht der Normalfall -
      *  der Strahl trifft dann die Nachbarflaeche kurz vor dem Zielpunkt. Uebernommen aus
@@ -91,7 +89,6 @@ public final class ExplosionScanner implements TerrainProbe {
      *  Ohne geladene Welt gilt die Strecke als frei: es gibt nichts, was blockieren koennte, und
      *  "false" wuerde in einem laufenden Kampf jede Sichtlinie blockieren, nur weil der Chunk
      *  gerade nachlaedt. */
-    @Override
     public boolean clearShot(Vec3 from, Vec3 to) {
         if (from == null || to == null) return false;
         Level level = level();
@@ -114,7 +111,6 @@ public final class ExplosionScanner implements TerrainProbe {
      *  und Tickfenster, und die Rechnung selbst ist billig gegenueber den Raycasts, die
      *  {@link #segmentClear} darin abfeuert - die profitieren ueber {@link #clearShot}-Aufrufe der
      *  Aufrufer, nicht ueber diesen Cache. */
-    @Override
     public boolean trajectoryClear(Vec3 origin, double yaw, double pitch, Vec3 extraVel, int maxTicks) {
         return PvpMath.trajectoryClear(origin, yaw, pitch, extraVel, this::segmentClear, maxTicks);
     }
@@ -210,14 +206,17 @@ public final class ExplosionScanner implements TerrainProbe {
         final int cz = center.getZ();
         final BlockPos.MutableBlockPos cursor = new BlockPos.MutableBlockPos();
 
-        return (int) IntStream.rangeClosed(-radius, radius)
-            .boxed()
-            .flatMap(dx -> IntStream.rangeClosed(-radius, radius)
-                .boxed()
-                .flatMap(dy -> IntStream.rangeClosed(-radius, radius)
-                    .mapToObj(dz -> level.getBlockState(cursor.set(cx + dx, cy + dy, cz + dz)))
-                    .filter(matcher)))
-            .count();
+        // Bewusst keine IntStream-Kette: rangeClosed(...).boxed() alloziert pro Zelle ein Integer,
+        // also genau die 1331 Kurzlebobjekte je Aufruf, die diese Methode eigentlich einsparen soll.
+        int count = 0;
+        for (int dx = -radius; dx <= radius; dx++) {
+            for (int dy = -radius; dy <= radius; dy++) {
+                for (int dz = -radius; dz <= radius; dz++) {
+                    if (matcher.test(level.getBlockState(cursor.set(cx + dx, cy + dy, cz + dz)))) count++;
+                }
+            }
+        }
+        return count;
     }
 
     /** Der eigentliche Voxel-Raycast. {@code ClipContext.Fluid.NONE} heisst: Fluesse und Wasser

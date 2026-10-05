@@ -83,16 +83,21 @@ public final class ProfileManager {
             }
             JsonObject groupSettings = groupSettingsElement.getAsJsonObject();
 
-            // SettingGroup finden (case-insensitive, Teilstring)
+            // SettingGroup finden (case-insensitive, Alias, Teilstring)
             SettingGroup sg = findSettingGroup(module, groupName);
-            if (sg == null) {
-                failed += groupSettings.size();
-                continue;
-            }
 
             for (Map.Entry<String, com.google.gson.JsonElement> settingEntry : groupSettings.entrySet()) {
                 String settingName = settingEntry.getKey();
-                Setting<?> setting = sg.get(settingName);
+                if (settingName.startsWith("_")) continue; // Kommentar, kein Setting
+
+                Setting<?> setting = sg == null ? null : sg.get(settingName);
+                if (setting == null) {
+                    // Rueckfall ueber ALLE Gruppen. Ein Profil kann ein Setting in die falsche Gruppe
+                    // gelegt haben - das kam hier mehrfach vor ("free-look" unter "qa", "human" statt
+                    // "Human-Profil"). Bisher zaehlte das als Fehlschlag und tat stillschweigend nichts.
+                    // Der Rueckfall kostet eine Namenssuche pro Setting, einmal beim Anwenden.
+                    setting = findSettingAnywhere(module, settingName);
+                }
                 if (setting == null) {
                     failed++;
                     continue;
@@ -113,20 +118,87 @@ public final class ProfileManager {
     }
 
     private static SettingGroup findSettingGroup(Module module, String name) {
-        // Exakte Uebereinstimmung
         for (SettingGroup sg : getSettingGroups(module)) {
-            if (getSettingGroupName(sg).equalsIgnoreCase(name)) return sg;
-        }
-        // Teilstring-Match (z.B. "combat" matcht "1 · Angriff & Auras")
-        for (SettingGroup sg : getSettingGroups(module)) {
-            String sgName = getSettingGroupName(sg);
-            if (sgName.toLowerCase().contains(name.toLowerCase()) ||
-                name.toLowerCase().contains(sgName.toLowerCase())) {
-                return sg;
-            }
+            if (groupMatches(getSettingGroupName(sg), name)) return sg;
         }
         return null;
     }
+
+    /** Sucht ein Setting ueber alle Gruppen des Moduls. Der Gruppen-Key im Profil ist nur ein
+     *  Hinweis; massgeblich ist der Setting-Name, denn der ist global eindeutig. */
+    private static Setting<?> findSettingAnywhere(Module module, String settingName) {
+        for (SettingGroup sg : getSettingGroups(module)) {
+            Setting<?> s = sg.get(settingName);
+            if (s != null) return s;
+        }
+        return null;
+    }
+
+    /**
+     * Entscheidet, ob ein JSON-Schluessel eine Modul-Gruppe meint.
+     *
+     * <p>Reine Logik ohne Modul-/Clientbezug, damit sie direkt testbar ist - genau hier ist vorher ein
+     * stiller Totalausfall passiert. Die Gruppen heissen inzwischen {@code "1 · Angriff & Auras"}, die
+     * ausgelieferten Profile benutzen aber englische Schluessel wie {@code "combat"}. Der alte Vergleich
+     * war ein reiner Substring-Test in beide Richtungen; {@code "combat"} steckt in keiner der
+     * zehn Gruppen, also lieferte {@code findSettingGroup} immer {@code null} und JEDES Setting eines
+     * ausgelieferten Profils wurde als "fehlgeschlagen" gezaehlt. Ein Profil anzuwenden tat also nichts.
+     *
+     * <p>Deshalb drei Stufen: Nummerierung abschneiden, dann ein expliziter Alias, dann Substring -
+     * die ersten beiden sind exakt, der Substring bleibt nur als Auffangnetz fuer eigene Profile.
+     */
+    static boolean groupMatches(String groupName, String key) {
+        if (groupName == null || key == null) return false;
+
+        String g = stripIndex(groupName);
+        String k = stripIndex(key);
+        if (g.equalsIgnoreCase(k)) return true;
+
+        String alias = ALIASES.get(k.toLowerCase());
+        if (alias != null && g.equalsIgnoreCase(alias)) return true;
+        // Nur der Alias des KONKRETEN Keys zaehlt. Eine Schleife ueber alle Alias-Ziele wuerde jeden
+        // beliebigen Key akzeptieren, sobald die Gruppe selbst einem Ziel entspricht - ein unbekannter
+        // Schluessel waere damit stillschweigend gueltig.
+
+        // Kurze oder leere Keys raten nicht mehr per Substring: "a" oder "" wuerde praktisch jede Gruppe
+        // treffen, und weil die Gruppen in fester Reihenfolge durchlaufen werden, landen die Settings
+        // eines Tippfehlers stillschweigend in der ERSTEN Gruppe.
+        if (k.length() < MIN_SUBSTRING_KEY) return false;
+        return g.toLowerCase().contains(k.toLowerCase()) || k.toLowerCase().contains(g.toLowerCase());
+    }
+
+    /** Unterhalb dieser Laenge wird nicht mehr per Substring geraten. */
+    private static final int MIN_SUBSTRING_KEY = 3;
+
+    /** {@code "1 · Angriff & Auras"} -> {@code "Angriff & Auras"}. Die Nummerierung ist Deko und
+     *  verschiebt sich, sobald eine Gruppe eingefuegt wird - darauf darf eine Profilzuordnung nicht
+     *  aufbauen. */
+    private static String stripIndex(String s) {
+        String t = s.trim();
+        int dot = t.indexOf('·');
+        if (dot <= 0) return t;
+        String head = t.substring(0, dot).trim();
+        if (!head.isEmpty() && head.chars().allMatch(Character::isDigit)) return t.substring(dot + 1).trim();
+        return t;
+    }
+
+    /** Englische Schluessel der mitgelieferten Profile -> tatsaechliche Gruppentitel. Der Schluessel
+     *  "general" braucht keinen Alias: Meteors {@code getDefaultGroup()} heisst bereits "General" und
+     *  matcht daher im exakten Vergleich. */
+    private static final java.util.Map<String, String> ALIASES = java.util.Map.ofEntries(
+        java.util.Map.entry("combat", "Angriff & Auras"),
+        java.util.Map.entry("defense", "Schutz & Recovery"),
+        java.util.Map.entry("city", "Stadt & Traps"),
+        java.util.Map.entry("traps", "Stadt & Traps"),
+        java.util.Map.entry("navigation", "Navigation"),
+        java.util.Map.entry("inventory", "Inventar"),
+        java.util.Map.entry("turtle", "Turtle-Master"),
+        java.util.Map.entry("pearls", "Perlen & Flucht"),
+        java.util.Map.entry("pearl", "Perlen & Flucht"),
+        java.util.Map.entry("healing", "Heilung"),
+        java.util.Map.entry("qa", "QA & Erweitert"),
+        java.util.Map.entry("human", "Human-Profil")
+    );
 
     @SuppressWarnings("unchecked")
     private static void applySettingValue(Setting<?> setting, com.google.gson.JsonElement value) {

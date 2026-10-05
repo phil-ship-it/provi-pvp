@@ -11,7 +11,7 @@ import java.util.Objects;
 
 /** Kurzlebiger Cache fuer Block-Raycasts ({@code Level#clip}).
  *
- *  Warum ueberhaupt: die taktische Ebene ({@code ExplosionScanner}, {@code PearlSolver}) fragt pro Tick
+ *  Warum ueberhaupt: die taktische Ebene ({@code ExplosionScanner}) fragt pro Tick
  *  dieselben Strecken mehrfach ab - Sichtlinie zum Ziel, Sichtlinie zur Explosionsposition, Flugbahn-
  *  abschnitte einer Perle. Jede dieser Abfragen ist ein echter Voxel-Raycast durch die Welt; pro Tick
  *  summieren sich Dutzende davon zu zweistelligen Millisekunden. Die Abfragen sind innerhalb eines
