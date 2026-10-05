@@ -1295,6 +1295,10 @@ public class GodmodePvP extends Module {
     private static final int SURROUND_MAX_DROP = 3;
     private static final int PRIORITY_LOOK = 0;
     private int lastFireworkTick = -999;
+    /** Der D-Tap wird nur gebaut, wenn die erreichbare Stelle mindestens diesen Anteil des
+     *  theoretisch bestmoeglichen Schadens bringt. Gedanklich dieselbe Deckel-Logik wie zuvor
+     *  ("selfDmg > maxSelfDamage*0.6 rauss"), jetzt auf die Zielseite bezogen. */
+    private static final double DTAP_MIN_DAMAGE_FRACTION = 0.6;
     /** Wie lange nach einem Crystal-Block kein weiterer gesetzt wird: kurz genug, um auf den
      *  naechsten Crystal zu reagieren, lang genug, um nicht jede Runde am selben Platz zu feilen. */
     private static final int CRYSTAL_BLOCK_COOLDOWN = 3;
@@ -4361,33 +4365,38 @@ public class GodmodePvP extends Module {
         int by = (int) Math.floor(predicted.y);
         int bz = (int) Math.floor(predicted.z);
 
-        BlockPos best = null;
-        double bestDmg = 0;
-
-        for (int dx = -2; dx <= 2; dx++) {
-            for (int dz = -2; dz <= 2; dz++) {
-                for (int dy = -1; dy <= 1; dy++) {
-                    BlockPos floor = new BlockPos(bx + dx, by + dy, bz + dz);
-                    BlockPos cell = floor.above();
-                    if (Math.sqrt(mc.player.distanceToSqr(Vec3.atCenterOf(cell))) > 4.5) continue;
-                    if (!validExplosionSpot(cell, true)) continue;
-                    if (hitsFriend(Vec3.atCenterOf(cell), true)) continue;
-
-                    double selfDmg = effectiveSelfDamage(Vec3.atCenterOf(cell),
-                        DamageUtils.crystalDamage(mc.player, Vec3.atCenterOf(cell)));
-                    if (selfDmg > maxSelfDamage.get() * 0.6) continue;
-
-                    double dmg = DamageUtils.crystalDamage(target, Vec3.atCenterOf(cell));
-                    if (dmg <= 0) continue;
-
-                    if (dmg > bestDmg) {
-                        bestDmg = dmg;
-                        best = floor;
-                    }
+        // Die Kandidatenmenge ist bewusst GROSSZUEGIG (Radius 3 statt 2): der Bot kann nur in
+        // Reichweite setzen, der Gegner landet aber dort, wohin er geschleudert wurde. Mit dem alten
+        // Radius 2 lag bei weiter Landestelle kein einziger Kandidat mehr in Reichweite, und der
+        // D-Tap fand genau dann nicht mehr statt - also genau dann, wenn er gebraucht wird.
+        // DtapPlanner entscheidet kopflos, welche der Stellen taugt (Erreichbarkeit, Freundkonflikt,
+        // Mindestanteil am bestmoeglichen Schaden) und ist ueber src/test abgesichert.
+        com.provipvp.mechanics.DtapPlanner.Choice choice = com.provipvp.mechanics.DtapPlanner.pick(
+            new BlockPos(bx, by, bz), new com.provipvp.mechanics.DtapPlanner.SpotProbe() {
+                @Override
+                public double damageToTarget(BlockPos spot) {
+                    Vec3 center = Vec3.atCenterOf(spot);
+                    if (!validExplosionSpot(spot, true)) return 0;
+                    // Eigenschaden zuerst: ein Crystal, der uns mit 6 Schaden selbst trifft, ist
+                    // kein brauchbarer D-Tap, egal welchen Schaden er am Gegner macht.
+                    double selfDmg = effectiveSelfDamage(center,
+                        DamageUtils.crystalDamage(mc.player, center));
+                    if (selfDmg > maxSelfDamage.get() * 0.6) return 0;
+                    return DamageUtils.crystalDamage(target, center);
                 }
-            }
-        }
-        return best;
+
+                @Override
+                public boolean reachable(BlockPos spot) {
+                    return Math.sqrt(mc.player.distanceToSqr(Vec3.atCenterOf(spot))) <= 4.5;
+                }
+
+                @Override
+                public boolean conflictsWithFriend(BlockPos spot) {
+                    return hitsFriend(Vec3.atCenterOf(spot), true);
+                }
+            }, DTAP_MIN_DAMAGE_FRACTION);
+
+        return choice == null ? null : choice.spot().below();
     }
 
     private void runDtapTick(LivingEntity target) {
