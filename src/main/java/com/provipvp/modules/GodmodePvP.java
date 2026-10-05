@@ -1286,8 +1286,18 @@ public class GodmodePvP extends Module {
     private static final int PRIORITY_BED = 80;
     private static final int PRIORITY_PEARL = 70;
     private static final int PRIORITY_MISC = 60;
+    /** Ein drohender Crystal schlaegt die Ringwand: der Block, der ihn abfaengt, muss VOR dem normalen
+     *  Surround raus, sonst wird dieser Tick stattdessen die weniger dringende Ringsetite gebaut. */
+    private static final int PRIORITY_CRYSTAL_BLOCK = 95;
+    /** Wie tief der Surround bauen darf. Der Ring wird auf der untersten Fuss-Level gesetzt, auf der
+     *  wir stehen koennen - tiefere Explosionen treffen uns schlechter, gegnerische treffen uns weniger.
+     *  Begrenzt, damit der Bot nicht in einem Loch neben dem Kampf verschwindet. */
+    private static final int SURROUND_MAX_DROP = 3;
     private static final int PRIORITY_LOOK = 0;
     private int lastFireworkTick = -999;
+    /** Wie lange nach einem Crystal-Block kein weiterer gesetzt wird: kurz genug, um auf den
+     *  naechsten Crystal zu reagieren, lang genug, um nicht jede Runde am selben Platz zu feilen. */
+    private static final int CRYSTAL_BLOCK_COOLDOWN = 3;
     private int secondEnemyWarnCooldown;
     private boolean lowOnTotems;
     private boolean turtleModeActive;
@@ -1303,9 +1313,11 @@ public class GodmodePvP extends Module {
     private boolean realActionThisTick;
 
     // Surround / Anti-Bett / Anti-Piston / Bodensicherung / Piston-Aura
-    private int surroundCooldown;
     private int hostileBlockCooldown;
     private int footingCooldown;
+    private int surroundCooldown;
+    /** Eigener Cooldown fuer den Crystal-Block, damit er den regulaeren Surround nicht aussperrt. */
+    private int crystalBlockCooldown;
     private BlockPos instaCityBlock;
     private UUID instaCityTargetId;
     private int instaCityCooldown;
@@ -1466,6 +1478,7 @@ public class GodmodePvP extends Module {
         dtapFirstCrystalId = -1;
         dtapCooldown = 0;
         surroundCooldown = 0;
+        crystalBlockCooldown = 0;
         hostileBlockCooldown = 0;
         footingCooldown = 0;
         instaCityBlock = null;
@@ -2696,7 +2709,12 @@ public class GodmodePvP extends Module {
         // toetet sofort, ein weggesprengter Boden erst beim naechsten Schritt, Surround ist reine Vorsorge.
         removeHostileBlocks(self);
         secureFootingTick(self, dist);
-        updateSurround(self, target, dist);
+        // Ein drohender Crystal hat Vorrang vor der Ringwand und wird mit GENAU EIN Block beantwortet.
+        // Deshalb laeuft der regulaere Surround in diesem Tick nicht mit - sonst wuerde der Bot sich
+        // an die drei unwichtigen Seiten stellen und genau einen Tick zu spaet blocken.
+        if (!blockThreateningCrystal(self)) {
+            updateSurround(self, target, dist);
+        }
 
         // Piston-Aura: nur wenn ueber Sekunden keine Explosivoption mehr Schaden bringt (Gegner
         // eingegraben). Laeuft VOR der normalen Aura-Auswahl, weil sie genau deren Ausfall behandelt.
@@ -4992,7 +5010,10 @@ public class GodmodePvP extends Module {
     /** Surround: Obsidian an die eigenen Fuss-Nachbarn, damit dort kein gegnerischer Crystal mehr
      *  hinpasst (Standard-Verteidigung im Crystal-PvP). Die Seite ZUM Gegner bleibt offen - ein
      *  geschlossener Ring nimmt Baritone jeden Weg und der Bot mauert sich selbst ein. Ein Block pro
-     *  Durchlauf, damit ein einzelner Tick nicht drei Rotationen und den halben Obsidianvorrat frisst. */
+     *  Durchlauf, damit ein einzelner Tick nicht drei Rotationen und den halben Obsidianvorrat frisst.
+     *
+     *  <p>Die Entscheidung selbst liegt in SurroundPlanner: Ringseite und -level werden dort
+     *  kopflos berechnet und sind ueber src/test abgesichert. Hier steht nur noch die Weltanbindung. */
     private void updateSurround(Player self, LivingEntity target, double dist) {
         if (surroundCooldown > 0) surroundCooldown--;
         if (!surroundOn.get() || dist > 5.0 || !self.onGround() || surroundCooldown > 0) return;
@@ -5001,18 +5022,100 @@ public class GodmodePvP extends Module {
         if (!obsidian.found()) return;
 
         Direction toward = horizontalDirTo(self, target);
+        BlockPos feet = com.provipvp.mechanics.SurroundPlanner.lowestRingLevel(
+            self.blockPosition(), toward, surroundWorld(), SURROUND_MAX_DROP);
+        placeSurroundBlock(self, obsidian, feet, toward, PRIORITY_MISC, "surround", false);
+    }
+
+    /** Setzt GENAU EIN Obsidian zwischen Bot und dem Crystal, der ihn am meisten trifft - und
+     *  ueberspringt dafuer den normalen Surround dieses Ticks. Genau eins ist der Punkt: ein Ring
+     *  waere zu langsam, zwei Bloecke sind nach Crystal-PvP-Regeln nicht zulaessig.
+     *
+     *  <p>Bewusst OHNE {@code onGround()}-Guard: im Moment des Gecrystalst-Werdens ist der Bot durch
+     *  den Knockback in der Luft. Genau dann waere die regulaere Surround-Regel per Definition aus
+     *  und der Crystal kaeme durch - der Guard hat den einen Moment ausgehebelt, in dem der Block
+     *  etwas bringt. */
+    private boolean blockThreateningCrystal(Player self) {
+        if (!surroundOn.get()) return false;
+        if (crystalBlockCooldown > 0) {
+            crystalBlockCooldown--;
+            return false;
+        }
+
+        List<EndCrystal> near = mc.level.getEntitiesOfClass(EndCrystal.class, self.getBoundingBox().inflate(5));
+        if (near.isEmpty()) return false;
+
         BlockPos feet = self.blockPosition();
+        List<com.provipvp.mechanics.SurroundPlanner.CrystalThreat> threats = new ArrayList<>(near.size());
+        for (EndCrystal crystal : near) {
+            threats.add(new com.provipvp.mechanics.SurroundPlanner.CrystalThreat(
+                crystal.blockPosition(), effectiveSelfDamage(crystal.position(),
+                    DamageUtils.crystalDamage(mc.player, crystal.position()))));
+        }
+
+        com.provipvp.mechanics.SurroundPlanner.CrystalThreat worst =
+            com.provipvp.mechanics.SurroundPlanner.worstThreat(feet, threats);
+        if (worst == null) return false;
+
+        FindItemResult obsidian = InvHelper.find(Items.OBSIDIAN);
+        if (!obsidian.found()) return false;
+
+        BlockPos block = com.provipvp.mechanics.SurroundPlanner.blockAgainstCrystal(feet, worst, surroundWorld());
+        if (block == null) return false;
+
+        // Die Richtung zum Crystal ist zugleich die Ringsseite, die offen bleiben MUSS - dort
+        // steht der Crystal, dorthin wird gebaut. Sonst wuerde blockAgainstCrystal() genau die
+        // Stelle berechnen, die placeSurroundBlock() als erste ueberspringt.
+        return placeSurroundBlock(self, obsidian, feet,
+            com.provipvp.mechanics.SurroundPlanner.horizontalDir(feet, worst.pos()),
+            PRIORITY_CRYSTAL_BLOCK, "crystal-block", true);
+    }
+
+    /** Setzt an {@code feet} genau einen Block auf die erste noch offene Ringsseite (die
+     *  Gegnerseite {@code openSide} bleibt aus). Ohne Erfolg wird die naechste Seite probiert -
+     *  ein belegter Slot oder eine zu weite Stelle darf nicht den ganzen Ring dieses Ticks kosten.
+     *
+     *  <p>Getrennte Cooldowns fuer Ring und Crystal-Block. Ein gemeinsamer sperrte im ersten
+     *  Trace-Lauf den regulaeren Surround komplett aus: {@code crystal-block} prueft den
+     *  Ring-Cooldown nicht, feuerte aber trotzdem und hielt ihn danach die ganze Zeit gesetzt -
+     *  im Trace kam {@code surround} null Mal vor. */
+    private boolean placeSurroundBlock(Player self, FindItemResult obsidian, BlockPos feet,
+                                       Direction openSide, int priority, String label,
+                                       boolean crystalBlock) {
         for (Direction dir : Direction.Plane.HORIZONTAL) {
-            if (dir == toward) continue;
+            if (dir == openSide) continue;
             BlockPos side = feet.relative(dir);
             if (!mc.level.getBlockState(side).isAir()) continue;
             if (!BlockUtils.canPlace(side, true)) continue;
-            if (placeTrackedBlock(side, obsidian, true, PRIORITY_MISC)) {
-                surroundCooldown = delay(4);
-                currentAction = "surround";
+            if (placeTrackedBlock(side, obsidian, true, priority)) {
+                if (crystalBlock) crystalBlockCooldown = CRYSTAL_BLOCK_COOLDOWN;
+                else surroundCooldown = delay(4);
+                currentAction = label;
+                return true;
             }
-            return;
         }
+        return false;
+    }
+
+    /** Die Welt, wie SurroundPlanner sie braucht: Luft, Platzierbarkeit und Stehbarkeit getrennt,
+     *  damit der Planer frei von Minecraft bleiben kann. */
+    private com.provipvp.mechanics.SurroundPlanner.World surroundWorld() {
+        return new com.provipvp.mechanics.SurroundPlanner.World() {
+            @Override
+            public boolean isAir(BlockPos pos) {
+                return mc.level.getBlockState(pos).isAir();
+            }
+
+            @Override
+            public boolean canPlaceOn(BlockPos pos) {
+                return BlockUtils.canPlace(pos, true);
+            }
+
+            @Override
+            public boolean standable(BlockPos pos) {
+                return GodmodePvP.this.isStandable(pos);
+            }
+        };
     }
 
     /** Bricht nur Obsidian, das den Zielspieler auf Fusshoehe direkt umschliesst. Der Crystal wird
