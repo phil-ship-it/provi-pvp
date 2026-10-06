@@ -1,0 +1,29 @@
+{
+  "required": true,
+  "minVersion": "0.8",
+  "package": "dev.dd.lenrete.mixin",
+  "compatibilityLevel": "JAVA_25",
+  "client": [
+    "BlockFaceMixin",
+    "ClientInputAccessor",
+    "ClientLevelAccessor",
+    "EntityCollisionMixin",
+    "KeyboardInputMixin",
+    "LocalPlayerMixin",
+    "ClientCommonPacketListenerMixin",
+    "ClientPacketListenerMixin",
+    "CameraMixin",
+    "FoodDataMixin",
+    "EntityPickRadiusMixin",
+    "EntityTurnMixin",
+    "GameRendererMixin",
+    "ParticleEngineMixin",
+    "ScreenEffectRendererMixin",
+    "MinecraftAccessor",
+    "MinecraftMixin",
+    "ServerListMixin"
+  ],
+  "injectors": {
+    "defaultRequire": 1
+  }
+}

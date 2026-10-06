@@ -2692,6 +2692,18 @@ public class GodmodePvP extends Module {
             walkThroughFire(self, target, dist);
             currentAction = "feuer-durchqueren";
         } else {
+        // LUECKEN-SCHLIESSEN: wenn >6 Blöcke und nicht fliegend, Pearl statt Baritone-Warte.
+        // Verhindert den bekannten Stall-Zustand, wenn Combat-Slot reserviert wird.
+            // Anti-Air / Fall-Schutz: Blick senkrecht, Pearl wirft zur Rueckkehr
+        if (dist > 6.0 && !flying && !self.onGround()) {
+            rotateAndRun(0.0, 90.0, PRIORITY_PEARL, () -> {
+                // Peal-Throw auf vorhergesagte Zielposition (siehe solvePearlAtTarget)
+                if (dist <= 15.0) throwPearlAtTarget(target);
+            });
+            currentAction = "pearl-gap";
+        } else if (dist > 6.0 && !flying && !updateHolePositioning(target, dist)) {
+            updateFollow(target); // Baritone nur, wenn kein Pearl-Gap moeglich
+        }
             if (fireWalkStartTick >= 0) resetFireWalkState();
             if (!updateHolePositioning(target, dist)) updateFollow(target);
         }
@@ -2764,6 +2776,7 @@ public class GodmodePvP extends Module {
             if (baritoneSettings.followRadius.value != wantFollowRadius) {
                 baritoneSettings.followRadius.value = wantFollowRadius;
             }
+
             if (bedIsOnlyExplosive && dist < BED_STANDOFF_DIST) currentAction = "bett-abstand";
 
             if (auraMode == 1) {
@@ -3635,11 +3648,14 @@ public class GodmodePvP extends Module {
     }
 
     private boolean blastRayClear(Vec3 explosionPos, Vec3 hitPoint) {
-        ClipContext context = new ClipContext(explosionPos, hitPoint,
-            ClipContext.Block.COLLIDER, ClipContext.Fluid.NONE, mc.player);
-        BlockHitResult result = mc.level.clip(context);
-        return result.getType() == HitResult.Type.MISS
-            || result.getLocation().distanceTo(hitPoint) < 0.15;
+        // Konsolidierung laut ScoutExposure: delegiert an besitzenden scanner statt privater clip
+        return scanner != null ? scanner.clearShot(explosionPos, hitPoint)
+            : (mc.level.clip(new ClipContext(explosionPos, hitPoint,
+                  ClipContext.Block.COLLIDER, ClipContext.Fluid.NONE, mc.player)).getType()
+                  == HitResult.Type.MISS
+                  || mc.level.clip(new ClipContext(explosionPos, hitPoint,
+                  ClipContext.Block.COLLIDER, ClipContext.Fluid.NONE, mc.player)).getLocation()
+                  .distanceTo(hitPoint) < 0.15);
     }
 
     private boolean crystalPlacementSafe(Player self, BlockPos cell, double selfDamageScale) {
