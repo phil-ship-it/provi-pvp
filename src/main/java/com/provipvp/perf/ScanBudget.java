@@ -258,6 +258,13 @@ public final class ScanBudget {
         invalidateAll();
     }
 
+    /** Zero-Allocation-Variant fuer haeufigen Aufruf ohne Chunk-Wechsel. */
+    public void markContext(int cx, int cz, Object worldIdentity) {
+        if (context instanceof ChunkHint ch && ch.chunkX() == cx && ch.chunkZ() == cz && java.util.Objects.equals(ch.worldIdentity(), worldIdentity)) return;
+        context = new ChunkHint(cx, cz, worldIdentity);
+        invalidateAll();
+    }
+
     /**
      * Verwirft <b>jedes</b> Ergebnis und gibt allen Arten sofort wieder ihr volles Budget.
      * Die Zaehler in {@link #stats} bleiben unangetastet - sie sollen die Sitzung zusammenfassen,

@@ -2,6 +2,8 @@ package com.provipvp.crystal;
 
 import net.minecraft.core.BlockPos;
 import net.minecraft.world.phys.Vec3;
+import net.minecraft.world.level.ClipContext;
+import net.minecraft.world.phys.HitResult;
 import net.minecraft.world.entity.player.Player;
 
 
@@ -41,12 +43,17 @@ public final class ExplosionSolver {
     }
 
     private static boolean clearShot(Vec3 from, BlockPos bp) {
-        if (mc.level == null) return false;
+        if (mc.level == null || mc.player == null) return false;
         Vec3 to = Vec3.atCenterOf(bp);
-        net.minecraft.world.level.ClipContext ctx = new net.minecraft.world.level.ClipContext(
-            from, to, net.minecraft.world.level.ClipContext.Block.COLLIDER,
-            net.minecraft.world.level.ClipContext.Fluid.NONE, mc.player);
-        net.minecraft.world.phys.HitResult r = mc.level.clip(ctx);
-        return r == null || r.getType() == net.minecraft.world.phys.HitResult.Type.MISS;
+        ClipContext ctx = new ClipContext(
+            from, to, ClipContext.Block.COLLIDER,
+            ClipContext.Fluid.NONE, mc.player);
+        HitResult r = mc.level.clip(ctx);
+        return r == null || r.getType() == HitResult.Type.MISS;
+    }
+
+    public static double effectiveDamage(double base, int exposedSamples) {
+        double f = Math.max(0.0, Math.min(1.0, exposedSamples / (double) SAMPLES));
+        return base * f;
     }
 }

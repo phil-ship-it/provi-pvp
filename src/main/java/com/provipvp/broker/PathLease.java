@@ -30,7 +30,8 @@ public final class PathLease {
     /** @return true, wenn dieser Aufruf den letzten Besitzer freigab und Baritone wieder laeuft */
     public boolean resume(Object owner) {
         if (owner == null) return false;
-        return holders.remove(owner);
+        boolean removed = holders.remove(owner);
+        return removed && holders.isEmpty();
     }
 
     public boolean isPaused() {

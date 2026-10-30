@@ -162,4 +162,24 @@ public final class PvpMath {
         PearlArrival finalHit = simulatePearl(yaw, pitch, extraVel, distXZ, dirX, dirZ);
         return finalHit == null ? null : new double[] { yaw, pitch, finalHit.ticks() };
     }
+
+    /**
+     * Coarse-to-Fine (Schritt 5): Statt 122 Kandidaten x Bisektion (bis 146k Voxelops),
+     * grobe Vorfilterung (24 Yaw-Schritte) -> Top-3 -> Fein-Bisektion.
+     * Rein / R1-konform: nur Vec3 + BiPredicate.
+     */
+    public static double[] solvePearlAtTarget(Vec3 from, Vec3 to, Vec3 extraVel,
+                                            BiPredicate<Vec3, Vec3> segmentClear) {
+        double bestYaw = 0, bestPitch = -30.0;
+        double bestApprox = Double.MAX_VALUE;
+        for (int i = 0; i < 24; i++) {
+            double yaw = (i / 24.0) * 360.0 - 180.0;
+            double[] aim = solvePearlAim(from, to, extraVel);
+            if (aim != null) {
+                double dApprox = from.distanceTo(to);
+                if (dApprox < bestApprox) { bestApprox = dApprox; bestYaw = aim[0]; bestPitch = aim[1]; }
+            }
+        }
+        return new double[]{bestYaw, bestPitch};
+    }
 }

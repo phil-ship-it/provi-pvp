@@ -87,6 +87,7 @@ public class ProviPvPAddon extends MeteorAddon {
         Modules.get().add(new HumanPvP());
         Modules.get().add(new TrainingDummy());
         Modules.get().add(new Auto5b5tDupe());
+        Modules.get().add(new com.provipvp.modules.ProviReconModule());
         Modules.get().add(new PacketLogger());
         Modules.get().add(new BrandSpoof());
         Modules.get().add(new ExploitGuard());

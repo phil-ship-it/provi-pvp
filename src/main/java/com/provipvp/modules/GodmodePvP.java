@@ -1442,6 +1442,7 @@ public class GodmodePvP extends Module {
         HumanPvP human = Modules.get().get(HumanPvP.class);
         if (human != null && human.isActive()) human.disable();
         tickCounter = 0;
+        invManager.set(true);
         supportSyncFailed = false;
         auraMode = -1;
         java.util.Arrays.fill(auraUsage, 0);
@@ -1643,6 +1644,7 @@ public class GodmodePvP extends Module {
     public void onDeactivate() {
         if (!lifecycleStarted) return;
         lifecycleStarted = false;
+        invManager.set(false);
 
         MeteorClient.EVENT_BUS.unsubscribe(this);
         releaseCombatSlot();
@@ -1711,8 +1713,8 @@ public class GodmodePvP extends Module {
         if (human != null && human.isActive()) human.disable();
         // Der Budget-Zustand haengt am Ort: Chunk- oder Weltwechsel machen jede gecachte Zaehlung ungueltig.
         if (mc.player != null && mc.level != null) {
-            scanBudget.markContext(new com.provipvp.perf.ScanBudget.ChunkHint(
-                mc.player.blockPosition().getX() >> 4, mc.player.blockPosition().getZ() >> 4, mc.level));
+            scanBudget.markContext(
+                mc.player.blockPosition().getX() >> 4, mc.player.blockPosition().getZ() >> 4, mc.level);
         }
 
         tickCounter++;
@@ -1740,7 +1742,12 @@ public class GodmodePvP extends Module {
             doTick();
             traceCombatState();
         } catch (Exception e) {
-            // Zeitbasiert statt fuer-immer-still: ein dauerhafter Fehler bleibt sichtbar, spammt aber nicht.
+            // Bei permanentem Fehler Zustand zuruecksetzen, nicht halb-definiert weiterlaufen
+            currentAction = "-";
+            blocking = false;
+            blockingSwapBack = false;
+            Input.setKeyState(mc.options.keyUp, false);
+            Input.setKeyState(mc.options.keySprint, false);
             if (tickCounter - lastErrorWarnTick > 100) {
                 lastErrorWarnTick = tickCounter;
                 warning("Interner Fehler: %s", e.toString());
@@ -3369,7 +3376,8 @@ public class GodmodePvP extends Module {
             for (int dz = -1; dz <= 1; dz++) {
                 for (int dy = -1; dy <= 1; dy++) {
                     Vec3 pos = new Vec3(bx + dx + 0.5, by + dy, bz + dz + 0.5);
-                    BlockPos cell = new BlockPos(bx + dx, by + dy, bz + dz);
+                    BlockPos.MutableBlockPos cell = new BlockPos.MutableBlockPos();
+                    cell.set(bx + dx, by + dy, bz + dz);
 
                     if (!validExplosionSpot(cell, crystal)) continue;
                     if (hitsFriend(pos, crystal)) continue;

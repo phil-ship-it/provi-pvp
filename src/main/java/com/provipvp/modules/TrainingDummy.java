@@ -1,4 +1,5 @@
 package com.provipvp.modules;
+import com.provipvp.broker.PvpServices;
 
 import meteordevelopment.meteorclient.events.entity.player.AttackEntityEvent;
 import meteordevelopment.meteorclient.events.world.TickEvent;
@@ -84,6 +85,7 @@ public class TrainingDummy extends Module {
 
     @Override
     public void onDeactivate() {
+        PvpServices.release(this);
         MeteorClient.EVENT_BUS.unsubscribe(this);
         if (dummy != null) {
             dummy.despawn();
